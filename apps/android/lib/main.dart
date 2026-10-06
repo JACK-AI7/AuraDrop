@@ -6,6 +6,11 @@ import 'package:flutter/services.dart';
 import 'models/models.dart';
 import 'theme/glass_theme.dart';
 import 'components/glass_components.dart';
+import 'components/aura_ripple_field.dart';
+import 'components/aura_data_stream.dart';
+import 'components/aura_completion_burst.dart';
+import 'components/aura_backgrounds.dart';
+import 'components/micro_interactions.dart';
 import 'services/native_bridge.dart';
 import 'screens/chat_screen.dart';
 import 'screens/history_screen.dart';
@@ -49,7 +54,7 @@ class _AuraDropAppState extends State<AuraDropApp> {
     final accentColor = GlassTheme.getAccent(_accentKey);
 
     return MaterialApp(
-      title: 'AuraDrop',
+      title: 'AuraDrop V4',
       debugShowCheckedModeBanner: false,
       themeMode: ThemeMode.dark,
       theme: ThemeData(
@@ -113,6 +118,9 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
     visibility: 'everyone',
   );
 
+  // Settings & Quality Engine
+  AnimationSettings _animationSettings = const AnimationSettings();
+
   // Visibility & Discovery
   VisibilityMode _visibilityMode = VisibilityMode.everyoneNearby;
   bool _isDiscovering = false;
@@ -135,10 +143,13 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
   int _speedBytesPerSec = 0;
   int _etaSeconds = 0;
   String _lastSavedPath = '';
+  String _lastSha256 = '';
+  String _lastErrorMessage = '';
 
-  // Animations
-  late AnimationController _radarController;
-  late AnimationController _pulseController;
+  // Controllers
+  late final AnimationController _radarController;
+  late final AnimationController _pulseController;
+  final AuraRippleController _rippleController = AuraRippleController();
 
   @override
   void initState() {
@@ -165,6 +176,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
     _radarController.dispose();
     _pulseController.dispose();
     _eventSubscription?.cancel();
+    _rippleController.dispose();
     super.dispose();
   }
 
@@ -239,9 +251,19 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
           if (_visibilityMode == VisibilityMode.contactsOnly && !isTrusted) return;
 
           final peer = PeerDevice.fromMap(peerData, isTrusted: isTrusted);
+          final isNew = !_peers.containsKey(peer.id);
           setState(() {
             _peers[peer.id] = peer;
           });
+
+          // Proximity Field Pulse when new peer is detected
+          if (isNew && _animationSettings.enableProximityRipple) {
+            _rippleController.trigger(
+              origin: Offset(MediaQuery.of(context).size.width / 2, MediaQuery.of(context).size.height * 0.40),
+              color: widget.accentColor,
+              intensity: 0.9,
+            );
+          }
         }
         break;
 
@@ -287,25 +309,38 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
         final path = event['savedPath']?.toString() ?? '';
         final finalFileName = event['fileName']?.toString() ?? _activeFileName;
         final finalTotal = (event['totalBytes'] as num?)?.toInt() ?? _totalTransferBytes;
+        final sha = event['sha256']?.toString() ?? '';
 
         setState(() {
           _transferState = TransferState.completed;
+          _activeFileName = finalFileName;
           _lastSavedPath = path;
           _transferredBytes = finalTotal;
+          _lastSha256 = sha;
 
           if (_activePeer != null) {
             _trustedPeerIds.add(_activePeer!.id);
             NativeBridgeService.setPeerTrusted(_activePeer!.id, _activePeer!.name, true);
           }
         });
-        _showSnackBar('$finalFileName transferred & verified successfully!', isSuccess: true);
+
+        // Trigger celebratory completion burst ripple
+        if (_animationSettings.enableCompletionBurst) {
+          _rippleController.trigger(
+            origin: Offset(MediaQuery.of(context).size.width / 2, MediaQuery.of(context).size.height / 2),
+            color: const Color(0xFF10B981),
+            intensity: 1.4,
+          );
+        }
         break;
 
       case 'transferError':
         HapticFeedback.vibrate();
         final err = event['error']?.toString() ?? 'Transfer failed';
-        setState(() => _transferState = TransferState.failed);
-        _showSnackBar(err, isSuccess: false);
+        setState(() {
+          _transferState = TransferState.failed;
+          _lastErrorMessage = err;
+        });
         break;
     }
   }
@@ -354,7 +389,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
     }
   }
 
-  Future<void> _sendFilesToPeer(PeerDevice peer) async {
+  Future<void> _sendFilesToPeer(PeerDevice peer, {Offset? tapOrigin}) async {
     if (_selectedFiles.isEmpty) {
       _showSnackBar('Select files before picking a recipient.', isSuccess: false);
       _pickFiles();
@@ -363,6 +398,15 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
 
     HapticFeedback.mediumImpact();
     final totalSize = _selectedFiles.fold(0, (acc, f) => acc + f.size);
+
+    // Trigger Screen-Wide Aura Warp from touched peer avatar
+    if (_animationSettings.enableWarpField && tapOrigin != null) {
+      _rippleController.trigger(
+        origin: tapOrigin,
+        color: widget.accentColor,
+        intensity: 1.3,
+      );
+    }
 
     setState(() {
       _activePeer = peer;
@@ -452,11 +496,15 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                 decoration: BoxDecoration(
                   color: Colors.white.withValues(alpha: 0.05),
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                  border: Border.all(color: Colors.white12),
                 ),
-                child: Text(
-                  'SAS CODE: $sas',
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1.2, color: widget.accentColor),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.shield_outlined, size: 14, color: Colors.white54),
+                    const SizedBox(width: 6),
+                    Text('SAS: $sas', style: const TextStyle(fontSize: 11, fontFamily: 'monospace', color: Colors.white70)),
+                  ],
                 ),
               ),
               const SizedBox(height: 24),
@@ -465,36 +513,35 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                   Expanded(
                     child: OutlinedButton(
                       style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        foregroundColor: const Color(0xFFF87171),
                         side: const BorderSide(color: Color(0xFFF87171)),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
                       ),
                       onPressed: () async {
                         Navigator.pop(ctx);
-                        await NativeBridgeService.declineTransfer(transferId);
                         setState(() => _transferState = TransferState.idle);
+                        await NativeBridgeService.declineTransfer(transferId);
                       },
-                      child: const Text('Decline', style: TextStyle(color: Color(0xFFF87171), fontWeight: FontWeight.w700)),
+                      child: const Text('Decline', style: TextStyle(fontWeight: FontWeight.w700)),
                     ),
                   ),
-                  const SizedBox(width: 14),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: ElevatedButton(
                       style: ElevatedButton.styleFrom(
                         backgroundColor: widget.accentColor,
                         foregroundColor: const Color(0xFF0C0E14),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
                         elevation: 0,
                       ),
                       onPressed: () async {
                         Navigator.pop(ctx);
-                        HapticFeedback.mediumImpact();
                         setState(() {
                           _transferState = TransferState.transferring;
-                          _isSender = false;
                           _activeTransferId = transferId;
-                          _activeFileName = '$totalFiles files';
+                          _isSender = false;
                           _totalTransferBytes = math.max(1, totalBytes);
                           _transferredBytes = 0;
                           _activePeer = PeerDevice(
@@ -538,10 +585,6 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
     return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
   }
 
-  String _formatSpeed(int bytesPerSec) {
-    return '${_formatBytes(bytesPerSec)}/s';
-  }
-
   // ---------------------------------------------------------------------------
   // MAIN BUILD
   // ---------------------------------------------------------------------------
@@ -549,61 +592,54 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
-        child: Stack(
-          children: [
-            // Background Radial Orbs
-            Positioned(
-              top: -60,
-              right: -60,
-              child: Container(
-                width: 240,
-                height: 240,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: widget.accentColor.withValues(alpha: 0.08),
-                  boxShadow: [
-                    BoxShadow(color: widget.accentColor.withValues(alpha: 0.12), blurRadius: 100, spreadRadius: 20),
+        child: AuraBackground(
+          quality: _animationSettings.quality,
+          accentColor: widget.accentColor,
+          child: AuraRippleField(
+            controller: _rippleController,
+            enableWarp: _animationSettings.enableWarpField,
+            child: Stack(
+              children: [
+                Column(
+                  children: [
+                    _buildHeader(),
+                    Expanded(
+                      child: IndexedStack(
+                        index: _currentTabIndex,
+                        children: [
+                          _buildRadarScreen(),
+                          _buildTrayScreen(),
+                          HistoryScreen(accentColor: widget.accentColor),
+                          ProfileScreen(
+                            profile: _userProfile,
+                            onProfileUpdated: (key, val) {
+                              widget.onProfileUpdated(key, val);
+                              if (key == 'display_name') setState(() => _deviceName = val);
+                            },
+                          ),
+                          SettingsScreen(
+                            currentVisibility: _visibilityMode,
+                            onVisibilityChanged: _applyVisibilityMode,
+                            temporarySecondsRemaining: _temporarySecondsRemaining,
+                            accentColor: widget.accentColor,
+                            animationSettings: _animationSettings,
+                            onAnimationSettingsChanged: (s) => setState(() => _animationSettings = s),
+                          ),
+                        ],
+                      ),
+                    ),
+                    _buildGlassBottomNav(),
                   ],
                 ),
-              ),
-            ),
 
-            Column(
-              children: [
-                _buildHeader(),
-                Expanded(
-                  child: IndexedStack(
-                    index: _currentTabIndex,
-                    children: [
-                      _buildRadarScreen(),
-                      _buildTrayScreen(),
-                      HistoryScreen(accentColor: widget.accentColor),
-                      ProfileScreen(
-                        profile: _userProfile,
-                        onProfileUpdated: (key, val) {
-                          widget.onProfileUpdated(key, val);
-                          if (key == 'display_name') setState(() => _deviceName = val);
-                        },
-                      ),
-                      SettingsScreen(
-                        currentVisibility: _visibilityMode,
-                        onVisibilityChanged: _applyVisibilityMode,
-                        temporarySecondsRemaining: _temporarySecondsRemaining,
-                        accentColor: widget.accentColor,
-                      ),
-                    ],
-                  ),
-                ),
-                _buildGlassBottomNav(),
+                // Active Transfer Stream or Completion Burst Modal
+                if (_transferState != TransferState.idle &&
+                    _transferState != TransferState.discovering &&
+                    _transferState != TransferState.waitingForAccept)
+                  _buildTransferOverlay(),
               ],
             ),
-
-            // Active Transfer Modal Overlay
-            if (_transferState != TransferState.idle &&
-                _transferState != TransferState.discovering &&
-                _transferState != TransferState.waitingForAccept)
-              _buildTransferProgressHUD(),
-          ],
+          ),
         ),
       ),
     );
@@ -644,18 +680,18 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('AuraDrop V3', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: Colors.white)),
+                  const Text('AuraDrop V4', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: Colors.white)),
                   Text('$_deviceName • $_localIp', style: const TextStyle(fontSize: 11, color: Colors.white54)),
                 ],
               ),
             ],
           ),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.08),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+              color: widget.accentColor.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: widget.accentColor.withValues(alpha: 0.3)),
             ),
             child: Row(
               children: [
@@ -724,7 +760,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
               ),
             ),
 
-            // Discovered Peers positioned in orbit
+            // Discovered Peers positioned in orbit with SpringButton physics
             for (int i = 0; i < peerList.length; i++)
               _buildOrbitPeerCard(peerList[i], i, peerList.length, center, maxRadius),
 
@@ -751,65 +787,51 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
     return Positioned(
       left: dx,
       top: dy,
-      child: GestureDetector(
-        onTap: () => _sendFilesToPeer(peer),
-        onLongPress: () {
-          // Open offline P2P chat on long press!
-          HapticFeedback.mediumImpact();
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => ChatScreen(peer: peer, accentColor: widget.accentColor),
-            ),
-          );
-        },
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            PeerAvatar(peer: peer, size: 62, accentColor: widget.accentColor),
-            const SizedBox(height: 6),
-            Container(
-              constraints: const BoxConstraints(maxWidth: 80),
-              child: Text(
-                peer.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white),
+      child: SpringButton(
+        onTap: () => _sendFilesToPeer(peer, tapOrigin: Offset(dx + 34, dy + 34)),
+        child: GestureDetector(
+          onLongPress: () {
+            HapticFeedback.mediumImpact();
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => ChatScreen(peer: peer, accentColor: widget.accentColor),
               ),
-            ),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                GestureDetector(
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => ChatScreen(peer: peer, accentColor: widget.accentColor),
-                      ),
-                    );
-                  },
-                  child: Container(
-                    margin: const EdgeInsets.only(top: 2),
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                    decoration: BoxDecoration(
-                      color: widget.accentColor.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.chat_bubble_outline, size: 9, color: widget.accentColor),
-                        const SizedBox(width: 3),
-                        Text('Chat', style: TextStyle(fontSize: 8, fontWeight: FontWeight.bold, color: widget.accentColor)),
-                      ],
-                    ),
-                  ),
+            );
+          },
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              PeerAvatar(peer: peer, size: 62, accentColor: widget.accentColor),
+              const SizedBox(height: 6),
+              Container(
+                constraints: const BoxConstraints(maxWidth: 80),
+                child: Text(
+                  peer.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white),
                 ),
-              ],
-            ),
-          ],
+              ),
+              const SizedBox(height: 2),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.chat_bubble_outline, size: 9, color: widget.accentColor),
+                    const SizedBox(width: 3),
+                    Text('Chat', style: TextStyle(fontSize: 8, fontWeight: FontWeight.bold, color: widget.accentColor)),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1016,150 +1038,57 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
   }
 
   // ---------------------------------------------------------------------------
-  // REAL-TIME TRANSFER PROGRESS HUD OVERLAY
+  // TRANSFER OVERLAY (DATA STREAM OR COMPLETION MODAL)
   // ---------------------------------------------------------------------------
-  Widget _buildTransferProgressHUD() {
-    final double pct = (_totalTransferBytes > 0)
-        ? (_transferredBytes / _totalTransferBytes).clamp(0.0, 1.0)
-        : 0.0;
-
-    String stateTitle = 'Connecting';
-    if (_transferState == TransferState.connecting) stateTitle = 'Establishing Data Channel';
-    if (_transferState == TransferState.preparing) stateTitle = 'Channel Ready';
-    if (_transferState == TransferState.transferring) stateTitle = _isSender ? 'Sending to' : 'Receiving from';
-    if (_transferState == TransferState.verifying) stateTitle = 'Verifying SHA-256 Checksum';
-    if (_transferState == TransferState.completed) stateTitle = 'Transfer Complete';
-    if (_transferState == TransferState.failed) stateTitle = 'Transfer Interrupted';
-
+  Widget _buildTransferOverlay() {
     return Container(
-      color: Colors.black.withValues(alpha: 0.8),
+      color: Colors.black.withValues(alpha: 0.82),
+      padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Center(
-        child: Container(
-          margin: const EdgeInsets.symmetric(horizontal: 24),
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            color: const Color(0xFF14161F),
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: widget.accentColor.withValues(alpha: 0.4), width: 1.5),
-            boxShadow: [
-              BoxShadow(color: widget.accentColor.withValues(alpha: 0.25), blurRadius: 30, spreadRadius: 2),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(stateTitle, style: const TextStyle(fontSize: 13, color: Colors.white60)),
-                  Text('${(pct * 100).toInt()}%', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: widget.accentColor)),
-                ],
+        child: _transferState == TransferState.completed || _transferState == TransferState.failed
+            ? AuraCompletionModal(
+                isSuccess: _transferState == TransferState.completed,
+                fileName: _activeFileName,
+                fileSize: _totalTransferBytes,
+                sha256: _lastSha256,
+                localPath: _lastSavedPath,
+                errorMessage: _lastErrorMessage,
+                accentColor: widget.accentColor,
+                onOpen: () async {
+                  if (_lastSavedPath.isNotEmpty) {
+                    await NativeBridgeService.openFile(_lastSavedPath);
+                  }
+                  setState(() {
+                    _transferState = TransferState.idle;
+                    _selectedFiles.clear();
+                  });
+                },
+                onShare: () async {
+                  // Re-share or open
+                  if (_lastSavedPath.isNotEmpty) {
+                    await NativeBridgeService.openFile(_lastSavedPath);
+                  }
+                },
+                onDismiss: () {
+                  setState(() {
+                    _transferState = TransferState.idle;
+                    _selectedFiles.clear();
+                  });
+                },
+                onRetry: _isSender && _activePeer != null
+                    ? () => _sendFilesToPeer(_activePeer!)
+                    : null,
+              )
+            : AuraDataStreamVisualizer(
+                transferredBytes: _transferredBytes,
+                totalBytes: _totalTransferBytes,
+                speedBytesPerSec: _speedBytesPerSec,
+                fileName: _activeFileName,
+                accentColor: widget.accentColor,
+                isSending: _isSender,
+                onCancel: _cancelTransfer,
               ),
-              const SizedBox(height: 6),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  _activePeer?.name ?? 'Nearby Peer',
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Colors.white),
-                ),
-              ),
-              const SizedBox(height: 20),
-
-              ClipRRect(
-                borderRadius: BorderRadius.circular(6),
-                child: LinearProgressIndicator(
-                  value: pct,
-                  minHeight: 8,
-                  backgroundColor: Colors.white.withValues(alpha: 0.1),
-                  valueColor: AlwaysStoppedAnimation<Color>(widget.accentColor),
-                ),
-              ),
-              const SizedBox(height: 16),
-
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.3),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceAround,
-                  children: [
-                    _buildMetricCol('TRANSFERRED', '${_formatBytes(_transferredBytes)} / ${_formatBytes(_totalTransferBytes)}'),
-                    _buildMetricCol('SPEED', _formatSpeed(_speedBytesPerSec)),
-                    _buildMetricCol('ETA', '${_etaSeconds}s'),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 20),
-
-              if (_transferState == TransferState.completed) ...[
-                Row(
-                  children: [
-                    if (_lastSavedPath.isNotEmpty)
-                      Expanded(
-                        child: OutlinedButton(
-                          style: OutlinedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            side: BorderSide(color: widget.accentColor),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          ),
-                          onPressed: () => NativeBridgeService.openFile(_lastSavedPath),
-                          child: Text('Open File', style: TextStyle(color: widget.accentColor, fontWeight: FontWeight.bold)),
-                        ),
-                      ),
-                    if (_lastSavedPath.isNotEmpty) const SizedBox(width: 12),
-                    Expanded(
-                      child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: widget.accentColor,
-                          foregroundColor: const Color(0xFF0C0E14),
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        ),
-                        onPressed: () {
-                          setState(() {
-                            _transferState = TransferState.idle;
-                            _selectedFiles.clear();
-                          });
-                        },
-                        child: const Text('Done', style: TextStyle(fontWeight: FontWeight.bold)),
-                      ),
-                    ),
-                  ],
-                ),
-              ] else if (_transferState == TransferState.failed) ...[
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.white.withValues(alpha: 0.15),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  ),
-                  onPressed: () => setState(() => _transferState = TransferState.idle),
-                  child: const Text('Close'),
-                ),
-              ] else ...[
-                TextButton(
-                  onPressed: _cancelTransfer,
-                  child: const Text('Cancel Transfer', style: TextStyle(color: Color(0xFFF87171), fontWeight: FontWeight.w600)),
-                ),
-              ],
-            ],
-          ),
-        ),
       ),
-    );
-  }
-
-  Widget _buildMetricCol(String label, String value) {
-    return Column(
-      children: [
-        Text(label, style: const TextStyle(fontSize: 9, letterSpacing: 1.0, color: Colors.white38, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 4),
-        Text(value, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white)),
-      ],
     );
   }
 }

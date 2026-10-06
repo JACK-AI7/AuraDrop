@@ -37,6 +37,6 @@ void main() {
   testWidgets('AuraDrop App smoke test', (WidgetTester tester) async {
     await tester.pumpWidget(const AuraDropApp());
     await tester.pump();
-    expect(find.text('AuraDrop V3'), findsOneWidget);
+    expect(find.text('AuraDrop V4'), findsOneWidget);
   });
 }

@@ -140,24 +140,27 @@ class AuraDropDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATAB
         val cursor = db.rawQuery("SELECT * FROM $TABLE_TRANSFERS ORDER BY $COL_XFER_TIMESTAMP DESC", null)
         cursor.use { c ->
             while (c.moveToNext()) {
+                val localPath = c.getString(c.getColumnIndexOrThrow(COL_XFER_LOCAL_PATH)) ?: ""
+                val isAvailable = localPath.isNotBlank() && java.io.File(localPath).exists()
                 list.add(mapOf(
-                    "id" to c.getString(c.getColumnIndexOrThrow(COL_XFER_ID)),
-                    "timestamp" to c.getLong(c.getColumnIndexOrThrow(COL_XFER_TIMESTAMP)),
-                    "senderName" to c.getString(c.getColumnIndexOrThrow(COL_XFER_SENDER)),
-                    "receiverName" to c.getString(c.getColumnIndexOrThrow(COL_XFER_RECEIVER)),
-                    "fileName" to c.getString(c.getColumnIndexOrThrow(COL_XFER_FILE_NAME)),
-                    "fileType" to c.getString(c.getColumnIndexOrThrow(COL_XFER_FILE_TYPE)),
-                    "fileSize" to c.getLong(c.getColumnIndexOrThrow(COL_XFER_FILE_SIZE)),
-                    "direction" to c.getString(c.getColumnIndexOrThrow(COL_XFER_DIRECTION)),
-                    "status" to c.getString(c.getColumnIndexOrThrow(COL_XFER_STATUS)),
-                    "durationMs" to c.getLong(c.getColumnIndexOrThrow(COL_XFER_DURATION)),
-                    "avgSpeed" to c.getLong(c.getColumnIndexOrThrow(COL_XFER_AVG_SPEED)),
-                    "sha256" to c.getString(c.getColumnIndexOrThrow(COL_XFER_SHA256)),
-                    "localPath" to c.getString(c.getColumnIndexOrThrow(COL_XFER_LOCAL_PATH)),
-                    "transportType" to c.getString(c.getColumnIndexOrThrow(COL_XFER_TRANSPORT))
-                ))
+                        "id" to c.getString(c.getColumnIndexOrThrow(COL_XFER_ID)),
+                        "timestamp" to c.getLong(c.getColumnIndexOrThrow(COL_XFER_TIMESTAMP)),
+                        "senderName" to c.getString(c.getColumnIndexOrThrow(COL_XFER_SENDER)),
+                        "receiverName" to c.getString(c.getColumnIndexOrThrow(COL_XFER_RECEIVER)),
+                        "fileName" to c.getString(c.getColumnIndexOrThrow(COL_XFER_FILE_NAME)),
+                        "fileType" to c.getString(c.getColumnIndexOrThrow(COL_XFER_FILE_TYPE)),
+                        "fileSize" to c.getLong(c.getColumnIndexOrThrow(COL_XFER_FILE_SIZE)),
+                        "direction" to c.getString(c.getColumnIndexOrThrow(COL_XFER_DIRECTION)),
+                        "status" to c.getString(c.getColumnIndexOrThrow(COL_XFER_STATUS)),
+                        "durationMs" to c.getLong(c.getColumnIndexOrThrow(COL_XFER_DURATION)),
+                        "avgSpeed" to c.getLong(c.getColumnIndexOrThrow(COL_XFER_AVG_SPEED)),
+                        "sha256" to c.getString(c.getColumnIndexOrThrow(COL_XFER_SHA256)),
+                        "localPath" to localPath,
+                        "transportType" to c.getString(c.getColumnIndexOrThrow(COL_XFER_TRANSPORT)),
+                        "isAvailable" to isAvailable
+                    ))
+                }
             }
-        }
         return list
     }
 

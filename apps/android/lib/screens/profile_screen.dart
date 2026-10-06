@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import '../models/models.dart';
 import '../services/native_bridge.dart';
 import '../components/glass_components.dart';
+import '../components/micro_interactions.dart';
 
 class ProfileScreen extends StatefulWidget {
   final UserProfile profile;
@@ -103,31 +104,100 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
           const SizedBox(height: 20),
 
-          // Avatar Header
-          Center(
-            child: Column(
-              children: [
-                Container(
-                  width: 80,
-                  height: 80,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.white.withValues(alpha: 0.1),
-                    border: Border.all(color: Colors.white.withValues(alpha: 0.3), width: 2),
+          // Interactive 3D Depth Profile Card (React Bits inspired)
+          DepthCard(
+            child: Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(24),
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    Colors.white.withValues(alpha: 0.15),
+                    Colors.white.withValues(alpha: 0.04),
+                  ],
+                ),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.2),
+                  width: 1.2,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.35),
+                    blurRadius: 25,
+                    offset: const Offset(0, 10),
                   ),
-                  child: Center(
-                    child: Text(
-                      _nameController.text.isNotEmpty ? _nameController.text.substring(0, 1).toUpperCase() : 'A',
-                      style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white),
+                ],
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 68,
+                    height: 68,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: LinearGradient(
+                        colors: [
+                          _accentOptions.firstWhere((a) => a['id'] == _selectedAccent, orElse: () => _accentOptions[0])['color'] as Color,
+                          Colors.purpleAccent,
+                        ],
+                      ),
+                      border: Border.all(color: Colors.white, width: 2),
+                      boxShadow: [
+                        BoxShadow(
+                          color: (_accentOptions.firstWhere((a) => a['id'] == _selectedAccent, orElse: () => _accentOptions[0])['color'] as Color).withValues(alpha: 0.4),
+                          blurRadius: 15,
+                        ),
+                      ],
+                    ),
+                    child: Center(
+                      child: Text(
+                        _nameController.text.isNotEmpty ? _nameController.text.substring(0, 1).toUpperCase() : 'A',
+                        style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w900, color: Colors.white),
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  _nameController.text.isNotEmpty ? _nameController.text : 'AuraDrop User',
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white),
-                ),
-              ],
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _nameController.text.isNotEmpty ? _nameController.text : 'AuraDrop User',
+                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Colors.white),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          _bioController.text.isNotEmpty ? _bioController.text : 'Nearby sharing made effortless',
+                          style: const TextStyle(fontSize: 12, color: Colors.white60),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            'TOUCH PARALLAX ACTIVE',
+                            style: TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.8,
+                              color: (_accentOptions.firstWhere((a) => a['id'] == _selectedAccent, orElse: () => _accentOptions[0])['color'] as Color),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
           const SizedBox(height: 24),

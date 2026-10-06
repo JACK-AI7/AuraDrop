@@ -3,12 +3,15 @@ import 'package:flutter/services.dart';
 import '../models/models.dart';
 import '../services/native_bridge.dart';
 import '../components/glass_components.dart';
+import '../components/micro_interactions.dart';
 
 class SettingsScreen extends StatefulWidget {
   final VisibilityMode currentVisibility;
   final Function(VisibilityMode) onVisibilityChanged;
   final int temporarySecondsRemaining;
   final Color accentColor;
+  final AnimationSettings animationSettings;
+  final Function(AnimationSettings) onAnimationSettingsChanged;
 
   const SettingsScreen({
     super.key,
@@ -16,6 +19,8 @@ class SettingsScreen extends StatefulWidget {
     required this.onVisibilityChanged,
     required this.temporarySecondsRemaining,
     required this.accentColor,
+    required this.animationSettings,
+    required this.onAnimationSettingsChanged,
   });
 
   @override
@@ -56,8 +61,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  void _updateSettings(AnimationSettings newSettings) {
+    widget.onAnimationSettingsChanged(newSettings);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final anim = widget.animationSettings;
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
       child: Column(
@@ -69,7 +80,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 6),
           const Text(
-            'Control discovery visibility, trusted peers, and local storage.',
+            'Control discovery visibility, animation performance, trusted peers, and local storage.',
             style: TextStyle(fontSize: 12, color: Colors.white54),
           ),
           const SizedBox(height: 24),
@@ -94,6 +105,73 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _buildVisibilityTile('Contacts & Trusted Only', 'Only devices you have starred', VisibilityMode.contactsOnly),
                 const Divider(color: Colors.white12, height: 1),
                 _buildVisibilityTile('Receiving Off', 'Invisible to all nearby devices', VisibilityMode.receivingOff),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // Animation & Performance Tier
+          const Text('Motion & Visual Performance', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Colors.white70)),
+          const SizedBox(height: 10),
+          GlassCard(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Effect Quality Tier', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white)),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    _buildTierButton('Performance', 'Minimal', AnimationQuality.minimal),
+                    const SizedBox(width: 8),
+                    _buildTierButton('Balanced', 'Smooth', AnimationQuality.balanced),
+                    const SizedBox(width: 8),
+                    _buildTierButton('Immersive', 'Full FX', AnimationQuality.immersive),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                const Divider(color: Colors.white12, height: 1),
+                const SizedBox(height: 12),
+
+                // Individual Toggles
+                _buildToggleRow(
+                  'Proximity Ripple',
+                  'Shockwave when discovering peers',
+                  anim.enableProximityRipple,
+                  (v) => _updateSettings(anim.copyWith(enableProximityRipple: v)),
+                ),
+                _buildToggleRow(
+                  'Aura Warp Field',
+                  'Radial lens distortion effects',
+                  anim.enableWarpField,
+                  (v) => _updateSettings(anim.copyWith(enableWarpField: v)),
+                ),
+                _buildToggleRow(
+                  'Data Stream Particles',
+                  'Speed-driven particles during transfer',
+                  anim.enableParticles,
+                  (v) => _updateSettings(anim.copyWith(enableParticles: v)),
+                ),
+                _buildToggleRow(
+                  'Completion Burst',
+                  'Particle burst & stroke checkmark',
+                  anim.enableCompletionBurst,
+                  (v) => _updateSettings(anim.copyWith(enableCompletionBurst: v)),
+                ),
+                _buildToggleRow(
+                  'Aurora Background',
+                  'Fluid animated glowing background',
+                  anim.enableBackgroundAnimation,
+                  (v) => _updateSettings(anim.copyWith(enableBackgroundAnimation: v)),
+                ),
+                const Divider(color: Colors.white12, height: 1),
+                const SizedBox(height: 10),
+                _buildToggleRow(
+                  'Reduced Motion',
+                  'Substitute large animations with subtle fades',
+                  anim.reducedMotion,
+                  (v) => _updateSettings(anim.copyWith(reducedMotion: v)),
+                ),
               ],
             ),
           ),
@@ -141,16 +219,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Row(
-                  children: [
-                    Icon(Icons.folder_special_rounded, color: Color(0xFF38BDF8), size: 20),
-                    SizedBox(width: 10),
-                    Text('Downloads Location', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.white)),
-                  ],
-                ),
+                const Text('Local Transfer Database', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.white)),
                 const SizedBox(height: 4),
-                const Text('Internal Storage / Download / AuraDrop', style: TextStyle(fontSize: 12, color: Colors.white54)),
-                const SizedBox(height: 16),
+                const Text(
+                  'Clearing history deletes session logs from SQLite. Received files in your Downloads folder remain untouched.',
+                  style: TextStyle(fontSize: 12, color: Colors.white54),
+                ),
+                const SizedBox(height: 14),
                 OutlinedButton.icon(
                   style: OutlinedButton.styleFrom(
                     foregroundColor: const Color(0xFFF87171),
@@ -163,6 +238,71 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ],
             ),
+          ),
+          const SizedBox(height: 30),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTierButton(String title, String subtitle, AnimationQuality q) {
+    final isSelected = widget.animationSettings.quality == q;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () {
+          HapticFeedback.selectionClick();
+          _updateSettings(widget.animationSettings.copyWith(quality: q));
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+          decoration: BoxDecoration(
+            color: isSelected ? widget.accentColor.withValues(alpha: 0.25) : Colors.white.withValues(alpha: 0.05),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isSelected ? widget.accentColor : Colors.white12,
+              width: 1.2,
+            ),
+          ),
+          child: Column(
+            children: [
+              Text(
+                title,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                  color: isSelected ? widget.accentColor : Colors.white,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                style: const TextStyle(fontSize: 10, color: Colors.white38),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildToggleRow(String title, String subtitle, bool value, ValueChanged<bool> onChanged) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white)),
+                Text(subtitle, style: const TextStyle(fontSize: 11, color: Colors.white38)),
+              ],
+            ),
+          ),
+          GlassToggle(
+            value: value,
+            onChanged: onChanged,
+            activeColor: widget.accentColor,
           ),
         ],
       ),

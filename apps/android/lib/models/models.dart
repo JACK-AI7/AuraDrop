@@ -22,6 +22,136 @@ enum VisibilityMode {
   temporaryEveryone,
 }
 
+enum AnimationQuality {
+  minimal,
+  balanced,
+  immersive,
+}
+
+class AnimationSettings {
+  final AnimationQuality quality;
+  final bool enableProximityRipple;
+  final bool enableWarpField;
+  final bool enableParticles;
+  final bool enableGlassMotion;
+  final bool enableCompletionBurst;
+  final bool enableBackgroundAnimation;
+  final bool reducedMotion;
+
+  const AnimationSettings({
+    this.quality = AnimationQuality.balanced,
+    this.enableProximityRipple = true,
+    this.enableWarpField = true,
+    this.enableParticles = true,
+    this.enableGlassMotion = true,
+    this.enableCompletionBurst = true,
+    this.enableBackgroundAnimation = true,
+    this.reducedMotion = false,
+  });
+
+  AnimationSettings copyWith({
+    AnimationQuality? quality,
+    bool? enableProximityRipple,
+    bool? enableWarpField,
+    bool? enableParticles,
+    bool? enableGlassMotion,
+    bool? enableCompletionBurst,
+    bool? enableBackgroundAnimation,
+    bool? reducedMotion,
+  }) {
+    return AnimationSettings(
+      quality: quality ?? this.quality,
+      enableProximityRipple: enableProximityRipple ?? this.enableProximityRipple,
+      enableWarpField: enableWarpField ?? this.enableWarpField,
+      enableParticles: enableParticles ?? this.enableParticles,
+      enableGlassMotion: enableGlassMotion ?? this.enableGlassMotion,
+      enableCompletionBurst: enableCompletionBurst ?? this.enableCompletionBurst,
+      enableBackgroundAnimation: enableBackgroundAnimation ?? this.enableBackgroundAnimation,
+      reducedMotion: reducedMotion ?? this.reducedMotion,
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'quality': quality.name,
+      'enableProximityRipple': enableProximityRipple,
+      'enableWarpField': enableWarpField,
+      'enableParticles': enableParticles,
+      'enableGlassMotion': enableGlassMotion,
+      'enableCompletionBurst': enableCompletionBurst,
+      'enableBackgroundAnimation': enableBackgroundAnimation,
+      'reducedMotion': reducedMotion,
+    };
+  }
+
+  factory AnimationSettings.fromMap(Map<dynamic, dynamic>? map) {
+    if (map == null) return const AnimationSettings();
+    final qStr = map['quality']?.toString() ?? 'balanced';
+    final q = AnimationQuality.values.firstWhere(
+      (e) => e.name == qStr,
+      orElse: () => AnimationQuality.balanced,
+    );
+    return AnimationSettings(
+      quality: q,
+      enableProximityRipple: map['enableProximityRipple'] as bool? ?? true,
+      enableWarpField: map['enableWarpField'] as bool? ?? true,
+      enableParticles: map['enableParticles'] as bool? ?? true,
+      enableGlassMotion: map['enableGlassMotion'] as bool? ?? true,
+      enableCompletionBurst: map['enableCompletionBurst'] as bool? ?? true,
+      enableBackgroundAnimation: map['enableBackgroundAnimation'] as bool? ?? true,
+      reducedMotion: map['reducedMotion'] as bool? ?? false,
+    );
+  }
+}
+
+class TransferMetrics {
+  final double currentSpeedMBps;
+  final double peakSpeedMBps;
+  final double avgSpeedMBps;
+  final int connectionTimeMs;
+  final int handshakeTimeMs;
+  final int firstByteTimeMs;
+  final double diskWriteMBps;
+  final int ramUsageMB;
+  final int cpuPercent;
+
+  const TransferMetrics({
+    this.currentSpeedMBps = 0.0,
+    this.peakSpeedMBps = 0.0,
+    this.avgSpeedMBps = 0.0,
+    this.connectionTimeMs = 0,
+    this.handshakeTimeMs = 0,
+    this.firstByteTimeMs = 0,
+    this.diskWriteMBps = 0.0,
+    this.ramUsageMB = 0,
+    this.cpuPercent = 0,
+  });
+
+  TransferMetrics copyWith({
+    double? currentSpeedMBps,
+    double? peakSpeedMBps,
+    double? avgSpeedMBps,
+    int? connectionTimeMs,
+    int? handshakeTimeMs,
+    int? firstByteTimeMs,
+    double? diskWriteMBps,
+    int? ramUsageMB,
+    int? cpuPercent,
+  }) {
+    return TransferMetrics(
+      currentSpeedMBps: currentSpeedMBps ?? this.currentSpeedMBps,
+      peakSpeedMBps: peakSpeedMBps ?? this.peakSpeedMBps,
+      avgSpeedMBps: avgSpeedMBps ?? this.avgSpeedMBps,
+      connectionTimeMs: connectionTimeMs ?? this.connectionTimeMs,
+      handshakeTimeMs: handshakeTimeMs ?? this.handshakeTimeMs,
+      firstByteTimeMs: firstByteTimeMs ?? this.firstByteTimeMs,
+      diskWriteMBps: diskWriteMBps ?? this.diskWriteMBps,
+      ramUsageMB: ramUsageMB ?? this.ramUsageMB,
+      cpuPercent: cpuPercent ?? this.cpuPercent,
+    );
+  }
+}
+
 class PeerDevice {
   final String id;
   final String name;
@@ -121,6 +251,7 @@ class TransferHistoryItem {
   final String sha256;
   final String localPath;
   final String transportType;
+  final bool isAvailable;
 
   TransferHistoryItem({
     required this.id,
@@ -137,6 +268,7 @@ class TransferHistoryItem {
     required this.sha256,
     required this.localPath,
     required this.transportType,
+    this.isAvailable = true,
   });
 
   factory TransferHistoryItem.fromMap(Map<dynamic, dynamic> map) {
@@ -155,6 +287,7 @@ class TransferHistoryItem {
       sha256: map['sha256']?.toString() ?? '',
       localPath: map['localPath']?.toString() ?? '',
       transportType: map['transportType']?.toString() ?? 'LAN_TCP',
+      isAvailable: map['isAvailable'] as bool? ?? true,
     );
   }
 }
@@ -197,6 +330,7 @@ class ReceivedFileItem {
   final int size;
   final DateTime lastModified;
   final String extension;
+  final bool isAvailable;
 
   ReceivedFileItem({
     required this.name,
@@ -204,6 +338,7 @@ class ReceivedFileItem {
     required this.size,
     required this.lastModified,
     required this.extension,
+    this.isAvailable = true,
   });
 
   factory ReceivedFileItem.fromMap(Map<dynamic, dynamic> map) {
@@ -213,6 +348,7 @@ class ReceivedFileItem {
       size: (map['size'] as num?)?.toInt() ?? 0,
       lastModified: DateTime.fromMillisecondsSinceEpoch((map['lastModified'] as num?)?.toInt() ?? 0),
       extension: map['extension']?.toString() ?? '',
+      isAvailable: map['isAvailable'] as bool? ?? true,
     );
   }
 }

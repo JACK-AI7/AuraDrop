@@ -352,12 +352,18 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF10B981).withValues(alpha: 0.2),
+                  color: item.isAvailable
+                      ? const Color(0xFF10B981).withValues(alpha: 0.2)
+                      : Colors.amber.withValues(alpha: 0.2),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Text(
-                  'VERIFIED',
-                  style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Color(0xFF10B981)),
+                child: Text(
+                  item.isAvailable ? 'VERIFIED' : 'FILE UNAVAILABLE',
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.bold,
+                    color: item.isAvailable ? const Color(0xFF10B981) : Colors.amber,
+                  ),
                 ),
               ),
             ],
