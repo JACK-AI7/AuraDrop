@@ -28,40 +28,66 @@ class GlassThemeData {
 
 class GlassTheme {
   // Theme definitions
+  static const obsidianMinimal = GlassThemeData(
+    id: 'obsidian_minimal',
+    name: 'Obsidian Minimal',
+    background: Color(0xFF050505),
+    surfaceGlass: Color(0x0FFFFFFF),
+    surfaceGlassHigher: Color(0x1AFFFFFF),
+    borderGlass: Color(0x14FFFFFF),
+    borderGlassGlow: Color(0x26FFFFFF),
+    textPrimary: Colors.white,
+    textSecondary: Color(0xFF8A8A8A),
+    blurSigma: 20.0,
+  );
+
+  static const pureBlack = GlassThemeData(
+    id: 'pure_black',
+    name: 'Pure Black',
+    background: Color(0xFF000000),
+    surfaceGlass: Color(0x0DFFFFFF),
+    surfaceGlassHigher: Color(0x17FFFFFF),
+    borderGlass: Color(0x12FFFFFF),
+    borderGlassGlow: Color(0x20FFFFFF),
+    textPrimary: Colors.white,
+    textSecondary: Color(0xFF7E7E7E),
+    blurSigma: 16.0,
+  );
+
   static const glassDark = GlassThemeData(
     id: 'glass_dark',
-    name: 'Glass Dark',
-    background: Color(0xFF0C0E14),
-    surfaceGlass: Color(0x1AFFFFFF),
-    surfaceGlassHigher: Color(0x2EFFFFFF),
-    borderGlass: Color(0x26FFFFFF),
-    borderGlassGlow: Color(0x4038BDF8),
+    name: 'Obsidian Minimal',
+    background: Color(0xFF050505),
+    surfaceGlass: Color(0x0FFFFFFF),
+    surfaceGlassHigher: Color(0x1AFFFFFF),
+    borderGlass: Color(0x14FFFFFF),
+    borderGlassGlow: Color(0x26FFFFFF),
     textPrimary: Colors.white,
-    textSecondary: Color(0xB3FFFFFF),
-    blurSigma: 16.0,
+    textSecondary: Color(0xFF8A8A8A),
+    blurSigma: 20.0,
   );
 
   static const obsidianGlass = GlassThemeData(
     id: 'obsidian_glass',
     name: 'Obsidian Glass',
-    background: Color(0xFF060709),
-    surfaceGlass: Color(0x14FFFFFF),
-    surfaceGlassHigher: Color(0x24FFFFFF),
-    borderGlass: Color(0x1FFFFFFF),
-    borderGlassGlow: Color(0x33818CF8),
+    background: Color(0xFF08080A),
+    surfaceGlass: Color(0x12FFFFFF),
+    surfaceGlassHigher: Color(0x20FFFFFF),
+    borderGlass: Color(0x1AFFFFFF),
+    borderGlassGlow: Color(0x28FFFFFF),
     textPrimary: Colors.white,
-    textSecondary: Color(0x99FFFFFF),
+    textSecondary: Color(0xFF94A3B8),
     blurSigma: 20.0,
   );
 
   static const auroraGlass = GlassThemeData(
     id: 'aurora_glass',
-    name: 'Aurora Glass',
+    name: 'Nordic Slate',
     background: Color(0xFF080D1A),
-    surfaceGlass: Color(0x1F38BDF8),
-    surfaceGlassHigher: Color(0x3338BDF8),
-    borderGlass: Color(0x3338BDF8),
-    borderGlassGlow: Color(0x6610B981),
+    surfaceGlass: Color(0x1438BDF8),
+    surfaceGlassHigher: Color(0x2638BDF8),
+    borderGlass: Color(0x2038BDF8),
+    borderGlassGlow: Color(0x3310B981),
     textPrimary: Colors.white,
     textSecondary: Color(0xB3E0F2FE),
     blurSigma: 18.0,
@@ -69,32 +95,36 @@ class GlassTheme {
 
   static const crystalGlass = GlassThemeData(
     id: 'crystal_glass',
-    name: 'Crystal Glass',
-    background: Color(0xFF0A101D),
-    surfaceGlass: Color(0x2660A5FA),
-    surfaceGlassHigher: Color(0x3D60A5FA),
-    borderGlass: Color(0x3D93C5FD),
-    borderGlassGlow: Color(0x6638BDF8),
+    name: 'Monochrome Frost',
+    background: Color(0xFF0A0A0E),
+    surfaceGlass: Color(0x17FFFFFF),
+    surfaceGlassHigher: Color(0x26FFFFFF),
+    borderGlass: Color(0x22FFFFFF),
+    borderGlassGlow: Color(0x33FFFFFF),
     textPrimary: Colors.white,
-    textSecondary: Color(0xCCBAE6FD),
-    blurSigma: 16.0,
+    textSecondary: Color(0xFF9E9E9E),
+    blurSigma: 18.0,
   );
 
   static const glassLight = GlassThemeData(
     id: 'glass_light',
-    name: 'Glass Light',
-    background: Color(0xFFE2E8F0),
-    surfaceGlass: Color(0x7AFFFFFF),
-    surfaceGlassHigher: Color(0xB8FFFFFF),
-    borderGlass: Color(0x66FFFFFF),
-    borderGlassGlow: Color(0x400284C7),
+    name: 'Minimal Light',
+    background: Color(0xFFF1F5F9),
+    surfaceGlass: Color(0x8AFFFFFF),
+    surfaceGlassHigher: Color(0xC2FFFFFF),
+    borderGlass: Color(0x40000000),
+    borderGlassGlow: Color(0x20000000),
     textPrimary: Color(0xFF0F172A),
-    textSecondary: Color(0xFF475569),
+    textSecondary: Color(0xFF64748B),
     blurSigma: 20.0,
   );
 
   static GlassThemeData getTheme(String id) {
     switch (id) {
+      case 'pure_black':
+        return pureBlack;
+      case 'obsidian_minimal':
+        return obsidianMinimal;
       case 'obsidian_glass':
         return obsidianGlass;
       case 'aurora_glass':
@@ -104,24 +134,30 @@ class GlassTheme {
       case 'glass_light':
         return glassLight;
       default:
-        return glassDark;
+        return obsidianMinimal;
     }
   }
 
   // Accent Colors
   static Color getAccent(String key) {
     switch (key) {
-      case 'indigo':
-        return const Color(0xFF818CF8);
+      case 'white':
+      case 'monochrome':
+        return const Color(0xFFFFFFFF);
+      case 'slate':
+        return const Color(0xFF94A3B8);
       case 'emerald':
         return const Color(0xFF10B981);
+      case 'indigo':
+        return const Color(0xFF818CF8);
       case 'rose':
         return const Color(0xFFF43F5E);
       case 'amber':
         return const Color(0xFFF59E0B);
       case 'cyan':
-      default:
         return const Color(0xFF38BDF8);
+      default:
+        return const Color(0xFFFFFFFF);
     }
   }
 }

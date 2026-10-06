@@ -155,47 +155,65 @@ class TransferMetrics {
 class PeerDevice {
   final String id;
   final String name;
+  final String deviceName;
   final String platform;
   final String ip;
   final int port;
   final DateTime lastSeen;
   final bool isTrusted;
   final int avatarIndex;
+  final String avatarPath;
+  final String status;
 
   PeerDevice({
     required this.id,
     required this.name,
+    required this.deviceName,
     required this.platform,
     required this.ip,
     required this.port,
     required this.lastSeen,
     this.isTrusted = false,
     this.avatarIndex = 0,
+    this.avatarPath = '',
+    this.status = '',
   });
 
   factory PeerDevice.fromMap(Map<dynamic, dynamic> map, {bool isTrusted = false}) {
+    final name = map['name']?.toString() ?? 'Nearby Peer';
     return PeerDevice(
       id: map['id']?.toString() ?? '',
-      name: map['name']?.toString() ?? 'Nearby Peer',
+      name: name,
+      deviceName: map['deviceName']?.toString() ?? name,
       platform: map['platform']?.toString() ?? 'android',
       ip: map['ip']?.toString() ?? '127.0.0.1',
       port: (map['port'] as num?)?.toInt() ?? 48291,
       lastSeen: DateTime.now(),
       isTrusted: isTrusted,
-      avatarIndex: (map['name']?.toString().hashCode ?? 0).abs() % 6,
+      avatarIndex: (map['avatarIndex'] as num?)?.toInt() ?? (name.hashCode.abs() % 6),
+      avatarPath: map['avatarPath']?.toString() ?? '',
+      status: map['status']?.toString() ?? '',
     );
   }
 
-  PeerDevice copyWith({bool? isTrusted, int? avatarIndex}) {
+  PeerDevice copyWith({
+    bool? isTrusted,
+    int? avatarIndex,
+    String? avatarPath,
+    String? status,
+  }) {
     return PeerDevice(
       id: id,
       name: name,
+      deviceName: deviceName,
       platform: platform,
       ip: ip,
       port: port,
       lastSeen: lastSeen,
       isTrusted: isTrusted ?? this.isTrusted,
       avatarIndex: avatarIndex ?? this.avatarIndex,
+      avatarPath: avatarPath ?? this.avatarPath,
+      status: status ?? this.status,
     );
   }
 }
@@ -300,6 +318,9 @@ class ChatMessage {
   final String text;
   final DateTime timestamp;
   final String status; // "sending", "sent", "delivered", "read", "failed"
+  final String messageType; // "text" or "file"
+  final String? fileName;
+  final int? fileSize;
 
   ChatMessage({
     required this.id,
@@ -309,6 +330,9 @@ class ChatMessage {
     required this.text,
     required this.timestamp,
     required this.status,
+    this.messageType = 'text',
+    this.fileName,
+    this.fileSize,
   });
 
   factory ChatMessage.fromMap(Map<dynamic, dynamic> map) {
@@ -320,6 +344,9 @@ class ChatMessage {
       text: map['text']?.toString() ?? '',
       timestamp: DateTime.fromMillisecondsSinceEpoch((map['timestamp'] as num?)?.toInt() ?? 0),
       status: map['status']?.toString() ?? 'sent',
+      messageType: map['messageType']?.toString() ?? 'text',
+      fileName: map['fileName']?.toString(),
+      fileSize: (map['fileSize'] as num?)?.toInt(),
     );
   }
 }
@@ -355,7 +382,9 @@ class ReceivedFileItem {
 
 class UserProfile {
   final String displayName;
+  final String deviceName;
   final int avatarIndex;
+  final String avatarPath;
   final String bio;
   final String theme;
   final String accent;
@@ -363,7 +392,9 @@ class UserProfile {
 
   UserProfile({
     required this.displayName,
+    this.deviceName = 'My Device',
     required this.avatarIndex,
+    this.avatarPath = '',
     required this.bio,
     required this.theme,
     required this.accent,
@@ -373,7 +404,9 @@ class UserProfile {
   factory UserProfile.fromMap(Map<dynamic, dynamic> map) {
     return UserProfile(
       displayName: map['display_name']?.toString() ?? 'AuraDrop User',
+      deviceName: map['device_name']?.toString() ?? 'My Device',
       avatarIndex: int.tryParse(map['avatar_index']?.toString() ?? '0') ?? 0,
+      avatarPath: map['avatar_path']?.toString() ?? '',
       bio: map['bio']?.toString() ?? 'Nearby sharing made effortless',
       theme: map['theme']?.toString() ?? 'glass_dark',
       accent: map['accent']?.toString() ?? 'cyan',

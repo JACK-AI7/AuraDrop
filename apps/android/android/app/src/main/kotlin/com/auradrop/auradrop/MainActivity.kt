@@ -37,6 +37,7 @@ class MainActivity : FlutterActivity() {
         private const val METHOD_CHANNEL = "com.auradrop.app/native"
         private const val EVENT_CHANNEL = "com.auradrop.app/events"
         private const val FILE_PICK_CODE = 48291
+        private const val AVATAR_PICK_CODE = 48292
         private const val DEFAULT_PORT = 48291
         private const val DISCOVERY_GROUP = "239.255.48.29"
         private const val DISCOVERY_PORT = 48290
@@ -46,6 +47,7 @@ class MainActivity : FlutterActivity() {
 
     private var eventSink: EventChannel.EventSink? = null
     private var pendingFilePickResult: MethodChannel.Result? = null
+    private var pendingAvatarPickResult: MethodChannel.Result? = null
 
     private var multicastLock: WifiManager.MulticastLock? = null
     private var isDiscovering = false
@@ -262,6 +264,24 @@ class MainActivity : FlutterActivity() {
                     val ok = dbHelper.setPeerTrusted(peerId, peerName, trusted)
                     result.success(ok)
                 }
+                "pickAvatarImage" -> {
+                    pendingAvatarPickResult = result
+                    launchAvatarPicker()
+                }
+                "removeAvatarImage" -> {
+                    val avatarFile = File(filesDir, "avatar_${deviceId}.jpg")
+                    if (avatarFile.exists()) avatarFile.delete()
+                    dbHelper.setProfileValue("avatar_path", "")
+                    result.success(true)
+                }
+                "checkStorageSpace" -> {
+                    val downloadsDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "AuraDrop")
+                    if (!downloadsDir.exists()) downloadsDir.mkdirs()
+                    val map = HashMap<String, Long>()
+                    map["usable"] = downloadsDir.usableSpace
+                    map["total"] = downloadsDir.totalSpace
+                    result.success(map)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -323,6 +343,13 @@ class MainActivity : FlutterActivity() {
         startActivityForResult(intent, FILE_PICK_CODE)
     }
 
+    private fun launchAvatarPicker() {
+        val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+            type = "image/*"
+        }
+        startActivityForResult(intent, AVATAR_PICK_CODE)
+    }
+
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == FILE_PICK_CODE) {
@@ -341,6 +368,26 @@ class MainActivity : FlutterActivity() {
             }
             pendingFilePickResult?.success(selectedFiles)
             pendingFilePickResult = null
+        } else if (requestCode == AVATAR_PICK_CODE) {
+            if (resultCode == Activity.RESULT_OK && data?.data != null) {
+                try {
+                    val uri = data.data!!
+                    val avatarFile = File(filesDir, "avatar_${deviceId}.jpg")
+                    contentResolver.openInputStream(uri)?.use { input ->
+                        FileOutputStream(avatarFile).use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    dbHelper.setProfileValue("avatar_path", avatarFile.absolutePath)
+                    pendingAvatarPickResult?.success(avatarFile.absolutePath)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error saving avatar: ${e.message}")
+                    pendingAvatarPickResult?.success(null)
+                }
+            } else {
+                pendingAvatarPickResult?.success(null)
+            }
+            pendingAvatarPickResult = null
         }
     }
 
@@ -400,13 +447,18 @@ class MainActivity : FlutterActivity() {
             socket = DatagramSocket()
             while (isDiscovering && isActive) {
                 try {
+                    val prof = dbHelper.getProfile()
                     val beacon = JSONObject().apply {
                         put("type", "AURADROP_BEACON")
                         put("protocol", "P2PFS/1")
                         put("deviceId", deviceId)
-                        put("name", deviceName)
+                        put("name", prof["display_name"] ?: deviceName)
+                        put("deviceName", deviceName)
                         put("platform", "android")
                         put("transferPort", DEFAULT_PORT)
+                        put("avatarIndex", prof["avatar_index"]?.toIntOrNull() ?: 0)
+                        put("avatarPath", prof["avatar_path"] ?: "")
+                        put("status", prof["bio"] ?: "Nearby sharing made effortless")
                         put("timestamp", System.currentTimeMillis())
                     }
                     val bytes = beacon.toString().toByteArray(Charsets.UTF_8)
@@ -442,9 +494,13 @@ class MainActivity : FlutterActivity() {
                         val peer = mapOf(
                             "id" to remoteDeviceId,
                             "name" to json.optString("name", "Nearby Device"),
+                            "deviceName" to json.optString("deviceName", json.optString("name", "Nearby Device")),
                             "platform" to json.optString("platform", "android"),
                             "ip" to packet.address.hostAddress,
-                            "port" to json.optInt("transferPort", DEFAULT_PORT)
+                            "port" to json.optInt("transferPort", DEFAULT_PORT),
+                            "avatarIndex" to json.optInt("avatarIndex", 0),
+                            "avatarPath" to json.optString("avatarPath", ""),
+                            "status" to json.optString("status", "")
                         )
                         sendEvent("peerDiscovered", mapOf("peer" to peer))
                     }
@@ -711,6 +767,25 @@ class MainActivity : FlutterActivity() {
         val currentMimeType = fInfo.optString("mimeType", "application/octet-stream")
         val totalExpectedTransferBytes = fInfo.optLong("totalTransferBytes", currentFileExpectedBytes)
         val resumeOffset = fInfo.optLong("offset", 0L)
+
+        // Storage Check (Prompt Section 58)
+        val usableSpace = downloadsDir.usableSpace
+        val bytesNeeded = totalExpectedTransferBytes - resumeOffset
+        if (bytesNeeded > usableSpace) {
+            val reqStr = formatBytes(bytesNeeded)
+            val availStr = formatBytes(usableSpace)
+            val errMsg = "Not enough storage. Required: $reqStr, Available: $availStr"
+            sendEvent("transferError", mapOf(
+                "transferId" to transferId,
+                "error" to errMsg
+            ))
+            output.write(buildFrame(0x26, JSONObject().apply {
+                put("status", "INSUFFICIENT_STORAGE")
+                put("message", errMsg)
+            }.toString().toByteArray()))
+            output.flush()
+            throw IOException(errMsg)
+        }
 
         currentFinalFile = resolveUniqueFile(downloadsDir, safeName)
         currentPartFile = File(downloadsDir, "${currentFinalFile.name}.part")
@@ -1484,6 +1559,13 @@ class MainActivity : FlutterActivity() {
         if (bytesPerSec < 1024) return "$bytesPerSec B/s"
         if (bytesPerSec < 1024 * 1024) return "${bytesPerSec / 1024} KB/s"
         return String.format("%.1f MB/s", bytesPerSec / (1024.0 * 1024.0))
+    }
+
+    private fun formatBytes(bytes: Long): String {
+        if (bytes < 1024) return "$bytes B"
+        if (bytes < 1024 * 1024) return String.format("%.1f KB", bytes / 1024.0)
+        if (bytes < 1024 * 1024 * 1024) return String.format("%.1f MB", bytes / (1024.0 * 1024.0))
+        return String.format("%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
     }
 
     override fun onDestroy() {

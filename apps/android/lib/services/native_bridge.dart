@@ -184,4 +184,24 @@ class NativeBridgeService {
       'trusted': trusted,
     });
   }
+
+  static Future<String?> pickAvatarImage() async {
+    return await _channel.invokeMethod<String>('pickAvatarImage');
+  }
+
+  static Future<bool> removeAvatarImage() async {
+    final bool? ok = await _channel.invokeMethod<bool>('removeAvatarImage');
+    return ok ?? false;
+  }
+
+  static Future<Map<String, int>> checkStorageSpace() async {
+    final dynamic res = await _channel.invokeMethod('checkStorageSpace');
+    if (res is Map) {
+      return {
+        'usable': (res['usable'] as num?)?.toInt() ?? 0,
+        'total': (res['total'] as num?)?.toInt() ?? 0,
+      };
+    }
+    return {'usable': 0, 'total': 0};
+  }
 }

@@ -1,5 +1,6 @@
 import 'dart:ui';
 import 'dart:math' as math;
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/models.dart';
@@ -40,21 +41,21 @@ class GlassCard extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(borderRadius),
         child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
           child: Container(
             padding: padding,
             decoration: BoxDecoration(
-              color: backgroundColor ?? Colors.white.withValues(alpha: 0.07),
+              color: backgroundColor ?? Colors.white.withValues(alpha: 0.04),
               borderRadius: BorderRadius.circular(borderRadius),
               border: Border.all(
-                color: borderColor ?? Colors.white.withValues(alpha: 0.15),
-                width: 1.0,
+                color: borderColor ?? Colors.white.withValues(alpha: 0.10),
+                width: 0.7,
               ),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.25),
-                  blurRadius: 20,
-                  offset: const Offset(0, 8),
+                  color: Colors.black.withValues(alpha: 0.40),
+                  blurRadius: 24,
+                  offset: const Offset(0, 10),
                 ),
               ],
             ),
@@ -245,67 +246,67 @@ class AuraOrb extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            width: 84,
-            height: 84,
+            width: 88,
+            height: 88,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               gradient: RadialGradient(
                 colors: [
-                  accentColor.withValues(alpha: 0.9),
-                  accentColor.withValues(alpha: 0.2),
-                  const Color(0xFF0C0E14),
+                  Colors.white.withValues(alpha: 0.95),
+                  Colors.white.withValues(alpha: 0.20),
+                  Colors.transparent,
                 ],
-                stops: const [0.0, 0.65, 1.0],
+                stops: const [0.0, 0.55, 1.0],
               ),
               boxShadow: [
                 BoxShadow(
-                  color: accentColor.withValues(alpha: 0.25 + 0.25 * pulseFactor),
-                  blurRadius: 28 + 14 * pulseFactor,
-                  spreadRadius: 4,
+                  color: Colors.white.withValues(alpha: 0.15 + 0.15 * pulseFactor),
+                  blurRadius: 32 + 16 * pulseFactor,
+                  spreadRadius: 2,
                 ),
               ],
             ),
             child: Center(
               child: ClipRRect(
-                borderRadius: BorderRadius.circular(32),
+                borderRadius: BorderRadius.circular(34),
                 child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+                  filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
                   child: Container(
-                    width: 64,
-                    height: 64,
+                    width: 68,
+                    height: 68,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: Colors.white.withValues(alpha: 0.15),
+                      color: Colors.black.withValues(alpha: 0.35),
                       border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.4),
-                        width: 1.5,
+                        color: Colors.white.withValues(alpha: 0.5),
+                        width: 1.0,
                       ),
                     ),
                     child: const Icon(
                       Icons.near_me_rounded,
                       color: Colors.white,
-                      size: 32,
+                      size: 30,
                     ),
                   ),
                 ),
               ),
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
+              color: Colors.white.withValues(alpha: 0.06),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.12), width: 0.6),
             ),
-            child: Text(
-              'AURA ORB',
+            child: const Text(
+              'AURA BEACON',
               style: TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 1.2,
-                color: accentColor,
+                fontSize: 9,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1.5,
+                color: Colors.white,
               ),
             ),
           ),
@@ -338,9 +339,9 @@ class GlassDiscoveryRadarPainter extends CustomPainter {
 
     // Translucent Concentric Rings
     final ringPaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.08)
+      ..color = Colors.white.withValues(alpha: 0.05)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.0;
+      ..strokeWidth = 0.7;
 
     for (int i = 1; i <= 3; i++) {
       canvas.drawCircle(center, maxRadius * (i / 3.0), ringPaint);
@@ -350,9 +351,9 @@ class GlassDiscoveryRadarPainter extends CustomPainter {
       // Dynamic Glowing Pulse Wave
       final dynamicRadius = maxRadius * (0.35 + 0.60 * pulseFactor);
       final wavePaint = Paint()
-        ..color = accentColor.withValues(alpha: 0.15 * (1.0 - pulseFactor))
+        ..color = Colors.white.withValues(alpha: 0.12 * (1.0 - pulseFactor))
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.0;
+        ..strokeWidth = 1.0;
       canvas.drawCircle(center, dynamicRadius, wavePaint);
 
       // Rotating Glass Sweep
@@ -366,7 +367,7 @@ class GlassDiscoveryRadarPainter extends CustomPainter {
           endAngle: angle,
           colors: [
             Colors.transparent,
-            accentColor.withValues(alpha: 0.20),
+            Colors.white.withValues(alpha: 0.08),
           ],
         ).createShader(Rect.fromCircle(center: center, radius: maxRadius))
         ..style = PaintingStyle.fill;
@@ -397,53 +398,65 @@ class PeerAvatar extends StatelessWidget {
     super.key,
     required this.peer,
     this.size = 64,
-    this.accentColor = const Color(0xFF38BDF8),
+    this.accentColor = Colors.white,
     this.showProgress = false,
     this.progress = 0.0,
   });
 
   @override
   Widget build(BuildContext context) {
+    final hasCustomAvatar = peer.avatarPath.isNotEmpty && File(peer.avatarPath).existsSync();
+
     return Stack(
       alignment: Alignment.center,
       children: [
         if (showProgress)
           SizedBox(
-            width: size + 14,
-            height: size + 14,
+            width: size + 12,
+            height: size + 12,
             child: CircularProgressIndicator(
               value: progress.clamp(0.0, 1.0),
-              strokeWidth: 3.5,
+              strokeWidth: 2.5,
               strokeCap: StrokeCap.round,
-              backgroundColor: Colors.white.withValues(alpha: 0.1),
+              backgroundColor: Colors.white.withValues(alpha: 0.08),
               valueColor: AlwaysStoppedAnimation<Color>(accentColor),
             ),
           ),
         ClipRRect(
           borderRadius: BorderRadius.circular(size / 2),
           child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+            filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
             child: Container(
               width: size,
               height: size,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: Colors.white.withValues(alpha: 0.10),
+                color: Colors.white.withValues(alpha: 0.06),
                 border: Border.all(
-                  color: peer.isTrusted ? const Color(0xFF818CF8) : Colors.white.withValues(alpha: 0.25),
-                  width: 1.5,
+                  color: peer.isTrusted ? Colors.white : Colors.white.withValues(alpha: 0.20),
+                  width: peer.isTrusted ? 1.5 : 0.8,
                 ),
               ),
-              child: Center(
-                child: Text(
-                  peer.name.isNotEmpty ? peer.name.substring(0, 1).toUpperCase() : '?',
-                  style: TextStyle(
-                    fontSize: size * 0.38,
-                    fontWeight: FontWeight.w700,
-                    color: peer.isTrusted ? const Color(0xFF818CF8) : Colors.white,
-                  ),
-                ),
-              ),
+              child: hasCustomAvatar
+                  ? ClipOval(
+                      child: Image.file(
+                        File(peer.avatarPath),
+                        width: size,
+                        height: size,
+                        fit: BoxFit.cover,
+                      ),
+                    )
+                  : Center(
+                      child: Text(
+                        peer.name.isNotEmpty ? peer.name.substring(0, 1).toUpperCase() : '?',
+                        style: TextStyle(
+                          fontSize: size * 0.40,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                          letterSpacing: -0.5,
+                        ),
+                      ),
+                    ),
             ),
           ),
         ),
@@ -455,9 +468,9 @@ class PeerAvatar extends StatelessWidget {
               padding: const EdgeInsets.all(3),
               decoration: const BoxDecoration(
                 shape: BoxShape.circle,
-                color: Color(0xFF818CF8),
+                color: Colors.white,
               ),
-              child: const Icon(Icons.star, color: Colors.black, size: 10),
+              child: const Icon(Icons.star, color: Colors.black, size: 9),
             ),
           ),
       ],
@@ -472,73 +485,147 @@ class ChatBubble extends StatelessWidget {
   final ChatMessage message;
   final bool isMe;
   final Color accentColor;
+  final VoidCallback? onFileTap;
 
   const ChatBubble({
     super.key,
     required this.message,
     required this.isMe,
     required this.accentColor,
+    this.onFileTap,
   });
+
+  String _formatBytes(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+  }
 
   @override
   Widget build(BuildContext context) {
+    final isFile = message.messageType == 'file';
+
     return Align(
       alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 16),
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.76),
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
         child: ClipRRect(
           borderRadius: BorderRadius.only(
-            topLeft: const Radius.circular(18),
-            topRight: const Radius.circular(18),
-            bottomLeft: Radius.circular(isMe ? 18 : 4),
-            bottomRight: Radius.circular(isMe ? 4 : 18),
+            topLeft: const Radius.circular(16),
+            topRight: const Radius.circular(16),
+            bottomLeft: Radius.circular(isMe ? 16 : 4),
+            bottomRight: Radius.circular(isMe ? 4 : 16),
           ),
           child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+            filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
               decoration: BoxDecoration(
                 color: isMe
-                    ? accentColor.withValues(alpha: 0.25)
-                    : Colors.white.withValues(alpha: 0.08),
+                    ? Colors.white.withValues(alpha: 0.14)
+                    : Colors.white.withValues(alpha: 0.05),
                 borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(18),
-                  topRight: const Radius.circular(18),
-                  bottomLeft: Radius.circular(isMe ? 18 : 4),
-                  bottomRight: Radius.circular(isMe ? 4 : 18),
+                  topLeft: const Radius.circular(16),
+                  topRight: const Radius.circular(16),
+                  bottomLeft: Radius.circular(isMe ? 16 : 4),
+                  bottomRight: Radius.circular(isMe ? 4 : 16),
                 ),
                 border: Border.all(
                   color: isMe
-                      ? accentColor.withValues(alpha: 0.4)
-                      : Colors.white.withValues(alpha: 0.15),
+                      ? Colors.white.withValues(alpha: 0.28)
+                      : Colors.white.withValues(alpha: 0.10),
+                  width: 0.7,
                 ),
               ),
               child: Column(
                 crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    message.text,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      color: Colors.white,
-                      height: 1.3,
+                  if (isFile) ...[
+                    GestureDetector(
+                      onTap: onFileTap,
+                      child: Container(
+                        padding: const EdgeInsets.all(10),
+                        margin: const EdgeInsets.only(bottom: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.07),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.white.withValues(alpha: 0.15), width: 0.6),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 36,
+                              height: 36,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: Colors.white.withValues(alpha: 0.12),
+                              ),
+                              child: const Icon(Icons.attach_file_rounded, color: Colors.white, size: 18),
+                            ),
+                            const SizedBox(width: 10),
+                            Flexible(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    message.fileName ?? message.text,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 13,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    message.fileSize != null ? _formatBytes(message.fileSize!) : 'P2P File Transfer',
+                                    style: const TextStyle(fontSize: 11, color: Color(0xFF8A8A8A)),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
-                  ),
+                  ] else ...[
+                    Text(
+                      message.text,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: Colors.white,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 4),
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
                         '${message.timestamp.hour.toString().padLeft(2, '0')}:${message.timestamp.minute.toString().padLeft(2, '0')}',
-                        style: const TextStyle(fontSize: 10, color: Colors.white54),
+                        style: const TextStyle(fontSize: 10, color: Color(0xFF8A8A8A)),
                       ),
                       if (isMe) ...[
-                        const SizedBox(width: 4),
+                        const SizedBox(width: 5),
                         Icon(
-                          message.status == 'delivered' ? Icons.done_all : Icons.done,
-                          size: 12,
-                          color: message.status == 'delivered' ? accentColor : Colors.white54,
+                          message.status == 'read'
+                              ? Icons.done_all
+                              : message.status == 'delivered'
+                                  ? Icons.done_all
+                                  : message.status == 'sent'
+                                      ? Icons.done
+                                      : Icons.schedule,
+                          size: 13,
+                          color: message.status == 'read'
+                              ? Colors.white
+                              : message.status == 'delivered'
+                                  ? Colors.white70
+                                  : const Color(0xFF8A8A8A),
                         ),
                       ],
                     ],
