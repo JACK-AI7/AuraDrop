@@ -1,0 +1,187 @@
+import 'dart:async';
+import 'package:flutter/services.dart';
+import '../models/models.dart';
+
+class NativeBridgeService {
+  static const MethodChannel _channel = MethodChannel('com.auradrop.app/native');
+  static const EventChannel _eventChannel = EventChannel('com.auradrop.app/events');
+
+  static Stream<dynamic>? _eventsStream;
+
+  static Stream<dynamic> get events {
+    _eventsStream ??= _eventChannel.receiveBroadcastStream();
+    return _eventsStream!;
+  }
+
+  // Device Info
+  static Future<Map<String, dynamic>> getDeviceInfo() async {
+    final dynamic res = await _channel.invokeMethod('getDeviceInfo');
+    if (res is Map) return Map<String, dynamic>.from(res);
+    return {};
+  }
+
+  static Future<void> requestPermissions() async {
+    await _channel.invokeMethod('requestPermissions');
+  }
+
+  static Future<List<PickedFileMeta>> getInitialShareFiles() async {
+    final dynamic res = await _channel.invokeMethod('getInitialShareFiles');
+    if (res is List) {
+      return res.whereType<Map>().map((m) => PickedFileMeta.fromMap(m)).toList();
+    }
+    return [];
+  }
+
+  // Discovery
+  static Future<void> startDiscovery() async {
+    await _channel.invokeMethod('startDiscovery');
+  }
+
+  static Future<void> stopDiscovery() async {
+    await _channel.invokeMethod('stopDiscovery');
+  }
+
+  // File Picker
+  static Future<List<PickedFileMeta>> pickFiles() async {
+    final dynamic res = await _channel.invokeMethod('pickFiles');
+    if (res is List) {
+      return res.whereType<Map>().map((m) => PickedFileMeta.fromMap(m)).toList();
+    }
+    return [];
+  }
+
+  // Transfer Server & Client
+  static Future<void> startTransferServer() async {
+    await _channel.invokeMethod('startTransferServer');
+  }
+
+  static Future<void> sendFiles({
+    required String targetIp,
+    required int targetPort,
+    required List<PickedFileMeta> files,
+  }) async {
+    await _channel.invokeMethod('sendFiles', {
+      'targetIp': targetIp,
+      'targetPort': targetPort,
+      'files': files.map((f) => f.toMap()).toList(),
+    });
+  }
+
+  static Future<void> acceptTransfer(String transferId) async {
+    await _channel.invokeMethod('acceptTransfer', {'transferId': transferId});
+  }
+
+  static Future<void> declineTransfer(String transferId) async {
+    await _channel.invokeMethod('declineTransfer', {'transferId': transferId});
+  }
+
+  static Future<void> cancelTransfer(String transferId) async {
+    await _channel.invokeMethod('cancelTransfer', {'transferId': transferId});
+  }
+
+  static Future<bool> openFile(String filePath) async {
+    final bool? ok = await _channel.invokeMethod<bool>('openFile', {'filePath': filePath});
+    return ok ?? false;
+  }
+
+  // Database / History
+  static Future<List<TransferHistoryItem>> getTransferHistory() async {
+    final dynamic res = await _channel.invokeMethod('getTransferHistory');
+    if (res is List) {
+      return res.whereType<Map>().map((m) => TransferHistoryItem.fromMap(m)).toList();
+    }
+    return [];
+  }
+
+  static Future<bool> deleteTransferHistory(String id) async {
+    final bool? ok = await _channel.invokeMethod<bool>('deleteTransferHistory', {'id': id});
+    return ok ?? false;
+  }
+
+  static Future<bool> clearTransferHistory() async {
+    final bool? ok = await _channel.invokeMethod<bool>('clearTransferHistory');
+    return ok ?? false;
+  }
+
+  static Future<List<ReceivedFileItem>> getReceivedFiles() async {
+    final dynamic res = await _channel.invokeMethod('getReceivedFiles');
+    if (res is List) {
+      return res.whereType<Map>().map((m) => ReceivedFileItem.fromMap(m)).toList();
+    }
+    return [];
+  }
+
+  static Future<bool> deleteReceivedFile(String path) async {
+    final bool? ok = await _channel.invokeMethod<bool>('deleteReceivedFile', {'path': path});
+    return ok ?? false;
+  }
+
+  // Chat
+  static Future<List<ChatMessage>> getChatMessages(String peerId) async {
+    final dynamic res = await _channel.invokeMethod('getChatMessages', {'peerId': peerId});
+    if (res is List) {
+      return res.whereType<Map>().map((m) => ChatMessage.fromMap(m)).toList();
+    }
+    return [];
+  }
+
+  static Future<void> sendChatMessage({
+    required String targetIp,
+    required String peerId,
+    required String peerName,
+    required String text,
+  }) async {
+    await _channel.invokeMethod('sendChatMessage', {
+      'targetIp': targetIp,
+      'peerId': peerId,
+      'peerName': peerName,
+      'text': text,
+    });
+  }
+
+  static Future<void> sendChatTyping({
+    required String targetIp,
+    required bool isTyping,
+  }) async {
+    await _channel.invokeMethod('sendChatTyping', {
+      'targetIp': targetIp,
+      'isTyping': isTyping,
+    });
+  }
+
+  // Profile & Trusted
+  static Future<UserProfile> getUserProfile() async {
+    final dynamic res = await _channel.invokeMethod('getUserProfile');
+    if (res is Map) {
+      return UserProfile.fromMap(res);
+    }
+    return UserProfile(
+      displayName: 'AuraDrop User',
+      avatarIndex: 0,
+      bio: 'Nearby sharing made effortless',
+      theme: 'glass_dark',
+      accent: 'cyan',
+      visibility: 'everyone',
+    );
+  }
+
+  static Future<void> saveUserProfile(String key, String value) async {
+    await _channel.invokeMethod('saveUserProfile', {'key': key, 'value': value});
+  }
+
+  static Future<List<Map<String, dynamic>>> getTrustedPeers() async {
+    final dynamic res = await _channel.invokeMethod('getTrustedPeers');
+    if (res is List) {
+      return res.whereType<Map>().map((m) => Map<String, dynamic>.from(m)).toList();
+    }
+    return [];
+  }
+
+  static Future<void> setPeerTrusted(String peerId, String peerName, bool trusted) async {
+    await _channel.invokeMethod('setPeerTrusted', {
+      'peerId': peerId,
+      'peerName': peerName,
+      'trusted': trusted,
+    });
+  }
+}

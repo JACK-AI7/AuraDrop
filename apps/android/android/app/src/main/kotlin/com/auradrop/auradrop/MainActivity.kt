@@ -40,7 +40,8 @@ class MainActivity : FlutterActivity() {
         private const val DEFAULT_PORT = 48291
         private const val DISCOVERY_GROUP = "239.255.48.29"
         private const val DISCOVERY_PORT = 48290
-        private const val SOCKET_BUFFER_SIZE = 1024 * 1024 // 1 MB buffer for high throughput
+        private const val SOCKET_BUFFER_SIZE = 2 * 1024 * 1024 // 2 MB buffer for max wire throughput
+        private const val PROGRESS_EVENT_INTERVAL_MS = 90L // ~11 UI updates/sec to avoid IPC bottleneck
     }
 
     private var eventSink: EventChannel.EventSink? = null
@@ -52,15 +53,19 @@ class MainActivity : FlutterActivity() {
     private var serverJob: Job? = null
     private var transferServer: ServerSocket? = null
 
-    // Store active sockets and sessions
+    // Sockets and Transfer Sessions
     private val activeClientSockets = ConcurrentHashMap<String, Socket>()
     private val activeTransfersState = ConcurrentHashMap<String, TransferSession>()
+    private val activePeerChatSockets = ConcurrentHashMap<String, Socket>()
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
+    // Database
+    private lateinit var dbHelper: AuraDropDatabaseHelper
+
     private val deviceId = "android_" + UUID.randomUUID().toString().replace("-", "").substring(0, 10)
-    private val deviceName = "${Build.MANUFACTURER.replaceFirstChar { it.uppercase() }} ${Build.MODEL}"
+    private var deviceName = "${Build.MANUFACTURER.replaceFirstChar { it.uppercase() }} ${Build.MODEL}"
 
     // Initial files received from Android System Share intent
     private val sharedFilesList = Collections.synchronizedList(mutableListOf<Map<String, Any>>())
@@ -74,6 +79,12 @@ class MainActivity : FlutterActivity() {
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
+        dbHelper = AuraDropDatabaseHelper(this)
+        val profile = dbHelper.getProfile()
+        if (profile.containsKey("display_name")) {
+            val name = profile["display_name"]
+            if (!name.isNullOrBlank()) deviceName = name
+        }
         handleSendIntent(intent)
     }
 
@@ -186,6 +197,70 @@ class MainActivity : FlutterActivity() {
                     val filePath = call.argument<String>("filePath") ?: ""
                     val opened = openFileWithSystemViewer(filePath)
                     result.success(opened)
+                }
+                // Database & History handlers
+                "getTransferHistory" -> {
+                    val history = dbHelper.getAllTransfers()
+                    result.success(history)
+                }
+                "deleteTransferHistory" -> {
+                    val id = call.argument<String>("id") ?: ""
+                    val ok = dbHelper.deleteTransfer(id)
+                    result.success(ok)
+                }
+                "clearTransferHistory" -> {
+                    val ok = dbHelper.clearAllTransfers()
+                    result.success(ok)
+                }
+                "getReceivedFiles" -> {
+                    val files = listReceivedFiles()
+                    result.success(files)
+                }
+                "deleteReceivedFile" -> {
+                    val path = call.argument<String>("path") ?: ""
+                    val deleted = File(path).delete()
+                    result.success(deleted)
+                }
+                // Offline P2P Chat Handlers
+                "getChatMessages" -> {
+                    val peerId = call.argument<String>("peerId") ?: ""
+                    val msgs = dbHelper.getChatMessages(peerId)
+                    result.success(msgs)
+                }
+                "sendChatMessage" -> {
+                    val targetIp = call.argument<String>("targetIp") ?: ""
+                    val peerId = call.argument<String>("peerId") ?: ""
+                    val peerName = call.argument<String>("peerName") ?: "Nearby Peer"
+                    val text = call.argument<String>("text") ?: ""
+                    sendOfflineChatMessage(targetIp, peerId, peerName, text)
+                    result.success(true)
+                }
+                "sendChatTyping" -> {
+                    val targetIp = call.argument<String>("targetIp") ?: ""
+                    val isTyping = call.argument<Boolean>("isTyping") ?: false
+                    sendChatTypingStatus(targetIp, isTyping)
+                    result.success(true)
+                }
+                // Profile & Trusted Peers
+                "getUserProfile" -> {
+                    result.success(dbHelper.getProfile())
+                }
+                "saveUserProfile" -> {
+                    val key = call.argument<String>("key") ?: ""
+                    val value = call.argument<String>("value") ?: ""
+                    if (key == "display_name" && value.isNotBlank()) deviceName = value
+                    val ok = dbHelper.setProfileValue(key, value)
+                    result.success(ok)
+                }
+                "getTrustedPeers" -> {
+                    result.success(dbHelper.getTrustedPeers())
+                }
+                "setPeerTrusted" -> {
+                    val peerId = call.argument<String>("peerId") ?: ""
+                    val peerName = call.argument<String>("peerName") ?: "Device"
+                    val trusted = call.argument<Boolean>("trusted") ?: false
+                    val ok = dbHelper.setPeerTrusted(peerId, peerName, trusted)
+                    result.success(ok)
                 }
                 else -> result.notImplemented()
             }
@@ -385,7 +460,7 @@ class MainActivity : FlutterActivity() {
     }
 
     // ----------------------------------------------------
-    // TCP Streaming Server (High-Speed Receiver)
+    // TCP Streaming Server (High-Speed Receiver & Chat)
     // ----------------------------------------------------
     private fun startTransferServerSocket() {
         if (transferServer != null) return
@@ -398,6 +473,7 @@ class MainActivity : FlutterActivity() {
                 while (isActive) {
                     val clientSocket = transferServer?.accept() ?: break
                     clientSocket.tcpNoDelay = true
+                    clientSocket.trafficClass = 0x10 // IPTOS_THROUGHPUT
                     clientSocket.sendBufferSize = SOCKET_BUFFER_SIZE
                     clientSocket.receiveBufferSize = SOCKET_BUFFER_SIZE
                     launch { handleInboundClient(clientSocket) }
@@ -418,86 +494,170 @@ class MainActivity : FlutterActivity() {
         val output = BufferedOutputStream(socket.getOutputStream(), SOCKET_BUFFER_SIZE)
 
         try {
-            // 1. DATA_CHANNEL_CONNECTING: Read Handshake Init
-            sendEvent("dataChannelState", mapOf(
-                "transferId" to transferId,
-                "state" to "DATA_CHANNEL_CONNECTING"
-            ))
-
             val header = ByteArray(20)
-            input.readFully(header)
-            val payloadLen = header.readUInt32BE(8)
-            val payloadBytes = ByteArray(payloadLen)
-            input.readFully(payloadBytes)
-            val handshakeJson = JSONObject(String(payloadBytes, Charsets.UTF_8))
-            val clientNonce = handshakeJson.optString("nonce")
 
-            // Reply Handshake Resp
-            val respJson = JSONObject().apply {
-                put("protocolVersion", "P2PFS/1")
-                put("deviceId", deviceId)
-                put("deviceName", deviceName)
-                put("platform", "android")
-                put("nonceEcho", clientNonce)
-                put("timestamp", System.currentTimeMillis())
+            while (socket.isConnected && !socket.isClosed) {
+                val read = input.read(header, 0, 20)
+                if (read == -1) break
+                if (read < 20) input.readFullyRemaining(header, read, 20 - read)
+
+                val frameType = header[5].toInt()
+                val payloadLen = header.readUInt32BE(8)
+
+                when (frameType) {
+                    0x01 -> { // HANDSHAKE_INIT
+                        val payloadBytes = ByteArray(payloadLen)
+                        input.readFully(payloadBytes)
+                        val handshakeJson = JSONObject(String(payloadBytes, Charsets.UTF_8))
+                        val clientNonce = handshakeJson.optString("nonce")
+
+                        sendEvent("dataChannelState", mapOf(
+                            "transferId" to transferId,
+                            "state" to "DATA_CHANNEL_CONNECTING"
+                        ))
+
+                        val respJson = JSONObject().apply {
+                            put("protocolVersion", "P2PFS/1")
+                            put("deviceId", deviceId)
+                            put("deviceName", deviceName)
+                            put("platform", "android")
+                            put("nonceEcho", clientNonce)
+                            put("timestamp", System.currentTimeMillis())
+                        }
+                        output.write(buildFrame(0x02, respJson.toString().toByteArray()))
+                        output.flush()
+                    }
+
+                    0x03 -> { // HEALTH_PING
+                        val pingBytes = ByteArray(payloadLen)
+                        input.readFully(pingBytes)
+                        output.write(buildFrame(0x04, pingBytes))
+                        output.flush()
+
+                        sendEvent("dataChannelState", mapOf(
+                            "transferId" to transferId,
+                            "state" to "READY_TO_TRANSFER"
+                        ))
+                    }
+
+                    0x10 -> { // NEGOTIATION_REQ
+                        val negBytes = ByteArray(payloadLen)
+                        input.readFully(negBytes)
+                        val negJson = JSONObject(String(negBytes, Charsets.UTF_8))
+
+                        val senderName = negJson.optString("senderName", "Nearby Peer")
+                        val totalFiles = negJson.optInt("totalFiles", 1)
+                        val totalBytes = negJson.optLong("totalBytes", 0L)
+                        val filesArray = negJson.optJSONArray("files") ?: JSONArray()
+                        val filesList = mutableListOf<Map<String, Any>>()
+
+                        // Check for existing partial files for RESUME support
+                        val downloadsDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "AuraDrop")
+                        val resumeOffsets = JSONObject()
+
+                        for (i in 0 until filesArray.length()) {
+                            val f = filesArray.getJSONObject(i)
+                            val fId = f.getString("id")
+                            val fName = sanitizeFilename(f.getString("name"))
+                            val fSize = f.getLong("size")
+                            val partFile = File(downloadsDir, "$fName.part")
+                            var resumeOffset = 0L
+                            if (partFile.exists() && partFile.length() < fSize) {
+                                resumeOffset = partFile.length()
+                            }
+                            resumeOffsets.put(fId, resumeOffset)
+
+                            filesList.add(mapOf(
+                                "id" to fId,
+                                "name" to fName,
+                                "size" to fSize,
+                                "mimeType" to f.optString("mimeType", "application/octet-stream"),
+                                "expectedChecksum" to f.optString("checksum", ""),
+                                "resumeOffset" to resumeOffset
+                            ))
+                        }
+
+                        val sasCode = generateSasCode(deviceId, negJson.optString("deviceId", "peer"))
+
+                        // Store negotiation response data on session
+                        sendEvent("transferRequest", mapOf(
+                            "transferId" to transferId,
+                            "senderName" to senderName,
+                            "totalFiles" to totalFiles,
+                            "totalBytes" to totalBytes,
+                            "sas" to sasCode,
+                            "files" to filesList,
+                            "resumeOffsets" to resumeOffsets.toString(),
+                            "connectionState" to "WAITING_FOR_ACCEPTANCE"
+                        ))
+                    }
+
+                    // ---------------------------------------------------------
+                    // OFFLINE P2P CHAT MESSAGES
+                    // ---------------------------------------------------------
+                    0x30 -> { // CHAT_MESSAGE
+                        val chatBytes = ByteArray(payloadLen)
+                        input.readFully(chatBytes)
+                        val chatJson = JSONObject(String(chatBytes, Charsets.UTF_8))
+
+                        val msgId = chatJson.getString("id")
+                        val peerId = chatJson.getString("senderId")
+                        val peerName = chatJson.getString("senderName")
+                        val text = chatJson.getString("text")
+                        val timestamp = chatJson.optLong("timestamp", System.currentTimeMillis())
+
+                        val msgMap = mapOf(
+                            "id" to msgId,
+                            "peerId" to peerId,
+                            "peerName" to peerName,
+                            "senderId" to peerId,
+                            "text" to text,
+                            "timestamp" to timestamp,
+                            "status" to "delivered"
+                        )
+                        dbHelper.insertChatMessage(msgMap)
+                        sendEvent("chatMessageReceived", msgMap)
+
+                        // Send CHAT_ACK
+                        val ackJson = JSONObject().apply {
+                            put("id", msgId)
+                            put("status", "delivered")
+                        }
+                        output.write(buildFrame(0x31, ackJson.toString().toByteArray()))
+                        output.flush()
+                    }
+
+                    0x31 -> { // CHAT_ACK
+                        val ackBytes = ByteArray(payloadLen)
+                        input.readFully(ackBytes)
+                        val ackJson = JSONObject(String(ackBytes, Charsets.UTF_8))
+                        val msgId = ackJson.getString("id")
+                        val status = ackJson.optString("status", "delivered")
+                        dbHelper.updateChatMessageStatus(msgId, status)
+                        sendEvent("chatMessageStatusUpdated", mapOf("id" to msgId, "status" to status))
+                    }
+
+                    0x32 -> { // CHAT_TYPING
+                        val typBytes = ByteArray(payloadLen)
+                        input.readFully(typBytes)
+                        val typJson = JSONObject(String(typBytes, Charsets.UTF_8))
+                        sendEvent("chatTypingReceived", mapOf(
+                            "senderId" to typJson.getString("senderId"),
+                            "isTyping" to typJson.getBoolean("isTyping")
+                        ))
+                    }
+
+                    // ---------------------------------------------------------
+                    // HIGH-SPEED FILE TRANSFER FRAMES
+                    // ---------------------------------------------------------
+                    0x20 -> { // FILE_START
+                        handleInboundFileStream(input, output, payloadLen, transferId, session)
+                    }
+                }
             }
-            output.write(buildFrame(0x02, respJson.toString().toByteArray()))
-            output.flush()
-
-            // 2. Health-Check: Read PING and reply PONG
-            input.readFully(header)
-            val pingLen = header.readUInt32BE(8)
-            val pingBytes = ByteArray(pingLen)
-            input.readFully(pingBytes)
-
-            // Echo PONG
-            output.write(buildFrame(0x04, pingBytes))
-            output.flush()
-
-            // 3. READY_TO_TRANSFER: Read Negotiation Request
-            sendEvent("dataChannelState", mapOf(
-                "transferId" to transferId,
-                "state" to "READY_TO_TRANSFER"
-            ))
-
-            input.readFully(header)
-            val negLen = header.readUInt32BE(8)
-            val negBytes = ByteArray(negLen)
-            input.readFully(negBytes)
-            val negJson = JSONObject(String(negBytes, Charsets.UTF_8))
-
-            val senderName = handshakeJson.optString("deviceName", "Nearby Peer")
-            val totalFiles = negJson.optInt("totalFiles", 1)
-            val totalBytes = negJson.optLong("totalBytes", 0L)
-            val filesArray = negJson.optJSONArray("files") ?: JSONArray()
-            val filesList = mutableListOf<Map<String, Any>>()
-            for (i in 0 until filesArray.length()) {
-                val f = filesArray.getJSONObject(i)
-                filesList.add(mapOf(
-                    "id" to f.getString("id"),
-                    "name" to f.getString("name"),
-                    "size" to f.getLong("size"),
-                    "mimeType" to f.optString("mimeType", "application/octet-stream"),
-                    "expectedChecksum" to f.optString("checksum", "")
-                ))
-            }
-
-            val sasCode = generateSasCode(deviceId, handshakeJson.optString("deviceId"))
-
-            // Emit Request to Flutter UI for user consent
-            sendEvent("transferRequest", mapOf(
-                "transferId" to transferId,
-                "senderName" to senderName,
-                "totalFiles" to totalFiles,
-                "totalBytes" to totalBytes,
-                "sas" to sasCode,
-                "files" to filesList,
-                "connectionState" to "WAITING_FOR_ACCEPTANCE"
-            ))
-
-            // Wait until user accepts or declines via MethodChannel
         } catch (e: Exception) {
-            Log.e(TAG, "Inbound handshake failed: ${e.message}")
+            Log.e(TAG, "Inbound client error: ${e.message}")
+        } finally {
             socket.close()
             activeClientSockets.remove(transferId)
             activeTransfersState.remove(transferId)
@@ -509,15 +669,8 @@ class MainActivity : FlutterActivity() {
         val socket = session.socket
 
         scope.launch(Dispatchers.IO) {
-            var currentFileOut: FileOutputStream? = null
-            var currentPartFile: File? = null
-            var currentFinalFile: File? = null
-
             try {
-                val input = BufferedInputStream(socket.getInputStream(), SOCKET_BUFFER_SIZE)
                 val output = BufferedOutputStream(socket.getOutputStream(), SOCKET_BUFFER_SIZE)
-
-                // Send Negotiation Accept
                 val acceptJson = JSONObject().apply {
                     put("transferId", transferId)
                     put("accepted", true)
@@ -526,195 +679,189 @@ class MainActivity : FlutterActivity() {
                 output.flush()
 
                 startForegroundTransferService("Receiving files...", 0)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error accepting transfer: ${e.message}")
+            }
+        }
+    }
 
-                // Prepare Downloads/AuraDrop Directory
-                val downloadsDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "AuraDrop").apply {
-                    if (!exists()) mkdirs()
+    private suspend fun handleInboundFileStream(
+        input: BufferedInputStream,
+        output: BufferedOutputStream,
+        initPayloadLen: Int,
+        transferId: String,
+        session: TransferSession
+    ) = withContext(Dispatchers.IO) {
+        val downloadsDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "AuraDrop").apply {
+            if (!exists()) mkdirs()
+        }
+
+        var currentFileOut: FileOutputStream? = null
+        var currentPartFile: File? = null
+        var currentFinalFile: File? = null
+
+        val pBytes = ByteArray(initPayloadLen)
+        input.readFully(pBytes)
+        val fInfo = JSONObject(String(pBytes, Charsets.UTF_8))
+
+        val rawFileName = fInfo.getString("filename")
+        val safeName = sanitizeFilename(rawFileName)
+        val currentFileExpectedBytes = fInfo.getLong("size")
+        val currentExpectedChecksum = fInfo.optString("checksum", "")
+        val currentMimeType = fInfo.optString("mimeType", "application/octet-stream")
+        val totalExpectedTransferBytes = fInfo.optLong("totalTransferBytes", currentFileExpectedBytes)
+        val resumeOffset = fInfo.optLong("offset", 0L)
+
+        currentFinalFile = resolveUniqueFile(downloadsDir, safeName)
+        currentPartFile = File(downloadsDir, "${currentFinalFile.name}.part")
+
+        // Resume mode or fresh file
+        val appendMode = resumeOffset > 0 && currentPartFile.exists()
+        currentFileOut = FileOutputStream(currentPartFile, appendMode)
+
+        var overallReceived = resumeOffset
+        val startTime = System.currentTimeMillis()
+        var lastEventTime = 0L
+
+        val currentDigest = MessageDigest.getInstance("SHA-256")
+        // If resuming, read existing bytes into digest
+        if (appendMode) {
+            FileInputStream(currentPartFile).use { fis ->
+                val buf = ByteArray(64 * 1024)
+                var readBytes = 0
+                while (fis.read(buf).also { readBytes = it } > 0) {
+                    currentDigest.update(buf, 0, readBytes)
                 }
+            }
+        }
 
-                var overallReceived = 0L
-                var totalExpectedTransferBytes = 1L
-                val startTime = System.currentTimeMillis()
+        val header = ByteArray(20)
 
-                var currentFileExpectedBytes = 0L
-                var currentFileReceivedBytes = 0L
-                var currentExpectedChecksum = ""
-                var currentMimeType = "application/octet-stream"
-                var currentDigest: MessageDigest? = null
+        while (session.socket.isConnected && !session.socket.isClosed && !session.isCancelled.get()) {
+            val read = input.read(header, 0, 20)
+            if (read == -1) break
+            if (read < 20) input.readFullyRemaining(header, read, 20 - read)
 
-                val header = ByteArray(20)
+            val frameType = header[5].toInt()
+            val payloadLen = header.readUInt32BE(8)
 
-                while (socket.isConnected && !socket.isClosed && !session.isCancelled.get()) {
-                    val read = input.read(header, 0, 20)
-                    if (read == -1) break
-                    if (read < 20) input.readFullyRemaining(header, read, 20 - read)
+            when (frameType) {
+                0x21 -> { // CHUNK_DATA (Direct 8-byte binary header)
+                    val chunkIdx = header.readUInt32BE(12) // using sequence/meta offset
+                    val chunkDataLen = payloadLen - 8
+                    val chunkData = ByteArray(chunkDataLen)
+                    input.readFully(chunkData)
 
-                    val frameType = header[5].toInt()
-                    val payloadLen = header.readUInt32BE(8)
+                    // Write chunk directly to disk buffer
+                    currentFileOut.write(chunkData)
+                    currentDigest.update(chunkData)
 
-                    when (frameType) {
-                        0x20 -> { // FILE_START
-                            val pBytes = ByteArray(payloadLen)
-                            input.readFully(pBytes)
-                            val fInfo = JSONObject(String(pBytes, Charsets.UTF_8))
+                    overallReceived += chunkDataLen
 
-                            val rawFileName = fInfo.getString("filename")
-                            val safeName = sanitizeFilename(rawFileName)
-                            currentFileExpectedBytes = fInfo.getLong("size")
-                            currentExpectedChecksum = fInfo.optString("checksum", "")
-                            currentMimeType = fInfo.optString("mimeType", "application/octet-stream")
-                            totalExpectedTransferBytes = fInfo.optLong("totalTransferBytes", currentFileExpectedBytes)
+                    // Throttled UI Progress dispatch
+                    val now = System.currentTimeMillis()
+                    if (now - lastEventTime >= PROGRESS_EVENT_INTERVAL_MS) {
+                        lastEventTime = now
+                        val elapsedSec = Math.max(0.1, (now - startTime) / 1000.0)
+                        val speedBytesPerSec = (overallReceived / elapsedSec).toLong()
+                        val pct = Math.min(100, ((overallReceived * 100) / Math.max(1, totalExpectedTransferBytes)).toInt())
+                        val eta = Math.max(0, ((totalExpectedTransferBytes - overallReceived) / Math.max(1, speedBytesPerSec)).toInt())
 
-                            // Resolve duplicate file name collision
-                            currentFinalFile = resolveUniqueFile(downloadsDir, safeName)
-                            currentPartFile = File(downloadsDir, "${currentFinalFile.name}.part")
-                            if (currentPartFile.exists()) currentPartFile.delete()
+                        sendEvent("transferProgress", mapOf(
+                            "transferId" to transferId,
+                            "state" to "TRANSFERRING",
+                            "fileName" to currentFinalFile.name,
+                            "transferredBytes" to overallReceived,
+                            "totalBytes" to totalExpectedTransferBytes,
+                            "speedBytesPerSec" to speedBytesPerSec,
+                            "percentage" to pct,
+                            "etaSeconds" to eta,
+                            "verificationState" to "STREAMING"
+                        ))
 
-                            currentFileOut = FileOutputStream(currentPartFile, false)
-                            currentFileReceivedBytes = 0L
-                            currentDigest = MessageDigest.getInstance("SHA-256")
-
-                            sendEvent("transferProgress", mapOf(
-                                "transferId" to transferId,
-                                "state" to "TRANSFERRING",
-                                "fileName" to currentFinalFile.name,
-                                "transferredBytes" to overallReceived,
-                                "totalBytes" to totalExpectedTransferBytes,
-                                "speedBytesPerSec" to 0L,
-                                "percentage" to 0,
-                                "verificationState" to "STREAMING"
-                            ))
-                        }
-
-                        0x21 -> { // CHUNK_DATA
-                            // Read chunk JSON header length
-                            val hLenBytes = ByteArray(4)
-                            input.readFully(hLenBytes)
-                            val hLen = hLenBytes.readUInt32BE(0)
-                            val hJsonBytes = ByteArray(hLen)
-                            input.readFully(hJsonBytes)
-
-                            // Read actual binary chunk data
-                            val chunkDataLen = payloadLen - 4 - hLen
-                            val chunkData = ByteArray(chunkDataLen)
-                            input.readFully(chunkData)
-
-                            // Read 16 bytes auth tag if present
-                            val flags = header[7].toInt()
-                            if (flags and 0x08 != 0) {
-                                val tag = ByteArray(16)
-                                input.readFully(tag)
-                            }
-
-                            // Write chunk data straight to disk!
-                            currentFileOut?.write(chunkData)
-                            currentDigest?.update(chunkData)
-
-                            currentFileReceivedBytes += chunkDataLen
-                            overallReceived += chunkDataLen
-
-                            val elapsedSec = Math.max(0.1, (System.currentTimeMillis() - startTime) / 1000.0)
-                            val speedBytesPerSec = (overallReceived / elapsedSec).toLong()
-                            val pct = Math.min(100, ((overallReceived * 100) / Math.max(1, totalExpectedTransferBytes)).toInt())
-                            val eta = Math.max(0, ((totalExpectedTransferBytes - overallReceived) / Math.max(1, speedBytesPerSec)).toInt())
-
-                            sendEvent("transferProgress", mapOf(
-                                "transferId" to transferId,
-                                "state" to "TRANSFERRING",
-                                "fileName" to (currentFinalFile?.name ?: "Receiving"),
-                                "transferredBytes" to overallReceived,
-                                "totalBytes" to totalExpectedTransferBytes,
-                                "speedBytesPerSec" to speedBytesPerSec,
-                                "percentage" to pct,
-                                "etaSeconds" to eta,
-                                "verificationState" to "STREAMING"
-                            ))
-
-                            updateForegroundTransferProgress(pct, formatSpeed(speedBytesPerSec))
-                        }
-
-                        0x23 -> { // FILE_END
-                            val pBytes = ByteArray(payloadLen)
-                            input.readFully(pBytes)
-                            val endInfo = JSONObject(String(pBytes, Charsets.UTF_8))
-                            val finalExpectedSha = endInfo.optString("checksum", currentExpectedChecksum)
-
-                            // Flush and close file output stream
-                            currentFileOut?.flush()
-                            currentFileOut?.close()
-                            currentFileOut = null
-
-                            // Calculate actual received SHA-256
-                            sendEvent("transferProgress", mapOf(
-                                "transferId" to transferId,
-                                "state" to "VERIFYING",
-                                "verificationState" to "VERIFYING_SHA256"
-                            ))
-
-                            val actualSha256 = currentDigest?.digest()?.toHex() ?: ""
-                            val isChecksumValid = finalExpectedSha.isEmpty() || finalExpectedSha.equals(actualSha256, ignoreCase = true)
-
-                            if (!isChecksumValid) {
-                                currentPartFile?.delete()
-                                output.write(buildFrame(0x26, JSONObject().apply {
-                                    put("status", "FAILED_INTEGRITY")
-                                    put("expected", finalExpectedSha)
-                                    put("actual", actualSha256)
-                                }.toString().toByteArray()))
-                                output.flush()
-                                throw IOException("Checksum mismatch! File corrupt or tampered.")
-                            }
-
-                            // Rename .part to final destination file
-                            if (currentPartFile != null && currentFinalFile != null) {
-                                currentPartFile.renameTo(currentFinalFile)
-                                // Scan file with MediaStore so it appears instantly in Photos/Files
-                                MediaScannerConnection.scanFile(
-                                    applicationContext,
-                                    arrayOf(currentFinalFile.absolutePath),
-                                    arrayOf(currentMimeType),
-                                    null
-                                )
-                            }
-
-                            // Reply FILE_ACK with VERIFIED_OK
-                            output.write(buildFrame(0x25, JSONObject().apply {
-                                put("status", "VERIFIED_OK")
-                                put("checksum", actualSha256)
-                            }.toString().toByteArray()))
-                            output.flush()
-                        }
-
-                        0x24 -> { // TRANSFER_COMPLETE
-                            val pBytes = ByteArray(payloadLen)
-                            input.readFully(pBytes)
-
-                            stopForegroundTransferService()
-
-                            sendEvent("transferCompleted", mapOf(
-                                "transferId" to transferId,
-                                "savedPath" to (currentFinalFile?.absolutePath ?: ""),
-                                "fileName" to (currentFinalFile?.name ?: ""),
-                                "totalBytes" to overallReceived,
-                                "verificationState" to "VERIFIED"
-                            ))
-                            break
-                        }
+                        updateForegroundTransferProgress(pct, formatSpeed(speedBytesPerSec))
                     }
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Transfer reception error: ${e.message}")
-                currentFileOut?.close()
-                currentPartFile?.delete()
-                stopForegroundTransferService()
-                sendEvent("transferError", mapOf(
-                    "transferId" to transferId,
-                    "error" to (e.message ?: "Transfer failed")
-                ))
-            } finally {
-                socket.close()
-                activeClientSockets.remove(transferId)
-                activeTransfersState.remove(transferId)
+
+                0x23 -> { // FILE_END
+                    val endBytes = ByteArray(payloadLen)
+                    input.readFully(endBytes)
+                    val endInfo = JSONObject(String(endBytes, Charsets.UTF_8))
+                    val finalExpectedSha = endInfo.optString("checksum", currentExpectedChecksum)
+
+                    currentFileOut.flush()
+                    currentFileOut.close()
+
+                    sendEvent("transferProgress", mapOf(
+                        "transferId" to transferId,
+                        "state" to "VERIFYING",
+                        "verificationState" to "VERIFYING_SHA256"
+                    ))
+
+                    val actualSha256 = currentDigest.digest().toHex()
+                    val isChecksumValid = finalExpectedSha.isEmpty() || finalExpectedSha.equals(actualSha256, ignoreCase = true)
+
+                    if (!isChecksumValid) {
+                        currentPartFile.delete()
+                        output.write(buildFrame(0x26, JSONObject().apply {
+                            put("status", "FAILED_INTEGRITY")
+                            put("expected", finalExpectedSha)
+                            put("actual", actualSha256)
+                        }.toString().toByteArray()))
+                        output.flush()
+                        throw IOException("Checksum integrity mismatch!")
+                    }
+
+                    // Rename .part to final file
+                    currentPartFile.renameTo(currentFinalFile)
+                    MediaScannerConnection.scanFile(
+                        applicationContext,
+                        arrayOf(currentFinalFile.absolutePath),
+                        arrayOf(currentMimeType),
+                        null
+                    )
+
+                    // Reply FILE_ACK
+                    output.write(buildFrame(0x25, JSONObject().apply {
+                        put("status", "VERIFIED_OK")
+                        put("checksum", actualSha256)
+                    }.toString().toByteArray()))
+                    output.flush()
+
+                    val durationMs = System.currentTimeMillis() - startTime
+                    val avgSpeed = if (durationMs > 0) (overallReceived * 1000) / durationMs else 0L
+
+                    // Save to SQLite History
+                    dbHelper.insertTransfer(mapOf(
+                        "id" to transferId,
+                        "timestamp" to System.currentTimeMillis(),
+                        "senderName" to "Nearby Device",
+                        "receiverName" to deviceName,
+                        "fileName" to currentFinalFile.name,
+                        "fileType" to currentMimeType,
+                        "fileSize" to overallReceived,
+                        "direction" to "received",
+                        "status" to "completed",
+                        "durationMs" to durationMs,
+                        "avgSpeed" to avgSpeed,
+                        "sha256" to actualSha256,
+                        "localPath" to currentFinalFile.absolutePath,
+                        "transportType" to "LAN_TCP"
+                    ))
+
+                    notifyForegroundTransferComplete(currentFinalFile.name, currentFinalFile.absolutePath)
+
+                    sendEvent("transferCompleted", mapOf(
+                        "transferId" to transferId,
+                        "savedPath" to currentFinalFile.absolutePath,
+                        "fileName" to currentFinalFile.name,
+                        "totalBytes" to overallReceived,
+                        "avgSpeed" to avgSpeed,
+                        "sha256" to actualSha256,
+                        "verificationState" to "VERIFIED"
+                    ))
+                    break
+                }
             }
         }
     }
@@ -752,7 +899,6 @@ class MainActivity : FlutterActivity() {
         scope.launch(Dispatchers.IO) {
             var socket: Socket? = null
             try {
-                // 1. DATA_CHANNEL_CONNECTING: Socket connection & buffers
                 sendEvent("dataChannelState", mapOf(
                     "transferId" to transferId,
                     "state" to "DATA_CHANNEL_CONNECTING"
@@ -760,6 +906,7 @@ class MainActivity : FlutterActivity() {
 
                 socket = Socket().apply {
                     tcpNoDelay = true
+                    trafficClass = 0x10 // IPTOS_THROUGHPUT
                     sendBufferSize = SOCKET_BUFFER_SIZE
                     receiveBufferSize = SOCKET_BUFFER_SIZE
                     connect(InetSocketAddress(targetIp, targetPort), 7000)
@@ -772,7 +919,7 @@ class MainActivity : FlutterActivity() {
                 val output = BufferedOutputStream(socket.getOutputStream(), SOCKET_BUFFER_SIZE)
                 val input = BufferedInputStream(socket.getInputStream(), SOCKET_BUFFER_SIZE)
 
-                // 2. Handshake Init
+                // Handshake Init
                 val clientNonce = UUID.randomUUID().toString()
                 val initJson = JSONObject().apply {
                     put("protocolVersion", "P2PFS/1")
@@ -792,12 +939,11 @@ class MainActivity : FlutterActivity() {
                 input.readFully(respBytes)
                 val respJson = JSONObject(String(respBytes, Charsets.UTF_8))
 
-                // Verify Nonce Echo
                 if (respJson.optString("nonceEcho") != clientNonce) {
                     throw IOException("Handshake integrity check failed")
                 }
 
-                // 3. Bidirectional Health-Check Ping / Pong
+                // Health Check Ping / Pong
                 val pingData = "HEALTH_PING_${System.currentTimeMillis()}".toByteArray()
                 output.write(buildFrame(0x03, pingData))
                 output.flush()
@@ -807,13 +953,12 @@ class MainActivity : FlutterActivity() {
                 val pongBytes = ByteArray(pongLen)
                 input.readFully(pongBytes)
 
-                // 4. State transitions to READY_TO_TRANSFER
                 sendEvent("dataChannelState", mapOf(
                     "transferId" to transferId,
                     "state" to "READY_TO_TRANSFER"
                 ))
 
-                // 5. Send Negotiation Request
+                // Negotiation Request
                 val totalBytes = filesList.sumOf { (it["size"] as? Number)?.toLong() ?: 0L }
                 val filesJsonArr = JSONArray()
                 for (f in filesList) {
@@ -827,6 +972,8 @@ class MainActivity : FlutterActivity() {
 
                 val negJson = JSONObject().apply {
                     put("transferId", transferId)
+                    put("senderName", deviceName)
+                    put("deviceId", deviceId)
                     put("totalFiles", filesList.size)
                     put("totalBytes", totalBytes)
                     put("files", filesJsonArr)
@@ -842,7 +989,7 @@ class MainActivity : FlutterActivity() {
                     "percentage" to 0
                 ))
 
-                // 6. Read Negotiation Response (Accept / Decline)
+                // Negotiation Response
                 input.readFully(header)
                 val negRespLen = header.readUInt32BE(8)
                 val negRespBytes = ByteArray(negRespLen)
@@ -859,11 +1006,12 @@ class MainActivity : FlutterActivity() {
 
                 startForegroundTransferService("Sending files...", 0)
 
-                // 7. Stream Files with Adaptive Chunk Engine (256 KB -> 512 KB -> 1 MB)
-                var currentChunkSize = 256 * 1024
+                // Adaptive Chunk Engine (Starts at 512 KB, scales up to 1 MB / 2 MB / 4 MB)
+                var currentChunkSize = 512 * 1024
                 var chunkBuffer = ByteArray(currentChunkSize)
                 var overallSent = 0L
                 val startTime = System.currentTimeMillis()
+                var lastEventTime = 0L
 
                 for (fileMap in filesList) {
                     if (session.isCancelled.get()) break
@@ -873,7 +1021,6 @@ class MainActivity : FlutterActivity() {
                     val fileSize = (fileMap["size"] as? Number)?.toLong() ?: 0L
                     val mimeType = fileMap["mimeType"] as? String ?: "application/octet-stream"
 
-                    // Calculate incremental SHA-256 while streaming
                     val fileDigest = MessageDigest.getInstance("SHA-256")
 
                     // Send FILE_START
@@ -883,6 +1030,7 @@ class MainActivity : FlutterActivity() {
                         put("size", fileSize)
                         put("mimeType", mimeType)
                         put("totalTransferBytes", totalBytes)
+                        put("offset", 0L)
                     }
                     output.write(buildFrame(0x20, startJson.toString().toByteArray()))
                     output.flush()
@@ -897,13 +1045,13 @@ class MainActivity : FlutterActivity() {
                         val bufferedStream = BufferedInputStream(stream, SOCKET_BUFFER_SIZE)
 
                         while (fileSent < fileSize && !session.isCancelled.get()) {
-                            // Adapt chunk size dynamically based on measured throughput
+                            // Adapt chunk size dynamically based on wire throughput
                             val elapsedNow = Math.max(0.1, (System.currentTimeMillis() - startTime) / 1000.0)
                             val currentSpeed = overallSent / elapsedNow
                             val targetChunkSize = when {
-                                currentSpeed > 30 * 1024 * 1024 -> 1024 * 1024 // 1 MB
-                                currentSpeed > 10 * 1024 * 1024 -> 512 * 1024  // 512 KB
-                                else -> 256 * 1024                              // 256 KB
+                                currentSpeed > 40 * 1024 * 1024 -> 2 * 1024 * 1024 // 2 MB
+                                currentSpeed > 15 * 1024 * 1024 -> 1024 * 1024     // 1 MB
+                                else -> 512 * 1024                                 // 512 KB
                             }
                             if (targetChunkSize != currentChunkSize) {
                                 currentChunkSize = targetChunkSize
@@ -914,65 +1062,60 @@ class MainActivity : FlutterActivity() {
                             val bytesRead = bufferedStream.read(chunkBuffer, 0, toRead)
                             if (bytesRead <= 0) break
 
-                            // Update SHA-256 digest
                             fileDigest.update(chunkBuffer, 0, bytesRead)
 
-                            // Frame Chunk Header
-                            val chunkInfo = JSONObject().apply {
-                                put("chunkIndex", chunkIdx)
-                                put("length", bytesRead)
-                                put("offset", fileSent)
-                            }
-                            val hBytes = chunkInfo.toString().toByteArray(Charsets.UTF_8)
-                            val hLenBytes = ByteArray(4).apply { writeUInt32BE(hBytes.size, 0) }
+                            // Direct 8-byte binary header payload: [chunkIdx, offset]
+                            val payload = ByteArray(8 + bytesRead)
+                            payload.writeUInt32BE(chunkIdx, 0)
+                            payload.writeUInt32BE(fileSent.toInt(), 4)
+                            System.arraycopy(chunkBuffer, 0, payload, 8, bytesRead)
 
-                            val payload = ByteArray(4 + hBytes.size + bytesRead).apply {
-                                System.arraycopy(hLenBytes, 0, this, 0, 4)
-                                System.arraycopy(hBytes, 0, this, 4, hBytes.size)
-                                System.arraycopy(chunkBuffer, 0, this, 4 + hBytes.size, bytesRead)
-                            }
-
-                            // Write CHUNK_DATA frame with tag
-                            val fakeTag = ByteArray(16)
-                            output.write(buildFrame(0x21, payload, fakeTag))
-                            output.flush()
+                            // Send frame (buffer without premature flush to keep TCP window wide)
+                            output.write(buildFrame(0x21, payload))
 
                             fileSent += bytesRead
                             overallSent += bytesRead
                             chunkIdx++
 
-                            val elapsedSec = Math.max(0.1, (System.currentTimeMillis() - startTime) / 1000.0)
-                            val speedBytesPerSec = (overallSent / elapsedSec).toLong()
-                            val pct = Math.min(100, ((overallSent * 100) / Math.max(1, totalBytes)).toInt())
-                            val eta = Math.max(0, ((totalBytes - overallSent) / Math.max(1, speedBytesPerSec)).toInt())
+                            // Throttle EventChannel UI updates to 11/sec
+                            val now = System.currentTimeMillis()
+                            if (now - lastEventTime >= PROGRESS_EVENT_INTERVAL_MS) {
+                                lastEventTime = now
+                                val elapsedSec = Math.max(0.1, (now - startTime) / 1000.0)
+                                val speedBytesPerSec = (overallSent / elapsedSec).toLong()
+                                val pct = Math.min(100, ((overallSent * 100) / Math.max(1, totalBytes)).toInt())
+                                val eta = Math.max(0, ((totalBytes - overallSent) / Math.max(1, speedBytesPerSec)).toInt())
 
-                            sendEvent("transferProgress", mapOf(
-                                "transferId" to transferId,
-                                "state" to "TRANSFERRING",
-                                "fileName" to fileName,
-                                "transferredBytes" to overallSent,
-                                "totalBytes" to totalBytes,
-                                "speedBytesPerSec" to speedBytesPerSec,
-                                "percentage" to pct,
-                                "etaSeconds" to eta,
-                                "verificationState" to "STREAMING"
-                            ))
+                                sendEvent("transferProgress", mapOf(
+                                    "transferId" to transferId,
+                                    "state" to "TRANSFERRING",
+                                    "fileName" to fileName,
+                                    "transferredBytes" to overallSent,
+                                    "totalBytes" to totalBytes,
+                                    "speedBytesPerSec" to speedBytesPerSec,
+                                    "percentage" to pct,
+                                    "etaSeconds" to eta,
+                                    "verificationState" to "STREAMING"
+                                ))
 
-                            updateForegroundTransferProgress(pct, formatSpeed(speedBytesPerSec))
+                                updateForegroundTransferProgress(pct, formatSpeed(speedBytesPerSec))
+                            }
                         }
                     }
 
-                    // Compute final sender SHA-256
+                    // Flush socket before ending file
+                    output.flush()
+
                     val senderSha256 = fileDigest.digest().toHex()
 
-                    // Send FILE_END with computed SHA-256
+                    // Send FILE_END
                     output.write(buildFrame(0x23, JSONObject().apply {
                         put("fileId", fileMap["id"])
                         put("checksum", senderSha256)
                     }.toString().toByteArray()))
                     output.flush()
 
-                    // Await FILE_ACK from receiver
+                    // Await FILE_ACK
                     sendEvent("transferProgress", mapOf(
                         "transferId" to transferId,
                         "state" to "VERIFYING",
@@ -988,6 +1131,27 @@ class MainActivity : FlutterActivity() {
                     if (ackJson.optString("status") != "VERIFIED_OK") {
                         throw IOException("Receiver integrity verification failed.")
                     }
+
+                    val durationMs = System.currentTimeMillis() - startTime
+                    val avgSpeed = if (durationMs > 0) (overallSent * 1000) / durationMs else 0L
+
+                    // Save to SQLite History
+                    dbHelper.insertTransfer(mapOf(
+                        "id" to transferId,
+                        "timestamp" to System.currentTimeMillis(),
+                        "senderName" to deviceName,
+                        "receiverName" to "Nearby Recipient",
+                        "fileName" to fileName,
+                        "fileType" to mimeType,
+                        "fileSize" to fileSize,
+                        "direction" to "sent",
+                        "status" to "completed",
+                        "durationMs" to durationMs,
+                        "avgSpeed" to avgSpeed,
+                        "sha256" to senderSha256,
+                        "localPath" to uriStr,
+                        "transportType" to "LAN_TCP"
+                    ))
                 }
 
                 // Send TRANSFER_COMPLETE
@@ -997,7 +1161,7 @@ class MainActivity : FlutterActivity() {
                 }.toString().toByteArray()))
                 output.flush()
 
-                stopForegroundTransferService()
+                notifyForegroundTransferComplete("Transfer complete", "")
 
                 sendEvent("transferCompleted", mapOf(
                     "transferId" to transferId,
@@ -1020,6 +1184,126 @@ class MainActivity : FlutterActivity() {
     }
 
     // ----------------------------------------------------
+    // Offline P2P Chat Client Socket
+    // ----------------------------------------------------
+    private fun sendOfflineChatMessage(targetIp: String, peerId: String, peerName: String, text: String) {
+        val messageId = "msg_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8)
+        val timestamp = System.currentTimeMillis()
+
+        val msgMap = mapOf(
+            "id" to messageId,
+            "peerId" to peerId,
+            "peerName" to peerName,
+            "senderId" to deviceId,
+            "text" to text,
+            "timestamp" to timestamp,
+            "status" to "sending"
+        )
+        dbHelper.insertChatMessage(msgMap)
+        sendEvent("chatMessageSent", msgMap)
+
+        scope.launch(Dispatchers.IO) {
+            var chatSocket: Socket? = null
+            try {
+                chatSocket = Socket().apply {
+                    tcpNoDelay = true
+                    connect(InetSocketAddress(targetIp, DEFAULT_PORT), 4000)
+                }
+                val output = BufferedOutputStream(chatSocket.getOutputStream(), 4096)
+                val input = BufferedInputStream(chatSocket.getInputStream(), 4096)
+
+                // Send Handshake Init
+                val initJson = JSONObject().apply {
+                    put("protocolVersion", "P2PFS/1")
+                    put("deviceId", deviceId)
+                    put("deviceName", deviceName)
+                    put("platform", "android")
+                    put("nonce", UUID.randomUUID().toString())
+                }
+                output.write(buildFrame(0x01, initJson.toString().toByteArray()))
+                output.flush()
+
+                // Read Handshake Resp
+                val header = ByteArray(20)
+                input.readFully(header)
+                val respLen = header.readUInt32BE(8)
+                val respBytes = ByteArray(respLen)
+                input.readFully(respBytes)
+
+                // Send CHAT_MESSAGE frame (0x30)
+                val chatPayload = JSONObject().apply {
+                    put("id", messageId)
+                    put("senderId", deviceId)
+                    put("senderName", deviceName)
+                    put("text", text)
+                    put("timestamp", timestamp)
+                }
+                output.write(buildFrame(0x30, chatPayload.toString().toByteArray()))
+                output.flush()
+
+                // Read CHAT_ACK
+                input.readFully(header)
+                val ackLen = header.readUInt32BE(8)
+                val ackBytes = ByteArray(ackLen)
+                input.readFully(ackBytes)
+                val ackJson = JSONObject(String(ackBytes, Charsets.UTF_8))
+
+                val status = ackJson.optString("status", "delivered")
+                dbHelper.updateChatMessageStatus(messageId, status)
+                sendEvent("chatMessageStatusUpdated", mapOf("id" to messageId, "status" to status))
+            } catch (e: Exception) {
+                Log.e(TAG, "Chat sending error: ${e.message}")
+                dbHelper.updateChatMessageStatus(messageId, "failed")
+                sendEvent("chatMessageStatusUpdated", mapOf("id" to messageId, "status" to "failed"))
+            } finally {
+                chatSocket?.close()
+            }
+        }
+    }
+
+    private fun sendChatTypingStatus(targetIp: String, isTyping: Boolean) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val chatSocket = Socket().apply {
+                    tcpNoDelay = true
+                    connect(InetSocketAddress(targetIp, DEFAULT_PORT), 3000)
+                }
+                chatSocket.use { s ->
+                    val output = BufferedOutputStream(s.getOutputStream(), 1024)
+                    val typPayload = JSONObject().apply {
+                        put("senderId", deviceId)
+                        put("isTyping", isTyping)
+                    }
+                    output.write(buildFrame(0x32, typPayload.toString().toByteArray()))
+                    output.flush()
+                }
+            } catch (e: Exception) {}
+        }
+    }
+
+    // ----------------------------------------------------
+    // Received Files Inspection
+    // ----------------------------------------------------
+    private fun listReceivedFiles(): List<Map<String, Any>> {
+        val list = mutableListOf<Map<String, Any>>()
+        val downloadsDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "AuraDrop")
+        if (downloadsDir.exists() && downloadsDir.isDirectory) {
+            val files = downloadsDir.listFiles { f -> !f.name.endsWith(".part") } ?: emptyArray()
+            files.sortByDescending { it.lastModified() }
+            for (f in files) {
+                list.add(mapOf(
+                    "name" to f.name,
+                    "path" to f.absolutePath,
+                    "size" to f.length(),
+                    "lastModified" to f.lastModified(),
+                    "extension" to f.extension
+                ))
+            }
+        }
+        return list
+    }
+
+    // ----------------------------------------------------
     // Binary Framing Helpers (P2PFS/1 Spec)
     // ----------------------------------------------------
     private fun buildFrame(frameType: Int, payload: ByteArray, authTag: ByteArray? = null): ByteArray {
@@ -1031,7 +1315,6 @@ class MainActivity : FlutterActivity() {
         frame[5] = frameType.toByte()
         frame[6] = 0x00; frame[7] = if (authTag != null) 0x08.toByte() else 0x00.toByte() // Flags
         frame.writeUInt32BE(payload.size, 8)
-        // Sequence Number (bytes 12-19)
         System.arraycopy(payload, 0, frame, 20, payload.size)
         if (authTag != null) {
             System.arraycopy(authTag, 0, frame, 20 + payload.size, authTag.size)
@@ -1177,6 +1460,17 @@ class MainActivity : FlutterActivity() {
         } catch (e: Exception) {}
     }
 
+    private fun notifyForegroundTransferComplete(fileName: String, filePath: String) {
+        try {
+            val intent = Intent(this, TransferForegroundService::class.java).apply {
+                action = TransferForegroundService.ACTION_COMPLETE
+                putExtra(TransferForegroundService.EXTRA_FILE_NAME, fileName)
+                putExtra(TransferForegroundService.EXTRA_FILE_PATH, filePath)
+            }
+            startService(intent)
+        } catch (e: Exception) {}
+    }
+
     private fun stopForegroundTransferService() {
         try {
             val intent = Intent(this, TransferForegroundService::class.java).apply {
@@ -1196,6 +1490,7 @@ class MainActivity : FlutterActivity() {
         stopDiscoveryEngine()
         scope.cancel()
         transferServer?.close()
+        dbHelper.close()
         super.onDestroy()
     }
 }
