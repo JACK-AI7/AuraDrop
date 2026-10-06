@@ -1,0 +1,23 @@
+{
+  "name": "auradrop-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AuraDrop - Next-Gen Cross-Platform Peer-to-Peer File Sharing Engine & Applications",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "pnpm -r run build",
+    "test": "pnpm -r run test",
+    "test:e2e": "tsx tests/run-all-tests.ts",
+    "clean": "pnpm -r run clean"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "rimraf": "^6.0.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}

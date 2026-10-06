@@ -1,0 +1,17 @@
+node_modules/
+dist/
+build/
+.expo/
+.next/
+*.log
+.DS_Store
+Thumbs.db
+coverage/
+*.local
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+pnpm-debug.log*
+prisma/dev.db
+prisma/*.db

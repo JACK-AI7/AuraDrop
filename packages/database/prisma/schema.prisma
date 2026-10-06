@@ -1,0 +1,86 @@
+// Prisma schema for AuraDrop
+// Section 6: PostgreSQL Database Schema
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id          String   @id @default(uuid())
+  username    String   @unique
+  displayName String
+  avatar      String?
+  email       String   @unique
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  devices     Device[]
+
+  @@map("users")
+}
+
+model Device {
+  id             String    @id @default(uuid())
+  userId         String?
+  user           User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  deviceName     String
+  platform       String
+  publicKey      String    @unique
+  lastSeen       DateTime  @default(now())
+  visibilityMode String    @default("everyone") // "off", "contacts", "everyone"
+  createdAt      DateTime  @default(now())
+
+  sentTransfers     Transfer[] @relation("SentTransfers")
+  receivedTransfers Transfer[] @relation("ReceivedTransfers")
+  initiatedPairings Pairing[]  @relation("InitiatedPairings")
+  receivedPairings  Pairing[]  @relation("ReceivedPairings")
+
+  @@map("devices")
+}
+
+model Pairing {
+  id                 String   @id @default(uuid())
+  initiatorDeviceId  String
+  initiatorDevice    Device   @relation("InitiatedPairings", fields: [initiatorDeviceId], references: [id], onDelete: Cascade)
+  receiverDeviceId   String
+  receiverDevice     Device   @relation("ReceivedPairings", fields: [receiverDeviceId], references: [id], onDelete: Cascade)
+  pairingMethod      String   // "qr", "pin", "nfc", "trusted-contact"
+  status             String   @default("pending") // "pending", "paired", "rejected", "revoked"
+  createdAt          DateTime @default(now())
+
+  @@map("pairings")
+}
+
+model Transfer {
+  id               String         @id @default(uuid())
+  senderDeviceId   String
+  senderDevice     Device         @relation("SentTransfers", fields: [senderDeviceId], references: [id], onDelete: Cascade)
+  receiverDeviceId String
+  receiverDevice   Device         @relation("ReceivedTransfers", fields: [receiverDeviceId], references: [id], onDelete: Cascade)
+  totalFiles       Int
+  totalBytes       BigInt
+  transferredBytes BigInt         @default(0)
+  status           String         // "IDLE", "TRANSFERRING", "COMPLETED", "FAILED", "CANCELLED", etc.
+  startedAt        DateTime       @default(now())
+  completedAt      DateTime?
+  files            TransferFile[]
+
+  @@map("transfers")
+}
+
+model TransferFile {
+  id         String   @id @default(uuid())
+  transferId String
+  transfer   Transfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  filename   String
+  size       BigInt
+  mimeType   String
+  checksum   String
+  status     String   @default("pending") // "pending", "transferring", "completed", "failed", "cancelled"
+
+  @@map("transfer_files")
+}

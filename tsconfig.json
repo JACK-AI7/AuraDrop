@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@auradrop/types": ["packages/types/src"],
+      "@auradrop/config": ["packages/config/src"],
+      "@auradrop/crypto": ["packages/crypto/src"],
+      "@auradrop/protocol": ["packages/protocol/src"],
+      "@auradrop/discovery": ["packages/discovery/src"],
+      "@auradrop/network": ["packages/network/src"],
+      "@auradrop/transfer-engine": ["packages/transfer-engine/src"],
+      "@auradrop/ui": ["packages/ui/src"],
+      "@auradrop/database": ["packages/database/src"]
+    }
+  },
+  "include": ["packages/*/src/**/*", "apps/*/src/**/*", "tests/**/*"]
+}
