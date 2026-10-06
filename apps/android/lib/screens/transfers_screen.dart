@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import '../models/models.dart';
 import '../services/native_bridge.dart';
-import '../components/glass_components.dart';
+import '../theme/aura_theme.dart';
+import '../components/minimal_components.dart';
 
 class TransfersScreen extends StatefulWidget {
   final List<PickedFileMeta> selectedFiles;
@@ -13,8 +14,8 @@ class TransfersScreen extends StatefulWidget {
   final int transferredBytes;
   final int totalTransferBytes;
   final int speedBytesPerSec;
+  final int etaSeconds;
   final VoidCallback onCancelTransfer;
-  final Color accentColor;
 
   const TransfersScreen({
     super.key,
@@ -27,8 +28,8 @@ class TransfersScreen extends StatefulWidget {
     required this.transferredBytes,
     required this.totalTransferBytes,
     required this.speedBytesPerSec,
+    this.etaSeconds = 0,
     required this.onCancelTransfer,
-    required this.accentColor,
   });
 
   @override
@@ -60,7 +61,7 @@ class _TransfersScreenState extends State<TransfersScreen> {
   String _formatBytes(int bytes) {
     if (bytes < 1024) return '$bytes B';
     if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-    if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(2)} MB';
     return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
   }
 
@@ -70,52 +71,50 @@ class _TransfersScreenState extends State<TransfersScreen> {
     return '${(bps / 1024).toStringAsFixed(1)} KB/s';
   }
 
+  String _formatEta(int seconds) {
+    final m = seconds ~/ 60;
+    final s = seconds % 60;
+    return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+  }
+
   @override
   Widget build(BuildContext context) {
+    final theme = AuraTheme.of(context);
     final isTransferring = widget.transferState == TransferState.transferring ||
-        widget.transferState == TransferState.resuming;
+        widget.transferState == TransferState.resuming ||
+        widget.transferState == TransferState.verifying;
     final totalSelectedSize = widget.selectedFiles.fold(0, (acc, f) => acc + f.size);
+    final progressPct = widget.totalTransferBytes > 0
+        ? ((widget.transferredBytes / widget.totalTransferBytes) * 100).clamp(0, 100).toInt()
+        : 0;
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Transfers & Staging',
-                    style: TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w800,
-                      color: Colors.white,
-                      letterSpacing: -0.5,
-                    ),
-                  ),
-                  SizedBox(height: 2),
-                  Text(
-                    'Active streams and local file staging queue.',
-                    style: TextStyle(fontSize: 12, color: Color(0xFF8A8A8A)),
-                  ),
-                ],
+              Text(
+                'Transfers',
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w800,
+                  color: theme.textPrimary,
+                  letterSpacing: -0.5,
+                ),
               ),
               if (widget.selectedFiles.isNotEmpty)
                 GestureDetector(
                   onTap: widget.onClearFiles,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.06),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: Colors.white.withValues(alpha: 0.12), width: 0.6),
-                    ),
-                    child: const Text(
-                      'Clear Queue',
-                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.white70),
+                  behavior: HitTestBehavior.opaque,
+                  child: Text(
+                    'Clear All',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: theme.textSecondary,
                     ),
                   ),
                 ),
@@ -123,141 +122,92 @@ class _TransfersScreenState extends State<TransfersScreen> {
           ),
           const SizedBox(height: 20),
 
-          // Storage Capacity Check Bar (Section 58)
-          GlassCard(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.storage_rounded, size: 16, color: Colors.white70),
-                        const SizedBox(width: 8),
-                        const Text(
-                          'Destination Storage',
-                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white),
-                        ),
-                      ],
-                    ),
-                    Text(
-                      _loadingStorage
-                          ? 'Checking...'
-                          : '${_formatBytes(_usableSpaceBytes)} free',
-                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(6),
-                  child: Container(
-                    height: 6,
-                    color: Colors.white.withValues(alpha: 0.08),
-                    child: _totalSpaceBytes > 0
-                        ? FractionallySizedBox(
-                            alignment: Alignment.centerLeft,
-                            widthFactor: (1.0 - (_usableSpaceBytes / _totalSpaceBytes)).clamp(0.02, 1.0),
-                            child: Container(color: Colors.white),
-                          )
-                        : const SizedBox(),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text(
-                      '/sdcard/Download/AuraDrop',
-                      style: TextStyle(fontSize: 10, fontFamily: 'monospace', color: Color(0xFF8A8A8A)),
-                    ),
-                    if (_totalSpaceBytes > 0)
-                      Text(
-                        'Total: ${_formatBytes(_totalSpaceBytes)}',
-                        style: const TextStyle(fontSize: 10, color: Color(0xFF8A8A8A)),
-                      ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 20),
-
           // Active Transfer Stream Card (If Active)
           if (isTransferring) ...[
-            const Text(
-              'ACTIVE P2P STREAM',
-              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Color(0xFF8A8A8A), letterSpacing: 1.0),
+            Text(
+              'ACTIVE',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                color: theme.textSecondary,
+                letterSpacing: 1.2,
+              ),
             ),
             const SizedBox(height: 10),
-            GlassCard(
+            MinimalCard(
               padding: const EdgeInsets.all(18),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.10),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: const Icon(Icons.sync_rounded, color: Colors.white, size: 20),
-                      ),
-                      const SizedBox(width: 14),
                       Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              widget.activeFileName,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: Colors.white),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              '${_formatBytes(widget.transferredBytes)} of ${_formatBytes(widget.totalTransferBytes)}',
-                              style: const TextStyle(fontSize: 12, color: Color(0xFF8A8A8A)),
-                            ),
-                          ],
+                        child: Text(
+                          widget.activeFileName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 16,
+                            color: theme.textPrimary,
+                          ),
                         ),
                       ),
+                      const SizedBox(width: 8),
                       Text(
-                        _formatSpeed(widget.speedBytesPerSec),
-                        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14, color: Colors.white),
+                        '$progressPct%',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 16,
+                          color: theme.textPrimary,
+                        ),
                       ),
                     ],
                   ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '${_formatBytes(widget.transferredBytes)} / ${_formatBytes(widget.totalTransferBytes)} • ${_formatSpeed(widget.speedBytesPerSec)}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: theme.textSecondary,
+                    ),
+                  ),
                   const SizedBox(height: 14),
                   ClipRRect(
-                    borderRadius: BorderRadius.circular(6),
+                    borderRadius: BorderRadius.circular(4),
                     child: LinearProgressIndicator(
                       value: widget.totalTransferBytes > 0
                           ? (widget.transferredBytes / widget.totalTransferBytes).clamp(0.0, 1.0)
                           : 0.0,
-                      backgroundColor: Colors.white.withValues(alpha: 0.08),
-                      valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
-                      minHeight: 5,
+                      backgroundColor: theme.border,
+                      valueColor: AlwaysStoppedAnimation<Color>(theme.actionBackground),
+                      minHeight: 4,
                     ),
                   ),
                   const SizedBox(height: 14),
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
+                      Text(
+                        'ETA ${_formatEta(widget.etaSeconds)}',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: theme.textSecondary,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
                       GestureDetector(
                         onTap: widget.onCancelTransfer,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: Colors.red.withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: Colors.red.withValues(alpha: 0.25), width: 0.6),
+                        behavior: HitTestBehavior.opaque,
+                        child: Text(
+                          'Cancel',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: theme.error,
                           ),
-                          child: const Text('Cancel', style: TextStyle(color: Color(0xFFF87171), fontSize: 12, fontWeight: FontWeight.w700)),
                         ),
                       ),
                     ],
@@ -268,57 +218,130 @@ class _TransfersScreenState extends State<TransfersScreen> {
             const SizedBox(height: 24),
           ],
 
+          // Storage Capacity Check Bar
+          Text(
+            'STORAGE',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+              color: theme.textSecondary,
+              letterSpacing: 1.2,
+            ),
+          ),
+          const SizedBox(height: 10),
+          MinimalCard(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      _loadingStorage
+                          ? 'Checking storage...'
+                          : '${_formatBytes(_usableSpaceBytes)} free',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: theme.textPrimary,
+                      ),
+                    ),
+                    if (_totalSpaceBytes > 0)
+                      Text(
+                        '${_formatBytes(_totalSpaceBytes)} total',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: theme.textSecondary,
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: Container(
+                    height: 5,
+                    color: theme.border,
+                    child: _totalSpaceBytes > 0
+                        ? FractionallySizedBox(
+                            alignment: Alignment.centerLeft,
+                            widthFactor: (1.0 - (_usableSpaceBytes / _totalSpaceBytes)).clamp(0.02, 1.0),
+                            child: Container(color: theme.actionBackground),
+                          )
+                        : const SizedBox(),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '/sdcard/Download/AuraDrop',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontFamily: 'monospace',
+                    color: theme.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+
           // Staged File Queue Header
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
                 'STAGED QUEUE (${widget.selectedFiles.length})',
-                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Color(0xFF8A8A8A), letterSpacing: 1.0),
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  color: theme.textSecondary,
+                  letterSpacing: 1.2,
+                ),
               ),
               if (widget.selectedFiles.isNotEmpty)
                 Text(
                   _formatBytes(totalSelectedSize),
-                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white70),
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: theme.textPrimary,
+                  ),
                 ),
             ],
           ),
           const SizedBox(height: 10),
 
-          // File List or Empty State
+          // File List or Clean Empty State
           if (widget.selectedFiles.isEmpty)
-            GlassCard(
+            MinimalCard(
               padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 20),
               child: Center(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Container(
-                      width: 52,
-                      height: 52,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Colors.white.withValues(alpha: 0.06),
+                    Text(
+                      'No files staged',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: theme.textPrimary,
                       ),
-                      child: const Icon(Icons.file_upload_outlined, size: 24, color: Colors.white70),
-                    ),
-                    const SizedBox(height: 14),
-                    const Text(
-                      'No Files Staged',
-                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white),
                     ),
                     const SizedBox(height: 4),
-                    const Text(
-                      'Pick files from your device to stage them for transfer.\nAny peer you tap on the radar will receive them instantly.',
+                    Text(
+                      'Select files from device storage to share with nearby devices.',
                       textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 12, color: Color(0xFF8A8A8A), height: 1.4),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: theme.textSecondary,
+                        height: 1.4,
+                      ),
                     ),
                     const SizedBox(height: 18),
-                    GlassButton(
-                      text: 'Select Files',
-                      icon: Icons.add,
+                    MinimalButton(
+                      text: '+ Add Files',
                       onPressed: widget.onPickFiles,
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                     ),
                   ],
                 ),
@@ -332,17 +355,14 @@ class _TransfersScreenState extends State<TransfersScreen> {
               separatorBuilder: (context, index) => const SizedBox(height: 8),
               itemBuilder: (context, index) {
                 final file = widget.selectedFiles[index];
-                return GlassCard(
+                return MinimalCard(
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                   child: Row(
                     children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: const Icon(Icons.insert_drive_file_outlined, color: Colors.white, size: 18),
+                      Icon(
+                        Icons.insert_drive_file_outlined,
+                        color: theme.textPrimary,
+                        size: 20,
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -353,19 +373,34 @@ class _TransfersScreenState extends State<TransfersScreen> {
                               file.name,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: Colors.white),
+                              style: TextStyle(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 13,
+                                color: theme.textPrimary,
+                              ),
                             ),
                             const SizedBox(height: 2),
                             Text(
                               _formatBytes(file.size),
-                              style: const TextStyle(fontSize: 11, color: Color(0xFF8A8A8A)),
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: theme.textSecondary,
+                              ),
                             ),
                           ],
                         ),
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.close_rounded, size: 18, color: Colors.white54),
-                        onPressed: () => widget.onRemoveFile(file),
+                      GestureDetector(
+                        onTap: () => widget.onRemoveFile(file),
+                        behavior: HitTestBehavior.opaque,
+                        child: Padding(
+                          padding: const EdgeInsets.all(4),
+                          child: Icon(
+                            Icons.close_rounded,
+                            size: 18,
+                            color: theme.textSecondary,
+                          ),
+                        ),
                       ),
                     ],
                   ),
@@ -375,10 +410,10 @@ class _TransfersScreenState extends State<TransfersScreen> {
             const SizedBox(height: 16),
             SizedBox(
               width: double.infinity,
-              child: GlassButton(
-                text: 'Add More Files',
-                icon: Icons.add,
+              child: MinimalButton(
+                text: '+ Add More Files',
                 onPressed: widget.onPickFiles,
+                isPrimary: false,
               ),
             ),
           ],

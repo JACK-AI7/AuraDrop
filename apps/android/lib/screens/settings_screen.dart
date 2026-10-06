@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/models.dart';
 import '../services/native_bridge.dart';
-import '../components/glass_components.dart';
-import '../components/micro_interactions.dart';
+import '../theme/aura_theme.dart';
+import '../components/minimal_components.dart';
 
 class SettingsScreen extends StatefulWidget {
   final VisibilityMode currentVisibility;
@@ -12,6 +12,8 @@ class SettingsScreen extends StatefulWidget {
   final Color accentColor;
   final AnimationSettings animationSettings;
   final Function(AnimationSettings) onAnimationSettingsChanged;
+  final String currentThemeMode;
+  final Function(String)? onThemeModeChanged;
 
   const SettingsScreen({
     super.key,
@@ -21,6 +23,8 @@ class SettingsScreen extends StatefulWidget {
     required this.accentColor,
     required this.animationSettings,
     required this.onAnimationSettingsChanged,
+    this.currentThemeMode = 'system',
+    this.onThemeModeChanged,
   });
 
   @override
@@ -29,6 +33,7 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   List<Map<String, dynamic>> _trustedPeers = [];
+  bool _isLoadingTrusted = true;
 
   @override
   void initState() {
@@ -38,7 +43,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _loadTrusted() async {
     final list = await NativeBridgeService.getTrustedPeers();
-    setState(() => _trustedPeers = list);
+    if (mounted) {
+      setState(() {
+        _trustedPeers = list;
+        _isLoadingTrusted = false;
+      });
+    }
   }
 
   Future<void> _removeTrust(String peerId, String name) async {
@@ -47,14 +57,45 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _loadTrusted();
   }
 
-  Future<void> _clearAllHistory() async {
+  Future<void> _clearAllHistory(AuraTheme theme) async {
     HapticFeedback.mediumImpact();
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: theme.cardBackground,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: theme.border),
+        ),
+        title: Text(
+          'Clear History',
+          style: TextStyle(color: theme.textPrimary, fontWeight: FontWeight.w700, fontSize: 16),
+        ),
+        content: Text(
+          'This will remove all transfer records from the local SQLite log. Received files in your device storage will not be deleted.',
+          style: TextStyle(color: theme.textSecondary, fontSize: 13, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('Cancel', style: TextStyle(color: theme.textSecondary)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Clear', style: TextStyle(color: Color(0xFFEF4444), fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
     final ok = await NativeBridgeService.clearTransferHistory();
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(ok ? 'Transfer history cleared' : 'Error clearing history'),
-          backgroundColor: ok ? const Color(0xFF10B981) : const Color(0xFFF87171),
+          backgroundColor: ok ? theme.textPrimary : const Color(0xFFEF4444),
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -67,216 +108,314 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = AuraTheme.of(context);
     final anim = widget.animationSettings;
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Settings & Network',
-            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Colors.white),
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'Control discovery visibility, animation performance, trusted peers, and local storage.',
-            style: TextStyle(fontSize: 12, color: Colors.white54),
-          ),
-          const SizedBox(height: 24),
-
-          // Visibility Section
-          const Text('Nearby Visibility', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Colors.white70)),
-          const SizedBox(height: 10),
-          GlassCard(
-            padding: const EdgeInsets.all(8),
-            child: Column(
-              children: [
-                _buildVisibilityTile('Everyone Nearby', 'Discoverable by all devices on Wi-Fi', VisibilityMode.everyoneNearby),
-                const Divider(color: Colors.white12, height: 1),
-                _buildVisibilityTile(
-                  'Everyone for 10 Minutes',
-                  widget.currentVisibility == VisibilityMode.temporaryEveryone
-                      ? 'Reverting in ${widget.temporarySecondsRemaining ~/ 60}:${(widget.temporarySecondsRemaining % 60).toString().padLeft(2, '0')}'
-                      : 'Automatically reverts to Contacts Only',
-                  VisibilityMode.temporaryEveryone,
+    return Container(
+      color: theme.background,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Drag Handle for bottom sheet
+            Center(
+              child: Container(
+                width: 36,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 20),
+                decoration: BoxDecoration(
+                  color: theme.textSecondary.withValues(alpha: 0.3),
+                  borderRadius: BorderRadius.circular(2),
                 ),
-                const Divider(color: Colors.white12, height: 1),
-                _buildVisibilityTile('Contacts & Trusted Only', 'Only devices you have starred', VisibilityMode.contactsOnly),
-                const Divider(color: Colors.white12, height: 1),
-                _buildVisibilityTile('Receiving Off', 'Invisible to all nearby devices', VisibilityMode.receivingOff),
-              ],
+              ),
             ),
-          ),
-          const SizedBox(height: 24),
 
-          // Animation & Performance Tier
-          const Text('Motion & Visual Performance', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Colors.white70)),
-          const SizedBox(height: 10),
-          GlassCard(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Effect Quality Tier', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white)),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    _buildTierButton('Performance', 'Minimal', AnimationQuality.minimal),
-                    const SizedBox(width: 8),
-                    _buildTierButton('Balanced', 'Smooth', AnimationQuality.balanced),
-                    const SizedBox(width: 8),
-                    _buildTierButton('Immersive', 'Full FX', AnimationQuality.immersive),
-                  ],
-                ),
-                const SizedBox(height: 18),
-                const Divider(color: Colors.white12, height: 1),
-                const SizedBox(height: 12),
-
-                // Individual Toggles
-                _buildToggleRow(
-                  'Proximity Ripple',
-                  'Shockwave when discovering peers',
-                  anim.enableProximityRipple,
-                  (v) => _updateSettings(anim.copyWith(enableProximityRipple: v)),
-                ),
-                _buildToggleRow(
-                  'Aura Warp Field',
-                  'Radial lens distortion effects',
-                  anim.enableWarpField,
-                  (v) => _updateSettings(anim.copyWith(enableWarpField: v)),
-                ),
-                _buildToggleRow(
-                  'Data Stream Particles',
-                  'Speed-driven particles during transfer',
-                  anim.enableParticles,
-                  (v) => _updateSettings(anim.copyWith(enableParticles: v)),
-                ),
-                _buildToggleRow(
-                  'Completion Burst',
-                  'Particle burst & stroke checkmark',
-                  anim.enableCompletionBurst,
-                  (v) => _updateSettings(anim.copyWith(enableCompletionBurst: v)),
-                ),
-                _buildToggleRow(
-                  'Aurora Background',
-                  'Fluid animated glowing background',
-                  anim.enableBackgroundAnimation,
-                  (v) => _updateSettings(anim.copyWith(enableBackgroundAnimation: v)),
-                ),
-                const Divider(color: Colors.white12, height: 1),
-                const SizedBox(height: 10),
-                _buildToggleRow(
-                  'Reduced Motion',
-                  'Substitute large animations with subtle fades',
-                  anim.reducedMotion,
-                  (v) => _updateSettings(anim.copyWith(reducedMotion: v)),
-                ),
-              ],
+            // Header
+            Text(
+              'Settings',
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                color: theme.textPrimary,
+                letterSpacing: -0.5,
+              ),
             ),
-          ),
-          const SizedBox(height: 24),
+            const SizedBox(height: 4),
+            Text(
+              'Manage network visibility, appearance, and local storage.',
+              style: TextStyle(fontSize: 12, color: theme.textSecondary),
+            ),
+            const SizedBox(height: 24),
 
-          // Trusted Devices Section
-          const Text('Trusted Devices', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Colors.white70)),
-          const SizedBox(height: 10),
-          _trustedPeers.isEmpty
-              ? GlassCard(
-                  child: const Center(
-                    child: Text('No trusted peers yet', style: TextStyle(fontSize: 13, color: Colors.white54)),
+            // Appearance Section
+            _buildSectionHeader('Appearance', theme),
+            const SizedBox(height: 8),
+            MinimalCard(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Theme Mode',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: theme.textPrimary),
                   ),
-                )
-              : Column(
-                  children: _trustedPeers.map((p) {
-                    final name = p['peerName']?.toString() ?? 'Device';
-                    final id = p['peerId']?.toString() ?? '';
-                    return GlassCard(
-                      margin: const EdgeInsets.only(bottom: 8),
-                      padding: const EdgeInsets.all(12),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.star_rounded, color: Color(0xFF818CF8), size: 20),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Text(name, style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.white)),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      _buildThemeOption('System', 'system', Icons.brightness_auto, theme),
+                      const SizedBox(width: 8),
+                      _buildThemeOption('Light', 'light', Icons.light_mode, theme),
+                      const SizedBox(width: 8),
+                      _buildThemeOption('Dark', 'dark', Icons.dark_mode, theme),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+
+            // Nearby Visibility Section
+            _buildSectionHeader('Nearby Visibility', theme),
+            const SizedBox(height: 8),
+            MinimalCard(
+              padding: EdgeInsets.zero,
+              child: Column(
+                children: [
+                  _buildVisibilityTile(
+                    'Everyone Nearby',
+                    'Discoverable by all devices on current local network',
+                    VisibilityMode.everyoneNearby,
+                    theme,
+                  ),
+                  Divider(color: theme.border, height: 1),
+                  _buildVisibilityTile(
+                    'Everyone for 10 Minutes',
+                    widget.currentVisibility == VisibilityMode.temporaryEveryone
+                        ? 'Reverting in ${widget.temporarySecondsRemaining ~/ 60}:${(widget.temporarySecondsRemaining % 60).toString().padLeft(2, '0')}'
+                        : 'Temporarily discoverable, then reverts to Contacts',
+                    VisibilityMode.temporaryEveryone,
+                    theme,
+                  ),
+                  Divider(color: theme.border, height: 1),
+                  _buildVisibilityTile(
+                    'Contacts & Trusted Only',
+                    'Only devices you have previously paired or starred',
+                    VisibilityMode.contactsOnly,
+                    theme,
+                  ),
+                  Divider(color: theme.border, height: 1),
+                  _buildVisibilityTile(
+                    'Receiving Off',
+                    'Invisible to all nearby devices',
+                    VisibilityMode.receivingOff,
+                    theme,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+
+            // Motion & Performance
+            _buildSectionHeader('Motion & Performance', theme),
+            const SizedBox(height: 8),
+            MinimalCard(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Effect Tier',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: theme.textPrimary),
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      _buildTierButton('Performance', 'Minimal', AnimationQuality.minimal, theme),
+                      const SizedBox(width: 8),
+                      _buildTierButton('Balanced', 'Smooth', AnimationQuality.balanced, theme),
+                      const SizedBox(width: 8),
+                      _buildTierButton('Immersive', '60 FPS', AnimationQuality.immersive, theme),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Divider(color: theme.border, height: 1),
+                  const SizedBox(height: 8),
+                  _buildSwitchRow(
+                    'Reduced Motion',
+                    'Disable 3D sphere spin momentum and transitions',
+                    anim.reducedMotion,
+                    (v) => _updateSettings(anim.copyWith(reducedMotion: v)),
+                    theme,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+
+            // Trusted Devices Section
+            _buildSectionHeader('Trusted Devices', theme),
+            const SizedBox(height: 8),
+            if (_isLoadingTrusted)
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: theme.textPrimary),
+                  ),
+                ),
+              )
+            else if (_trustedPeers.isEmpty)
+              MinimalCard(
+                padding: const EdgeInsets.all(16),
+                child: Center(
+                  child: Text(
+                    'No trusted peers saved yet',
+                    style: TextStyle(fontSize: 12, color: theme.textSecondary),
+                  ),
+                ),
+              )
+            else
+              Column(
+                children: _trustedPeers.map((p) {
+                  final name = p['peerName']?.toString() ?? 'Device';
+                  final id = p['peerId']?.toString() ?? '';
+                  return MinimalCard(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    child: Row(
+                      children: [
+                        Icon(Icons.verified_outlined, color: theme.textPrimary, size: 18),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            name,
+                            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: theme.textPrimary),
                           ),
-                          IconButton(
-                            icon: const Icon(Icons.delete_outline, color: Colors.white38, size: 18),
-                            onPressed: () => _removeTrust(id, name),
-                          ),
-                        ],
+                        ),
+                        IconButton(
+                          icon: Icon(Icons.close_rounded, color: theme.textSecondary, size: 18),
+                          onPressed: () => _removeTrust(id, name),
+                          tooltip: 'Remove Trust',
+                        ),
+                      ],
+                    ),
+                  );
+                }).toList(),
+              ),
+            const SizedBox(height: 24),
+
+            // Storage Section
+            _buildSectionHeader('Storage & History', theme),
+            const SizedBox(height: 8),
+            MinimalCard(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.storage_outlined, size: 18, color: theme.textPrimary),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Local SQLite Database',
+                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: theme.textPrimary),
                       ),
-                    );
-                  }).toList(),
-                ),
-          const SizedBox(height: 24),
-
-          // Storage Section
-          const Text('Storage & Clean Up', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Colors.white70)),
-          const SizedBox(height: 10),
-          GlassCard(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Local Transfer Database', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.white)),
-                const SizedBox(height: 4),
-                const Text(
-                  'Clearing history deletes session logs from SQLite. Received files in your Downloads folder remain untouched.',
-                  style: TextStyle(fontSize: 12, color: Colors.white54),
-                ),
-                const SizedBox(height: 14),
-                OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFFF87171),
-                    side: const BorderSide(color: Color(0xFFF87171)),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ],
                   ),
-                  onPressed: _clearAllHistory,
-                  icon: const Icon(Icons.delete_sweep_rounded, size: 18),
-                  label: const Text('Clear Transfer History'),
-                ),
-              ],
+                  const SizedBox(height: 6),
+                  Text(
+                    'Transfer logs and peer metadata are stored locally on device. Received downloads are saved to /sdcard/Download/AuraDrop.',
+                    style: TextStyle(fontSize: 12, color: theme.textSecondary, height: 1.4),
+                  ),
+                  const SizedBox(height: 16),
+                  OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFFEF4444),
+                      side: const BorderSide(color: Color(0xFFEF4444), width: 0.8),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    ),
+                    onPressed: () => _clearAllHistory(theme),
+                    icon: const Icon(Icons.delete_sweep_outlined, size: 16),
+                    label: const Text('Clear Transfer History', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                  ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(height: 30),
-        ],
+            const SizedBox(height: 24),
+
+            // About Section
+            _buildSectionHeader('About', theme),
+            const SizedBox(height: 8),
+            MinimalCard(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                children: [
+                  _buildAboutRow('Version', '6.0.0 (Pure Minimal)', theme),
+                  Divider(color: theme.border, height: 16),
+                  _buildAboutRow('Protocol', 'P2PFS/1 over Direct TCP', theme),
+                  Divider(color: theme.border, height: 16),
+                  _buildAboutRow('Encryption', 'AES-256-GCM / X25519', theme),
+                  Divider(color: theme.border, height: 16),
+                  _buildAboutRow('Architecture', 'Local-First Zero Cloud', theme),
+                ],
+              ),
+            ),
+            const SizedBox(height: 32),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildTierButton(String title, String subtitle, AnimationQuality q) {
-    final isSelected = widget.animationSettings.quality == q;
+  Widget _buildSectionHeader(String title, AuraTheme theme) {
+    return Text(
+      title,
+      style: TextStyle(
+        fontSize: 12,
+        fontWeight: FontWeight.w700,
+        color: theme.textSecondary,
+        letterSpacing: 0.5,
+      ),
+    );
+  }
+
+  Widget _buildThemeOption(String label, String value, IconData icon, AuraTheme theme) {
+    final isSelected = widget.currentThemeMode == value;
     return Expanded(
       child: GestureDetector(
         onTap: () {
           HapticFeedback.selectionClick();
-          _updateSettings(widget.animationSettings.copyWith(quality: q));
+          widget.onThemeModeChanged?.call(value);
         },
         child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+          padding: const EdgeInsets.symmetric(vertical: 10),
           decoration: BoxDecoration(
-            color: isSelected ? widget.accentColor.withValues(alpha: 0.25) : Colors.white.withValues(alpha: 0.05),
-            borderRadius: BorderRadius.circular(12),
+            color: isSelected ? theme.textPrimary : theme.cardBackground,
+            borderRadius: BorderRadius.circular(10),
             border: Border.all(
-              color: isSelected ? widget.accentColor : Colors.white12,
-              width: 1.2,
+              color: isSelected ? theme.textPrimary : theme.border,
+              width: 1,
             ),
           ),
           child: Column(
             children: [
-              Text(
-                title,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                  color: isSelected ? widget.accentColor : Colors.white,
-                ),
+              Icon(
+                icon,
+                size: 16,
+                color: isSelected ? theme.actionText : theme.textSecondary,
               ),
-              const SizedBox(height: 2),
+              const SizedBox(height: 4),
               Text(
-                subtitle,
-                style: const TextStyle(fontSize: 10, color: Colors.white38),
+                label,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                  color: isSelected ? theme.actionText : theme.textPrimary,
+                ),
               ),
             ],
           ),
@@ -285,53 +424,134 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildToggleRow(String title, String subtitle, bool value, ValueChanged<bool> onChanged) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white)),
-                Text(subtitle, style: const TextStyle(fontSize: 11, color: Colors.white38)),
-              ],
+  Widget _buildVisibilityTile(String title, String subtitle, VisibilityMode mode, AuraTheme theme) {
+    final isSelected = widget.currentVisibility == mode;
+    return InkWell(
+      onTap: () {
+        HapticFeedback.selectionClick();
+        widget.onVisibilityChanged(mode);
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                      color: theme.textPrimary,
+                      fontSize: 13,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: TextStyle(fontSize: 11, color: theme.textSecondary),
+                  ),
+                ],
+              ),
             ),
-          ),
-          GlassToggle(
-            value: value,
-            onChanged: onChanged,
-            activeColor: widget.accentColor,
-          ),
-        ],
+            const SizedBox(width: 8),
+            Container(
+              width: 18,
+              height: 18,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: isSelected ? theme.textPrimary : theme.textSecondary.withValues(alpha: 0.5),
+                  width: 1.5,
+                ),
+                color: isSelected ? theme.textPrimary : Colors.transparent,
+              ),
+              child: isSelected
+                  ? Icon(Icons.check, size: 12, color: theme.actionText)
+                  : null,
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildVisibilityTile(String title, String subtitle, VisibilityMode mode) {
-    final isSelected = widget.currentVisibility == mode;
-    return Material(
-      color: Colors.transparent,
-      child: ListTile(
-        dense: true,
+  Widget _buildTierButton(String title, String subtitle, AnimationQuality q, AuraTheme theme) {
+    final isSelected = widget.animationSettings.quality == q;
+    return Expanded(
+      child: GestureDetector(
         onTap: () {
           HapticFeedback.selectionClick();
-          widget.onVisibilityChanged(mode);
+          _updateSettings(widget.animationSettings.copyWith(quality: q));
         },
-        title: Text(
-          title,
-          style: TextStyle(
-            fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-            color: isSelected ? widget.accentColor : Colors.white,
-            fontSize: 14,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
+          decoration: BoxDecoration(
+            color: isSelected ? theme.textPrimary : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: isSelected ? theme.textPrimary : theme.border,
+              width: 1,
+            ),
+          ),
+          child: Column(
+            children: [
+              Text(
+                title,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                  color: isSelected ? theme.actionText : theme.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                style: TextStyle(
+                  fontSize: 9,
+                  color: isSelected ? theme.actionText.withValues(alpha: 0.7) : theme.textSecondary,
+                ),
+              ),
+            ],
           ),
         ),
-        subtitle: Text(subtitle, style: const TextStyle(fontSize: 11, color: Colors.white38)),
-        trailing: isSelected
-            ? Icon(Icons.check_circle_rounded, color: widget.accentColor, size: 18)
-            : const Icon(Icons.radio_button_unchecked, color: Colors.white24, size: 18),
       ),
+    );
+  }
+
+  Widget _buildSwitchRow(String title, String subtitle, bool value, ValueChanged<bool> onChanged, AuraTheme theme) {
+    return Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: theme.textPrimary)),
+              const SizedBox(height: 2),
+              Text(subtitle, style: TextStyle(fontSize: 11, color: theme.textSecondary)),
+            ],
+          ),
+        ),
+        Switch(
+          value: value,
+          onChanged: onChanged,
+          activeThumbColor: theme.textPrimary,
+          activeTrackColor: theme.textPrimary.withValues(alpha: 0.3),
+          inactiveThumbColor: theme.textSecondary,
+          inactiveTrackColor: theme.border,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildAboutRow(String label, String value, AuraTheme theme) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(label, style: TextStyle(fontSize: 12, color: theme.textSecondary)),
+        Text(value, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: theme.textPrimary)),
+      ],
     );
   }
 }

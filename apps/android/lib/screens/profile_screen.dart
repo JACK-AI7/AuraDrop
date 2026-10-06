@@ -3,7 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/models.dart';
 import '../services/native_bridge.dart';
-import '../components/glass_components.dart';
+import '../theme/aura_theme.dart';
+import '../components/minimal_components.dart';
 
 class ProfileScreen extends StatefulWidget {
   final UserProfile profile;
@@ -24,26 +25,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   late TextEditingController _deviceNameController;
   late TextEditingController _bioController;
   late String _selectedTheme;
-  late String _selectedAccent;
-  late int _selectedAvatarIndex;
   late String _avatarPath;
-
-  final List<Map<String, String>> _themeOptions = [
-    {'id': 'obsidian_minimal', 'name': 'Obsidian Minimal'},
-    {'id': 'pure_black', 'name': 'Pure Black'},
-    {'id': 'obsidian_glass', 'name': 'Obsidian Glass'},
-    {'id': 'aurora_glass', 'name': 'Nordic Slate'},
-    {'id': 'crystal_glass', 'name': 'Monochrome Frost'},
-    {'id': 'glass_light', 'name': 'Minimal Light'},
-  ];
-
-  final List<Map<String, dynamic>> _accentOptions = [
-    {'id': 'white', 'name': 'White', 'color': Color(0xFFFFFFFF)},
-    {'id': 'slate', 'name': 'Slate', 'color': Color(0xFF94A3B8)},
-    {'id': 'emerald', 'name': 'Emerald', 'color': Color(0xFF10B981)},
-    {'id': 'cyan', 'name': 'Cyan', 'color': Color(0xFF38BDF8)},
-    {'id': 'indigo', 'name': 'Indigo', 'color': Color(0xFF818CF8)},
-  ];
 
   @override
   void initState() {
@@ -52,8 +34,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _deviceNameController = TextEditingController(text: widget.profile.deviceName);
     _bioController = TextEditingController(text: widget.profile.bio);
     _selectedTheme = widget.profile.theme;
-    _selectedAccent = widget.profile.accent;
-    _selectedAvatarIndex = widget.profile.avatarIndex;
     _avatarPath = widget.profile.avatarPath;
   }
 
@@ -65,7 +45,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     super.dispose();
   }
 
-  void _showAvatarOptionsSheet() {
+  void _showAvatarOptionsSheet(AuraTheme theme) {
     HapticFeedback.lightImpact();
     showModalBottomSheet(
       context: context,
@@ -74,36 +54,39 @@ class _ProfileScreenState extends State<ProfileScreen> {
         return Container(
           padding: const EdgeInsets.all(24),
           decoration: BoxDecoration(
-            color: const Color(0xFF111114),
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.12), width: 0.7),
+            color: theme.cardBackground,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+            border: Border.all(color: theme.border, width: 1.0),
           ),
           child: SafeArea(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
+                Text(
                   'Profile Photo',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Colors.white),
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: theme.textPrimary),
                 ),
-                const SizedBox(height: 6),
-                const Text(
-                  'Your photo is shared with nearby peers on the radar.',
-                  style: TextStyle(fontSize: 12, color: Color(0xFF8A8A8A)),
+                const SizedBox(height: 4),
+                Text(
+                  'Broadcast to nearby devices on the globe.',
+                  style: TextStyle(fontSize: 12, color: theme.textSecondary),
                 ),
                 const SizedBox(height: 20),
                 ListTile(
+                  contentPadding: EdgeInsets.zero,
                   leading: Container(
-                    padding: const EdgeInsets.all(10),
+                    width: 40,
+                    height: 40,
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.08),
-                      borderRadius: BorderRadius.circular(12),
+                      shape: BoxShape.circle,
+                      color: theme.subtleHighlight,
+                      border: Border.all(color: theme.border, width: 1.0),
                     ),
-                    child: const Icon(Icons.photo_library_outlined, color: Colors.white, size: 20),
+                    child: Icon(Icons.photo_library_outlined, color: theme.textPrimary, size: 18),
                   ),
-                  title: const Text('Choose from Gallery', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
-                  subtitle: const Text('Select an image from device storage', style: TextStyle(color: Colors.white54, fontSize: 11)),
+                  title: Text('Choose from Gallery', style: TextStyle(color: theme.textPrimary, fontWeight: FontWeight.w600, fontSize: 14)),
+                  subtitle: Text('Select an image from local storage', style: TextStyle(color: theme.textSecondary, fontSize: 12)),
                   onTap: () async {
                     Navigator.pop(ctx);
                     final path = await NativeBridgeService.pickAvatarImage();
@@ -111,31 +94,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       setState(() => _avatarPath = path);
                       await NativeBridgeService.saveUserProfile('avatar_path', path);
                       widget.onProfileUpdated('avatar_path', path);
-                      if (mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: const Text('Profile photo updated'),
-                            backgroundColor: const Color(0xFF10B981),
-                            behavior: SnackBarBehavior.floating,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          ),
-                        );
-                      }
                     }
                   },
                 ),
                 if (_avatarPath.isNotEmpty)
                   ListTile(
+                    contentPadding: EdgeInsets.zero,
                     leading: Container(
-                      padding: const EdgeInsets.all(10),
+                      width: 40,
+                      height: 40,
                       decoration: BoxDecoration(
-                        color: Colors.red.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(12),
+                        shape: BoxShape.circle,
+                        color: theme.subtleHighlight,
+                        border: Border.all(color: theme.border, width: 1.0),
                       ),
-                      child: const Icon(Icons.delete_outline, color: Color(0xFFF87171), size: 20),
+                      child: Icon(Icons.delete_outline, color: theme.error, size: 18),
                     ),
-                    title: const Text('Remove Photo', style: TextStyle(color: Color(0xFFF87171), fontWeight: FontWeight.w600)),
-                    subtitle: const Text('Use clean minimalist initials instead', style: TextStyle(color: Colors.white54, fontSize: 11)),
+                    title: Text('Remove Photo', style: TextStyle(color: theme.error, fontWeight: FontWeight.w600, fontSize: 14)),
+                    subtitle: Text('Use clean initials instead', style: TextStyle(color: theme.textSecondary, fontSize: 12)),
                     onTap: () async {
                       Navigator.pop(ctx);
                       await NativeBridgeService.removeAvatarImage();
@@ -165,21 +141,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
     await NativeBridgeService.saveUserProfile('device_name', finalDevName);
     await NativeBridgeService.saveUserProfile('bio', bio);
     await NativeBridgeService.saveUserProfile('theme', _selectedTheme);
-    await NativeBridgeService.saveUserProfile('accent', _selectedAccent);
-    await NativeBridgeService.saveUserProfile('avatar_index', _selectedAvatarIndex.toString());
 
     widget.onProfileUpdated('display_name', finalName);
     widget.onProfileUpdated('device_name', finalDevName);
     widget.onProfileUpdated('theme', _selectedTheme);
-    widget.onProfileUpdated('accent', _selectedAccent);
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: const Text('Profile updated successfully'),
-          backgroundColor: const Color(0xFF10B981),
+          content: const Text('Profile saved successfully'),
+          backgroundColor: Colors.black87,
           behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         ),
       );
     }
@@ -187,54 +160,64 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = AuraTheme.of(context);
     final hasCustomAvatar = _avatarPath.isNotEmpty && File(_avatarPath).existsSync();
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Identity & Appearance',
-            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Colors.white, letterSpacing: -0.5),
+          Text(
+            'Profile & Identity',
+            style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.w800,
+              color: theme.textPrimary,
+              letterSpacing: -0.5,
+            ),
           ),
           const SizedBox(height: 4),
-          const Text(
-            'Your identity is shared securely with nearby peers during discovery.',
-            style: TextStyle(fontSize: 12, color: Color(0xFF8A8A8A)),
+          Text(
+            'Visible to nearby devices on the discovery globe.',
+            style: TextStyle(fontSize: 12, color: theme.textSecondary),
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 24),
 
-          // Minimalist Luxury Profile Card
-          GlassCard(
-            padding: const EdgeInsets.all(18),
-            child: Row(
+          // Center Profile Hero
+          Center(
+            child: Column(
               children: [
                 GestureDetector(
-                  onTap: _showAvatarOptionsSheet,
+                  onTap: () => _showAvatarOptionsSheet(theme),
+                  behavior: HitTestBehavior.opaque,
                   child: Stack(
                     children: [
                       Container(
-                        width: 72,
-                        height: 72,
+                        width: 80,
+                        height: 80,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: Colors.white.withValues(alpha: 0.08),
-                          border: Border.all(color: Colors.white.withValues(alpha: 0.25), width: 1.0),
+                          color: theme.cardBackground,
+                          border: Border.all(color: theme.border, width: 1.5),
                         ),
                         child: hasCustomAvatar
                             ? ClipOval(
                                 child: Image.file(
                                   File(_avatarPath),
-                                  width: 72,
-                                  height: 72,
+                                  width: 80,
+                                  height: 80,
                                   fit: BoxFit.cover,
                                 ),
                               )
                             : Center(
                                 child: Text(
                                   _nameController.text.isNotEmpty ? _nameController.text.substring(0, 1).toUpperCase() : 'A',
-                                  style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: Colors.white),
+                                  style: TextStyle(
+                                    fontSize: 32,
+                                    fontWeight: FontWeight.w800,
+                                    color: theme.textPrimary,
+                                  ),
                                 ),
                               ),
                       ),
@@ -242,180 +225,162 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         right: 0,
                         bottom: 0,
                         child: Container(
-                          padding: const EdgeInsets.all(4),
-                          decoration: const BoxDecoration(
-                            color: Colors.white,
+                          width: 24,
+                          height: 24,
+                          decoration: BoxDecoration(
                             shape: BoxShape.circle,
+                            color: theme.actionBackground,
+                            border: Border.all(color: theme.background, width: 2.0),
                           ),
-                          child: const Icon(Icons.camera_alt, color: Colors.black, size: 12),
+                          child: Center(
+                            child: Icon(
+                              Icons.edit_outlined,
+                              size: 11,
+                              color: theme.actionText,
+                            ),
+                          ),
                         ),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _nameController.text.isNotEmpty ? _nameController.text : 'AuraDrop User',
-                        style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: Colors.white),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        _deviceNameController.text.isNotEmpty ? _deviceNameController.text : 'My Device',
-                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF8A8A8A)),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        _bioController.text.isNotEmpty ? _bioController.text : 'Nearby sharing made effortless',
-                        style: const TextStyle(fontSize: 11, color: Colors.white54),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
+                const SizedBox(height: 12),
+                Text(
+                  _nameController.text.isNotEmpty ? _nameController.text : 'AuraDrop User',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                    color: theme.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _deviceNameController.text.isNotEmpty ? _deviceNameController.text : 'AuraDrop Device',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: theme.textSecondary,
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 28),
 
-          // Display Name Field
-          const Text('Display Name', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF8A8A8A), letterSpacing: 0.5)),
-          const SizedBox(height: 8),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(14),
-            child: Container(
-              color: Colors.white.withValues(alpha: 0.05),
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: TextField(
-                controller: _nameController,
-                style: const TextStyle(color: Colors.white, fontSize: 14),
-                decoration: const InputDecoration(border: InputBorder.none, hintText: 'Enter name', hintStyle: TextStyle(color: Colors.white38)),
-              ),
-            ),
-          ),
+          // Fields
+          _buildFieldLabel('Display Name', theme),
+          const SizedBox(height: 6),
+          _buildTextField(_nameController, 'Enter display name', theme),
           const SizedBox(height: 16),
 
-          // Device Name Field
-          const Text('Device Name', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF8A8A8A), letterSpacing: 0.5)),
-          const SizedBox(height: 8),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(14),
-            child: Container(
-              color: Colors.white.withValues(alpha: 0.05),
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: TextField(
-                controller: _deviceNameController,
-                style: const TextStyle(color: Colors.white, fontSize: 14),
-                decoration: const InputDecoration(border: InputBorder.none, hintText: 'e.g. Pixel 8 Pro', hintStyle: TextStyle(color: Colors.white38)),
-              ),
-            ),
-          ),
+          _buildFieldLabel('Device Name', theme),
+          const SizedBox(height: 6),
+          _buildTextField(_deviceNameController, 'e.g. Pixel 8', theme),
           const SizedBox(height: 16),
 
-          // Bio Field
-          const Text('Status / Bio', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF8A8A8A), letterSpacing: 0.5)),
-          const SizedBox(height: 8),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(14),
-            child: Container(
-              color: Colors.white.withValues(alpha: 0.05),
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: TextField(
-                controller: _bioController,
-                style: const TextStyle(color: Colors.white, fontSize: 14),
-                decoration: const InputDecoration(border: InputBorder.none, hintText: 'Short status message', hintStyle: TextStyle(color: Colors.white38)),
-              ),
-            ),
-          ),
+          _buildFieldLabel('Status / Bio', theme),
+          const SizedBox(height: 6),
+          _buildTextField(_bioController, 'Short bio', theme),
           const SizedBox(height: 24),
 
-          // Theme Selector
-          const Text('Visual Theme', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF8A8A8A), letterSpacing: 0.5)),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: _themeOptions.map((t) {
-              final isSel = _selectedTheme == t['id'];
-              return ChoiceChip(
-                label: Text(t['name']!),
-                selected: isSel,
-                selectedColor: Colors.white.withValues(alpha: 0.18),
-                backgroundColor: Colors.white.withValues(alpha: 0.04),
-                labelStyle: TextStyle(
-                  color: isSel ? Colors.white : const Color(0xFF8A8A8A),
-                  fontWeight: isSel ? FontWeight.w700 : FontWeight.w500,
-                  fontSize: 12,
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  side: BorderSide(
-                    color: isSel ? Colors.white.withValues(alpha: 0.35) : Colors.white.withValues(alpha: 0.08),
-                    width: 0.6,
-                  ),
-                ),
-                onSelected: (val) {
-                  if (val) setState(() => _selectedTheme = t['id']!);
-                },
-              );
-            }).toList(),
-          ),
-          const SizedBox(height: 24),
-
-          // Accent Color Selector
-          const Text('Accent Tone', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF8A8A8A), letterSpacing: 0.5)),
+          // Appearance Selector (System / Light / Dark)
+          _buildFieldLabel('Appearance', theme),
           const SizedBox(height: 10),
           Row(
-            children: _accentOptions.map((a) {
-              final isSel = _selectedAccent == a['id'];
-              final Color c = a['color'];
-              return GestureDetector(
-                onTap: () {
-                  HapticFeedback.selectionClick();
-                  setState(() => _selectedAccent = a['id']);
-                },
-                child: Container(
-                  margin: const EdgeInsets.only(right: 14),
-                  width: 32,
-                  height: 32,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: c,
-                    border: Border.all(
-                      color: isSel ? Colors.white : Colors.transparent,
-                      width: 2.5,
-                    ),
-                    boxShadow: isSel
-                        ? [
-                            BoxShadow(
-                              color: c.withValues(alpha: 0.3),
-                              blurRadius: 8,
-                              spreadRadius: 1,
-                            )
-                          ]
-                        : null,
-                  ),
-                ),
-              );
-            }).toList(),
+            children: [
+              _buildThemeOption('system', 'System', Icons.settings_brightness_rounded, theme),
+              const SizedBox(width: 8),
+              _buildThemeOption('light', 'Light', Icons.wb_sunny_outlined, theme),
+              const SizedBox(width: 8),
+              _buildThemeOption('dark', 'Dark', Icons.nightlight_round, theme),
+            ],
           ),
           const SizedBox(height: 32),
 
           SizedBox(
             width: double.infinity,
-            child: GlassButton(
-              text: 'Save Changes',
-              icon: Icons.check_circle_outline,
+            child: MinimalButton(
+              text: 'Save Profile',
               onPressed: _saveProfile,
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildFieldLabel(String label, AuraTheme theme) {
+    return Text(
+      label,
+      style: TextStyle(
+        fontSize: 12,
+        fontWeight: FontWeight.w700,
+        color: theme.textSecondary,
+        letterSpacing: 0.3,
+      ),
+    );
+  }
+
+  Widget _buildTextField(TextEditingController controller, String hint, AuraTheme theme) {
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.cardBackground,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: theme.border, width: 1.0),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      child: TextField(
+        controller: controller,
+        style: TextStyle(color: theme.textPrimary, fontSize: 14),
+        decoration: InputDecoration(
+          border: InputBorder.none,
+          hintText: hint,
+          hintStyle: TextStyle(color: theme.textSecondary, fontSize: 13),
+          isDense: true,
+          contentPadding: const EdgeInsets.symmetric(vertical: 12),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildThemeOption(String id, String label, IconData icon, AuraTheme theme) {
+    final isSelected = _selectedTheme == id || (_selectedTheme.contains('light') && id == 'light') || (!_selectedTheme.contains('light') && id == 'dark' && _selectedTheme != 'system');
+
+    return Expanded(
+      child: GestureDetector(
+        onTap: () {
+          HapticFeedback.selectionClick();
+          setState(() => _selectedTheme = id);
+        },
+        behavior: HitTestBehavior.opaque,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          decoration: BoxDecoration(
+            color: isSelected ? theme.actionBackground : theme.cardBackground,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isSelected ? theme.actionBackground : theme.border,
+              width: 1.0,
+            ),
+          ),
+          child: Column(
+            children: [
+              Icon(
+                icon,
+                size: 18,
+                color: isSelected ? theme.actionText : theme.textPrimary,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: isSelected ? theme.actionText : theme.textPrimary,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

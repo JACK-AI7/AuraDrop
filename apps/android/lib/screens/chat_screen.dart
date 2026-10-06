@@ -3,19 +3,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/models.dart';
 import '../services/native_bridge.dart';
-import '../components/glass_components.dart';
+import '../theme/aura_theme.dart';
+import '../components/minimal_components.dart';
 
 // ---------------------------------------------------------------------------
 // CHAT HUB (MAIN TAB SCREEN)
 // ---------------------------------------------------------------------------
 class ChatHubScreen extends StatefulWidget {
   final Map<String, PeerDevice> peers;
-  final Color accentColor;
 
   const ChatHubScreen({
     super.key,
     required this.peers,
-    required this.accentColor,
   });
 
   @override
@@ -25,58 +24,40 @@ class ChatHubScreen extends StatefulWidget {
 class _ChatHubScreenState extends State<ChatHubScreen> {
   @override
   Widget build(BuildContext context) {
+    final theme = AuraTheme.of(context);
     final peerList = widget.peers.values.toList();
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Direct Peer Chat',
-                    style: TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w800,
-                      color: Colors.white,
-                      letterSpacing: -0.5,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  const Text(
-                    'Local offline frames (0x30 / 0x31). Zero server mediation.',
-                    style: TextStyle(fontSize: 12, color: Color(0xFF8A8A8A)),
-                  ),
-                ],
+              Text(
+                'Direct Messages',
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w800,
+                  color: theme.textPrimary,
+                  letterSpacing: -0.5,
+                ),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.08),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.white.withValues(alpha: 0.12), width: 0.6),
+                  color: theme.subtleHighlight,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: theme.border, width: 0.8),
                 ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 6,
-                      height: 6,
-                      decoration: const BoxDecoration(
-                        color: Color(0xFF10B981),
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      '${peerList.length} Active',
-                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white),
-                    ),
-                  ],
+                child: Text(
+                  '${peerList.length} nearby',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: theme.textSecondary,
+                  ),
                 ),
               ),
             ],
@@ -89,48 +70,45 @@ class _ChatHubScreenState extends State<ChatHubScreen> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Container(
-                          width: 64,
-                          height: 64,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: Colors.white.withValues(alpha: 0.05),
-                            border: Border.all(color: Colors.white.withValues(alpha: 0.10), width: 0.7),
+                        Text(
+                          'No nearby devices',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: theme.textPrimary,
                           ),
-                          child: const Icon(Icons.chat_bubble_outline_rounded, size: 28, color: Colors.white38),
                         ),
-                        const SizedBox(height: 16),
-                        const Text(
-                          'No Nearby Peers Found',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white),
-                        ),
-                        const SizedBox(height: 6),
-                        const Text(
-                          'Ensure another device running AuraDrop is on\nthe same Wi-Fi or LAN network.',
+                        const SizedBox(height: 4),
+                        Text(
+                          'Devices on the same local network will appear here automatically.',
                           textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 12, color: Color(0xFF8A8A8A), height: 1.4),
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: theme.textSecondary,
+                            height: 1.4,
+                          ),
                         ),
                       ],
                     ),
                   )
                 : ListView.separated(
                     itemCount: peerList.length,
-                    separatorBuilder: (context, index) => const SizedBox(height: 10),
+                    separatorBuilder: (context, index) => const SizedBox(height: 8),
                     itemBuilder: (context, index) {
                       final peer = peerList[index];
-                      return GlassCard(
+                      return MinimalCard(
                         padding: const EdgeInsets.all(14),
                         onTap: () {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder: (_) => ChatScreen(peer: peer, accentColor: widget.accentColor),
+                              builder: (_) => ChatScreen(peer: peer),
                             ),
                           );
                         },
                         child: Row(
                           children: [
-                            PeerAvatar(peer: peer, size: 48, accentColor: widget.accentColor),
+                            MinimalPeerAvatar(peer: peer, size: 44),
                             const SizedBox(width: 14),
                             Expanded(
                               child: Column(
@@ -141,34 +119,41 @@ class _ChatHubScreenState extends State<ChatHubScreen> {
                                     children: [
                                       Text(
                                         peer.name,
-                                        style: const TextStyle(
+                                        style: TextStyle(
                                           fontWeight: FontWeight.w700,
                                           fontSize: 15,
-                                          color: Colors.white,
+                                          color: theme.textPrimary,
                                         ),
                                       ),
                                       Text(
                                         peer.ip,
-                                        style: const TextStyle(
-                                          fontSize: 10,
+                                        style: TextStyle(
+                                          fontSize: 11,
                                           fontFamily: 'monospace',
-                                          color: Color(0xFF8A8A8A),
+                                          color: theme.textSecondary,
                                         ),
                                       ),
                                     ],
                                   ),
-                                  const SizedBox(height: 4),
+                                  const SizedBox(height: 3),
                                   Text(
-                                    peer.status.isNotEmpty ? peer.status : 'Tap to start direct encrypted offline chat',
+                                    peer.status.isNotEmpty ? peer.status : 'Direct offline encrypted chat',
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(fontSize: 12, color: Color(0xFF8A8A8A)),
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: theme.textSecondary,
+                                    ),
                                   ),
                                 ],
                               ),
                             ),
                             const SizedBox(width: 8),
-                            const Icon(Icons.chevron_right_rounded, color: Colors.white38, size: 20),
+                            Icon(
+                              Icons.chevron_right_rounded,
+                              color: theme.textSecondary,
+                              size: 18,
+                            ),
                           ],
                         ),
                       );
@@ -186,12 +171,10 @@ class _ChatHubScreenState extends State<ChatHubScreen> {
 // ---------------------------------------------------------------------------
 class ChatScreen extends StatefulWidget {
   final PeerDevice peer;
-  final Color accentColor;
 
   const ChatScreen({
     super.key,
     required this.peer,
-    required this.accentColor,
   });
 
   @override
@@ -284,7 +267,7 @@ class _ChatScreenState extends State<ChatScreen> {
       if (_scrollController.hasClients) {
         _scrollController.animateTo(
           _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 300),
+          duration: const Duration(milliseconds: 250),
           curve: Curves.easeOut,
         );
       }
@@ -323,7 +306,7 @@ class _ChatScreenState extends State<ChatScreen> {
       targetIp: widget.peer.ip,
       peerId: widget.peer.id,
       peerName: widget.peer.name,
-      text: '📎 ${file.name}',
+      text: file.name,
     );
   }
 
@@ -335,53 +318,56 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  String _formatBytes(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+  }
+
   @override
   Widget build(BuildContext context) {
+    final theme = AuraTheme.of(context);
+
     return Scaffold(
-      backgroundColor: const Color(0xFF050505),
+      backgroundColor: theme.background,
+      appBar: AppBar(
+        backgroundColor: theme.background,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        leading: IconButton(
+          icon: Icon(Icons.arrow_back_ios_new_rounded, color: theme.textPrimary, size: 18),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              widget.peer.name,
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: 16,
+                color: theme.textPrimary,
+              ),
+            ),
+            Text(
+              _isPeerTyping ? 'typing...' : widget.peer.ip,
+              style: TextStyle(
+                fontSize: 11,
+                color: _isPeerTyping ? theme.textPrimary : theme.textSecondary,
+                fontStyle: _isPeerTyping ? FontStyle.italic : FontStyle.normal,
+              ),
+            ),
+          ],
+        ),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1.0),
+          child: Container(color: theme.border, height: 1.0),
+        ),
+      ),
       body: SafeArea(
         child: Column(
           children: [
-            // Minimal Header
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.03),
-                border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.08), width: 0.7)),
-              ),
-              child: Row(
-                children: [
-                  GlassIconButton(
-                    icon: Icons.arrow_back_ios_new_rounded,
-                    onPressed: () => Navigator.pop(context),
-                    size: 38,
-                  ),
-                  const SizedBox(width: 12),
-                  PeerAvatar(peer: widget.peer, size: 40, accentColor: widget.accentColor),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          widget.peer.name,
-                          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: Colors.white),
-                        ),
-                        Text(
-                          _isPeerTyping ? 'typing...' : 'Direct LAN (${widget.peer.ip})',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: _isPeerTyping ? Colors.white : const Color(0xFF8A8A8A),
-                            fontStyle: _isPeerTyping ? FontStyle.italic : FontStyle.normal,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
             // Message List
             Expanded(
               child: _messages.isEmpty
@@ -389,35 +375,127 @@ class _ChatScreenState extends State<ChatScreen> {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.lock_outline_rounded, size: 40, color: Colors.white.withValues(alpha: 0.2)),
-                          const SizedBox(height: 12),
-                          const Text(
+                          Text(
                             'Direct Peer-to-Peer Encryption',
-                            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.white),
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: theme.textPrimary,
+                            ),
                           ),
                           const SizedBox(height: 4),
-                          const Text(
-                            'Frames move directly over the local network socket.\nNo internet, accounts, or telemetry.',
+                          Text(
+                            'Frames move directly over the local network socket.\nZero cloud dependencies.',
                             textAlign: TextAlign.center,
-                            style: TextStyle(fontSize: 12, color: Color(0xFF8A8A8A), height: 1.4),
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: theme.textSecondary,
+                              height: 1.4,
+                            ),
                           ),
                         ],
                       ),
                     )
                   : ListView.builder(
                       controller: _scrollController,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                       itemCount: _messages.length,
                       itemBuilder: (context, index) {
                         final msg = _messages[index];
                         final isMe = msg.senderId != widget.peer.id;
-                        return ChatBubble(
-                          message: msg,
-                          isMe: isMe,
-                          accentColor: widget.accentColor,
-                          onFileTap: () {
-                            // File action
-                          },
+                        final isFile = msg.messageType == 'file' || msg.text.startsWith('📎');
+
+                        return Align(
+                          alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                          child: Container(
+                            margin: const EdgeInsets.symmetric(vertical: 4),
+                            constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.76),
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                            decoration: BoxDecoration(
+                              color: isMe ? theme.actionBackground : theme.cardBackground,
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(
+                                color: isMe ? theme.actionBackground : theme.border,
+                                width: 1.0,
+                              ),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                              children: [
+                                if (isFile) ...[
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        Icons.attach_file_rounded,
+                                        size: 16,
+                                        color: isMe ? theme.actionText : theme.textPrimary,
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Flexible(
+                                        child: Text(
+                                          msg.fileName ?? msg.text.replaceAll('📎 ', ''),
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w700,
+                                            color: isMe ? theme.actionText : theme.textPrimary,
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  if (msg.fileSize != null) ...[
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      _formatBytes(msg.fileSize!),
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: isMe ? theme.actionText.withValues(alpha: 0.7) : theme.textSecondary,
+                                      ),
+                                    ),
+                                  ],
+                                ] else ...[
+                                  Text(
+                                    msg.text,
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: isMe ? theme.actionText : theme.textPrimary,
+                                      height: 1.35,
+                                    ),
+                                  ),
+                                ],
+                                const SizedBox(height: 3),
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      '${msg.timestamp.hour.toString().padLeft(2, '0')}:${msg.timestamp.minute.toString().padLeft(2, '0')}',
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        color: isMe ? theme.actionText.withValues(alpha: 0.6) : theme.textSecondary,
+                                      ),
+                                    ),
+                                    if (isMe) ...[
+                                      const SizedBox(width: 4),
+                                      Icon(
+                                        msg.status == 'read'
+                                            ? Icons.done_all
+                                            : msg.status == 'delivered'
+                                                ? Icons.done_all
+                                                : msg.status == 'sent'
+                                                    ? Icons.done
+                                                    : Icons.schedule,
+                                        size: 12,
+                                        color: isMe ? theme.actionText.withValues(alpha: 0.7) : theme.textSecondary,
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
                         );
                       },
                     ),
@@ -425,45 +503,47 @@ class _ChatScreenState extends State<ChatScreen> {
 
             // Input Bar
             Container(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
               decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.8),
-                border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.08), width: 0.7)),
+                color: theme.background,
+                border: Border(top: BorderSide(color: theme.border, width: 1.0)),
               ),
               child: Row(
                 children: [
-                  GlassIconButton(
+                  MinimalIconButton(
                     icon: Icons.attach_file_rounded,
                     onPressed: _attachFileAndSend,
-                    size: 40,
+                    size: 38,
                   ),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(22),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        color: Colors.white.withValues(alpha: 0.06),
-                        child: TextField(
-                          controller: _textController,
-                          onChanged: _onTextChanged,
-                          onSubmitted: (_) => _sendMessage(),
-                          style: const TextStyle(color: Colors.white, fontSize: 14),
-                          decoration: const InputDecoration(
-                            hintText: 'Message peer directly...',
-                            hintStyle: TextStyle(color: Color(0xFF7E7E7E), fontSize: 13),
-                            border: InputBorder.none,
-                          ),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      decoration: BoxDecoration(
+                        color: theme.cardBackground,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: theme.border, width: 1.0),
+                      ),
+                      child: TextField(
+                        controller: _textController,
+                        onChanged: _onTextChanged,
+                        onSubmitted: (_) => _sendMessage(),
+                        style: TextStyle(color: theme.textPrimary, fontSize: 14),
+                        decoration: InputDecoration(
+                          hintText: 'Message...',
+                          hintStyle: TextStyle(color: theme.textSecondary, fontSize: 14),
+                          border: InputBorder.none,
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(vertical: 10),
                         ),
                       ),
                     ),
                   ),
                   const SizedBox(width: 8),
-                  GlassIconButton(
-                    icon: Icons.send_rounded,
+                  MinimalIconButton(
+                    icon: Icons.arrow_upward_rounded,
                     onPressed: _sendMessage,
-                    color: Colors.white,
-                    size: 40,
+                    size: 38,
                   ),
                 ],
               ),

@@ -5,14 +5,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'models/models.dart';
-import 'theme/glass_theme.dart';
-import 'components/glass_components.dart';
-import 'components/premium_navigation.dart';
-import 'components/aura_ripple_field.dart';
+import 'theme/aura_theme.dart';
+import 'components/hero_globe.dart';
+import 'components/minimal_navigation.dart';
+import 'components/minimal_components.dart';
 import 'components/aura_data_stream.dart';
 import 'components/aura_completion_burst.dart';
-import 'components/aura_backgrounds.dart';
-import 'components/micro_interactions.dart';
 import 'services/native_bridge.dart';
 import 'screens/transfers_screen.dart';
 import 'screens/chat_screen.dart';
@@ -26,7 +24,7 @@ void main() {
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
       statusBarIconBrightness: Brightness.light,
-      systemNavigationBarColor: Color(0xFF050505),
+      systemNavigationBarColor: Color(0xFF000000),
       systemNavigationBarIconBrightness: Brightness.light,
     ),
   );
@@ -41,57 +39,69 @@ class AuraDropApp extends StatefulWidget {
 }
 
 class _AuraDropAppState extends State<AuraDropApp> {
-  String _themeKey = 'obsidian_minimal';
-  String _accentKey = 'white';
+  String _themeMode = 'dark'; // 'system', 'light', 'dark'
 
-  void updateTheme(String themeKey, String accentKey) {
-    setState(() {
-      _themeKey = themeKey;
-      _accentKey = accentKey;
-    });
+  void _updateThemeMode(String mode) {
+    setState(() => _themeMode = mode);
   }
 
   @override
   Widget build(BuildContext context) {
-    final themeData = GlassTheme.getTheme(_themeKey);
-    final accentColor = GlassTheme.getAccent(_accentKey);
+    ThemeMode mode;
+    if (_themeMode == 'light') {
+      mode = ThemeMode.light;
+    } else if (_themeMode == 'system') {
+      mode = ThemeMode.system;
+    } else {
+      mode = ThemeMode.dark;
+    }
+
+    final lightTheme = ThemeData(
+      brightness: Brightness.light,
+      scaffoldBackgroundColor: AuraTheme.light.background,
+      primaryColor: AuraTheme.light.actionBackground,
+      colorScheme: ColorScheme.light(
+        primary: AuraTheme.light.actionBackground,
+        surface: AuraTheme.light.background,
+      ),
+      dividerColor: AuraTheme.light.border,
+      fontFamily: 'Roboto',
+    );
+
+    final darkTheme = ThemeData(
+      brightness: Brightness.dark,
+      scaffoldBackgroundColor: AuraTheme.dark.background,
+      primaryColor: AuraTheme.dark.actionBackground,
+      colorScheme: ColorScheme.dark(
+        primary: AuraTheme.dark.actionBackground,
+        surface: AuraTheme.dark.background,
+      ),
+      dividerColor: AuraTheme.dark.border,
+      fontFamily: 'Roboto',
+    );
 
     return MaterialApp(
-      title: 'AuraDrop V5',
+      title: 'AuraDrop',
       debugShowCheckedModeBanner: false,
-      themeMode: ThemeMode.dark,
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        scaffoldBackgroundColor: themeData.background,
-        primaryColor: accentColor,
-        colorScheme: ColorScheme.dark(
-          primary: accentColor,
-          surface: themeData.background,
-        ),
-        fontFamily: 'Roboto',
-      ),
+      themeMode: mode,
+      theme: lightTheme,
+      darkTheme: darkTheme,
       home: AuraDropHomeScreen(
-        themeData: themeData,
-        accentColor: accentColor,
-        onProfileUpdated: (key, val) {
-          if (key == 'theme') setState(() => _themeKey = val);
-          if (key == 'accent') setState(() => _accentKey = val);
-        },
+        currentThemeMode: _themeMode,
+        onThemeModeChanged: _updateThemeMode,
       ),
     );
   }
 }
 
 class AuraDropHomeScreen extends StatefulWidget {
-  final GlassThemeData themeData;
-  final Color accentColor;
-  final Function(String, String) onProfileUpdated;
+  final String currentThemeMode;
+  final ValueChanged<String> onThemeModeChanged;
 
   const AuraDropHomeScreen({
     super.key,
-    required this.themeData,
-    required this.accentColor,
-    required this.onProfileUpdated,
+    required this.currentThemeMode,
+    required this.onThemeModeChanged,
   });
 
   @override
@@ -99,9 +109,9 @@ class AuraDropHomeScreen extends StatefulWidget {
 }
 
 class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
-    with TickerProviderStateMixin, WidgetsBindingObserver {
-  // Navigation
-  int _currentTabIndex = 0; // 0: Radar, 1: Tray, 2: History, 3: Profile, 4: Settings
+    with WidgetsBindingObserver {
+  // Navigation: 0: Home, 1: Transfers, 2: Chat, 3: History, 4: Profile
+  int _currentTabIndex = 0;
 
   // Subscriptions & Timers
   StreamSubscription? _eventSubscription;
@@ -116,12 +126,12 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
     displayName: 'AuraDrop User',
     avatarIndex: 0,
     bio: 'Nearby sharing made effortless',
-    theme: 'glass_dark',
-    accent: 'cyan',
+    theme: 'system',
+    accent: 'white',
     visibility: 'everyone',
   );
 
-  // Settings & Quality Engine
+  // Settings & Animation
   AnimationSettings _animationSettings = const AnimationSettings();
 
   // Visibility & Discovery
@@ -131,6 +141,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
   // Discovered Peers
   final Map<String, PeerDevice> _peers = {};
   final Set<String> _trustedPeerIds = {};
+  PeerDevice? _selectedPeer;
 
   // Selected Files Tray
   final List<PickedFileMeta> _selectedFiles = [];
@@ -149,26 +160,10 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
   String _lastSha256 = '';
   String _lastErrorMessage = '';
 
-  // Controllers
-  late final AnimationController _radarController;
-  late final AnimationController _pulseController;
-  final AuraRippleController _rippleController = AuraRippleController();
-
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-
-    _radarController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 5),
-    )..repeat();
-
-    _pulseController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 2200),
-    )..repeat(reverse: true);
-
     _initApp();
   }
 
@@ -176,10 +171,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _temporaryVisibilityTimer?.cancel();
-    _radarController.dispose();
-    _pulseController.dispose();
     _eventSubscription?.cancel();
-    _rippleController.dispose();
     super.dispose();
   }
 
@@ -199,7 +191,9 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
 
       setState(() {
         _deviceId = info['deviceId']?.toString() ?? _deviceId;
-        _deviceName = prof.displayName.isNotEmpty ? prof.displayName : (info['deviceName']?.toString() ?? _deviceName);
+        _deviceName = prof.displayName.isNotEmpty
+            ? prof.displayName
+            : (info['deviceName']?.toString() ?? _deviceName);
         _localIp = info['ipAddress']?.toString() ?? _localIp;
         _userProfile = prof;
         for (final t in trusted) {
@@ -254,19 +248,9 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
           if (_visibilityMode == VisibilityMode.contactsOnly && !isTrusted) return;
 
           final peer = PeerDevice.fromMap(peerData, isTrusted: isTrusted);
-          final isNew = !_peers.containsKey(peer.id);
           setState(() {
             _peers[peer.id] = peer;
           });
-
-          // Proximity Field Pulse when new peer is detected
-          if (isNew && _animationSettings.enableProximityRipple) {
-            _rippleController.trigger(
-              origin: Offset(MediaQuery.of(context).size.width / 2, MediaQuery.of(context).size.height * 0.40),
-              color: widget.accentColor,
-              intensity: 0.9,
-            );
-          }
         }
         break;
 
@@ -326,15 +310,6 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
             NativeBridgeService.setPeerTrusted(_activePeer!.id, _activePeer!.name, true);
           }
         });
-
-        // Trigger celebratory completion burst ripple
-        if (_animationSettings.enableCompletionBurst) {
-          _rippleController.trigger(
-            origin: Offset(MediaQuery.of(context).size.width / 2, MediaQuery.of(context).size.height / 2),
-            color: const Color(0xFF10B981),
-            intensity: 1.4,
-          );
-        }
         break;
 
       case 'transferError':
@@ -360,6 +335,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
       setState(() {
         _isDiscovering = false;
         _peers.clear();
+        _selectedPeer = null;
       });
     } else {
       await NativeBridgeService.startDiscovery();
@@ -392,7 +368,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
     }
   }
 
-  Future<void> _sendFilesToPeer(PeerDevice peer, {Offset? tapOrigin}) async {
+  Future<void> _sendFilesToPeer(PeerDevice peer) async {
     if (_selectedFiles.isEmpty) {
       _showSnackBar('Select files before picking a recipient.', isSuccess: false);
       _pickFiles();
@@ -402,20 +378,13 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
     HapticFeedback.mediumImpact();
     final totalSize = _selectedFiles.fold(0, (acc, f) => acc + f.size);
 
-    // Trigger Screen-Wide Aura Warp from touched peer avatar
-    if (_animationSettings.enableWarpField && tapOrigin != null) {
-      _rippleController.trigger(
-        origin: tapOrigin,
-        color: widget.accentColor,
-        intensity: 1.3,
-      );
-    }
-
     setState(() {
       _activePeer = peer;
       _isSender = true;
       _activeTransferId = 'send_${DateTime.now().millisecondsSinceEpoch}';
-      _activeFileName = _selectedFiles.length == 1 ? _selectedFiles.first.name : '${_selectedFiles.length} files';
+      _activeFileName = _selectedFiles.length == 1
+          ? _selectedFiles.first.name
+          : '${_selectedFiles.length} files';
       _transferredBytes = 0;
       _totalTransferBytes = math.max(1, totalSize);
       _speedBytesPerSec = 0;
@@ -442,6 +411,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
   }
 
   void _showIncomingTransferModal(Map<dynamic, dynamic> req) {
+    final theme = AuraTheme.of(context);
     final transferId = req['transferId']?.toString() ?? '';
     final senderName = req['senderName']?.toString() ?? 'Nearby Peer';
     final totalFiles = req['totalFiles']?.toString() ?? '1';
@@ -458,55 +428,68 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
           margin: const EdgeInsets.all(16),
           padding: const EdgeInsets.all(24),
           decoration: BoxDecoration(
-            color: const Color(0xFF14161F),
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
-            boxShadow: const [BoxShadow(color: Colors.black87, blurRadius: 30, offset: Offset(0, 10))],
+            color: theme.cardBackground,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: theme.border, width: 1.0),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(width: 36, height: 4, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2))),
+              Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: theme.textSecondary.withValues(alpha: 0.3),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
               const SizedBox(height: 20),
               Container(
-                width: 60,
-                height: 60,
+                width: 56,
+                height: 56,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: Colors.white.withValues(alpha: 0.1),
-                  border: Border.all(color: widget.accentColor, width: 1.5),
+                  color: theme.textPrimary,
                 ),
                 child: Center(
                   child: Text(
                     senderName.isNotEmpty ? senderName.substring(0, 1).toUpperCase() : '?',
-                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: widget.accentColor),
+                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: theme.actionText),
                   ),
                 ),
               ),
               const SizedBox(height: 12),
               Text(
                 senderName,
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Colors.white),
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: theme.textPrimary),
               ),
               const SizedBox(height: 4),
               Text(
                 'wants to send $totalFiles file(s) • ${_formatBytes(totalBytes)}',
-                style: const TextStyle(fontSize: 13, color: Colors.white60),
+                style: TextStyle(fontSize: 13, color: theme.textSecondary),
               ),
               const SizedBox(height: 16),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.05),
+                  color: theme.background,
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: Colors.white12),
+                  border: Border.all(color: theme.border),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.shield_outlined, size: 14, color: Colors.white54),
-                    const SizedBox(width: 6),
-                    Text('SAS: $sas', style: const TextStyle(fontSize: 11, fontFamily: 'monospace', color: Colors.white70)),
+                    Icon(Icons.shield_outlined, size: 14, color: theme.textSecondary),
+                    const SizedBox(width: 8),
+                    Text(
+                      'SAS: $sas',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontFamily: 'monospace',
+                        fontWeight: FontWeight.w600,
+                        color: theme.textPrimary,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -516,9 +499,9 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                   Expanded(
                     child: OutlinedButton(
                       style: OutlinedButton.styleFrom(
-                        foregroundColor: const Color(0xFFF87171),
-                        side: const BorderSide(color: Color(0xFFF87171)),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                        foregroundColor: const Color(0xFFEF4444),
+                        side: const BorderSide(color: Color(0xFFEF4444), width: 0.8),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                         padding: const EdgeInsets.symmetric(vertical: 14),
                       ),
                       onPressed: () async {
@@ -533,9 +516,9 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                   Expanded(
                     child: ElevatedButton(
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: widget.accentColor,
-                        foregroundColor: const Color(0xFF0C0E14),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                        backgroundColor: theme.actionBackground,
+                        foregroundColor: theme.actionText,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                         padding: const EdgeInsets.symmetric(vertical: 14),
                         elevation: 0,
                       ),
@@ -572,12 +555,20 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
   }
 
   void _showSnackBar(String text, {required bool isSuccess}) {
+    final theme = AuraTheme.of(context);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(text, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-        backgroundColor: isSuccess ? const Color(0xFF10B981) : const Color(0xFFF87171),
+        content: Text(
+          text,
+          style: TextStyle(
+            fontWeight: FontWeight.w600,
+            fontSize: 13,
+            color: isSuccess ? theme.actionText : Colors.white,
+          ),
+        ),
+        backgroundColor: isSuccess ? theme.actionBackground : const Color(0xFFEF4444),
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
     );
   }
@@ -594,146 +585,138 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
   // ---------------------------------------------------------------------------
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: SafeArea(
-        child: AuraBackground(
-          quality: _animationSettings.quality,
-          accentColor: widget.accentColor,
-          child: AuraRippleField(
-            controller: _rippleController,
-            enableWarp: _animationSettings.enableWarpField,
-            child: Stack(
-              children: [
-                Column(
-                  children: [
-                    _buildHeader(),
-                    Expanded(
-                      child: IndexedStack(
-                        index: _currentTabIndex,
-                        children: [
-                          _buildRadarScreen(),
-                          TransfersScreen(
-                            selectedFiles: _selectedFiles,
-                            onPickFiles: _pickFiles,
-                            onRemoveFile: (f) => setState(() => _selectedFiles.remove(f)),
-                            onClearFiles: () => setState(() => _selectedFiles.clear()),
-                            transferState: _transferState,
-                            activeFileName: _activeFileName,
-                            transferredBytes: _transferredBytes,
-                            totalTransferBytes: _totalTransferBytes,
-                            speedBytesPerSec: _speedBytesPerSec,
-                            onCancelTransfer: _cancelTransfer,
-                            accentColor: widget.accentColor,
-                          ),
-                          ChatHubScreen(
-                            peers: _peers,
-                            accentColor: widget.accentColor,
-                          ),
-                          HistoryScreen(accentColor: widget.accentColor),
-                          ProfileScreen(
-                            profile: _userProfile,
-                            onProfileUpdated: (key, val) {
-                              widget.onProfileUpdated(key, val);
-                              if (key == 'display_name') setState(() => _deviceName = val);
-                              if (key == 'avatar_path') {
-                                setState(() {
-                                  _userProfile = UserProfile(
-                                    displayName: _userProfile.displayName,
-                                    deviceName: _userProfile.deviceName,
-                                    avatarIndex: _userProfile.avatarIndex,
-                                    avatarPath: val,
-                                    bio: _userProfile.bio,
-                                    theme: _userProfile.theme,
-                                    accent: _userProfile.accent,
-                                    visibility: _userProfile.visibility,
-                                  );
-                                });
-                              }
-                            },
-                          ),
-                        ],
-                      ),
-                    ),
-                    _buildGlassBottomNav(),
-                  ],
-                ),
+    final theme = AuraTheme.of(context);
 
-                // Active Transfer Stream or Completion Burst Modal
-                if (_transferState != TransferState.idle &&
-                    _transferState != TransferState.discovering &&
-                    _transferState != TransferState.waitingForAccept)
-                  _buildTransferOverlay(),
+    return Scaffold(
+      backgroundColor: theme.background,
+      body: SafeArea(
+        child: Stack(
+          children: [
+            Column(
+              children: [
+                _buildHeader(theme),
+                Expanded(
+                  child: IndexedStack(
+                    index: _currentTabIndex,
+                    children: [
+                      _buildHomeScreen(theme),
+                      TransfersScreen(
+                        selectedFiles: _selectedFiles,
+                        onPickFiles: _pickFiles,
+                        onRemoveFile: (f) => setState(() => _selectedFiles.remove(f)),
+                        onClearFiles: () => setState(() => _selectedFiles.clear()),
+                        transferState: _transferState,
+                        activeFileName: _activeFileName,
+                        transferredBytes: _transferredBytes,
+                        totalTransferBytes: _totalTransferBytes,
+                        speedBytesPerSec: _speedBytesPerSec,
+                        onCancelTransfer: _cancelTransfer,
+                      ),
+                      ChatHubScreen(peers: _peers),
+                      const HistoryScreen(),
+                      ProfileScreen(
+                        profile: _userProfile,
+                        onProfileUpdated: (key, val) {
+                          if (key == 'display_name') setState(() => _deviceName = val);
+                          if (key == 'theme') widget.onThemeModeChanged(val);
+                          if (key == 'avatar_path') {
+                            setState(() {
+                              _userProfile = UserProfile(
+                                displayName: _userProfile.displayName,
+                                deviceName: _userProfile.deviceName,
+                                avatarIndex: _userProfile.avatarIndex,
+                                avatarPath: val,
+                                bio: _userProfile.bio,
+                                theme: _userProfile.theme,
+                                accent: _userProfile.accent,
+                                visibility: _userProfile.visibility,
+                              );
+                            });
+                          }
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+                MinimalNavigationBar(
+                  currentIndex: _currentTabIndex,
+                  onTabSelected: (index) => setState(() => _currentTabIndex = index),
+                  activeTransfersCount: _selectedFiles.length,
+                  unreadChatCount: 0,
+                ),
               ],
             ),
-          ),
+
+            // Active Transfer Stream or Completion Burst Modal
+            if (_transferState != TransferState.idle &&
+                _transferState != TransferState.discovering &&
+                _transferState != TransferState.waitingForAccept)
+              _buildTransferOverlay(theme),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildHeader() {
+  // ---------------------------------------------------------------------------
+  // HEADER
+  // ---------------------------------------------------------------------------
+  Widget _buildHeader(AuraTheme theme) {
     String visText = 'Everyone';
     if (_visibilityMode == VisibilityMode.receivingOff) visText = 'Off';
     if (_visibilityMode == VisibilityMode.contactsOnly) visText = 'Contacts';
     if (_visibilityMode == VisibilityMode.temporaryEveryone) {
-      visText = '${_temporarySecondsRemaining ~/ 60}:${(_temporarySecondsRemaining % 60).toString().padLeft(2, '0')}';
+      visText =
+          '${_temporarySecondsRemaining ~/ 60}:${(_temporarySecondsRemaining % 60).toString().padLeft(2, '0')}';
     }
 
-    final hasAvatar = _userProfile.avatarPath.isNotEmpty && File(_userProfile.avatarPath).existsSync();
+    final hasAvatar =
+        _userProfile.avatarPath.isNotEmpty && File(_userProfile.avatarPath).existsSync();
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.03),
-        border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.08), width: 0.7)),
+        color: theme.background,
+        border: Border(bottom: BorderSide(color: theme.border, width: 1.0)),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          GestureDetector(
-            onTap: () => setState(() => _currentTabIndex = 4),
-            child: Row(
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.white.withValues(alpha: 0.08),
-                    border: Border.all(color: Colors.white.withValues(alpha: 0.22), width: 0.8),
+          Row(
+            children: [
+              Text(
+                'AuraDrop',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                  color: theme.textPrimary,
+                  letterSpacing: -0.5,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: theme.subtleHighlight,
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: theme.border, width: 0.8),
+                ),
+                child: Text(
+                  'v6.0',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: theme.textSecondary,
                   ),
-                  child: hasAvatar
-                      ? ClipOval(
-                          child: Image.file(
-                            File(_userProfile.avatarPath),
-                            width: 36,
-                            height: 36,
-                            fit: BoxFit.cover,
-                          ),
-                        )
-                      : Center(
-                          child: Text(
-                            _deviceName.isNotEmpty ? _deviceName.substring(0, 1).toUpperCase() : 'A',
-                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: Colors.white),
-                          ),
-                        ),
                 ),
-                const SizedBox(width: 10),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('AuraDrop V5', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: Colors.white, letterSpacing: -0.3)),
-                    Text('$_deviceName • $_localIp', style: const TextStyle(fontSize: 11, color: Color(0xFF8A8A8A))),
-                  ],
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
           Row(
             children: [
+              // Visibility Mode Pill
               GestureDetector(
                 onTap: () {
-                  // Cycle visibility mode
                   final modes = VisibilityMode.values;
                   final nextIdx = (_visibilityMode.index + 1) % modes.length;
                   _applyVisibilityMode(modes[nextIdx]);
@@ -741,9 +724,9 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                   decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.07),
+                    color: theme.cardBackground,
                     borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Colors.white.withValues(alpha: 0.14), width: 0.6),
+                    border: Border.all(color: theme.border, width: 0.8),
                   ),
                   child: Row(
                     children: [
@@ -752,7 +735,9 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                         height: 6,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: _visibilityMode != VisibilityMode.receivingOff ? Colors.white : Colors.white38,
+                          color: _visibilityMode != VisibilityMode.receivingOff
+                              ? theme.textPrimary
+                              : theme.textSecondary,
                         ),
                       ),
                       const SizedBox(width: 6),
@@ -761,7 +746,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                         style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w700,
-                          color: _visibilityMode != VisibilityMode.receivingOff ? Colors.white : Colors.white54,
+                          color: theme.textPrimary,
                         ),
                       ),
                     ],
@@ -769,8 +754,12 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                 ),
               ),
               const SizedBox(width: 8),
-              GestureDetector(
-                onTap: () {
+
+              // Settings Button
+              MinimalIconButton(
+                icon: Icons.tune_rounded,
+                size: 32,
+                onPressed: () {
                   HapticFeedback.lightImpact();
                   showModalBottomSheet(
                     context: context,
@@ -779,32 +768,59 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                     builder: (ctx) => Container(
                       height: MediaQuery.of(context).size.height * 0.85,
                       decoration: BoxDecoration(
-                        color: const Color(0xFF0C0C0E),
-                        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-                        border: Border.all(color: Colors.white.withValues(alpha: 0.12), width: 0.7),
+                        color: theme.cardBackground,
+                        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+                        border: Border.all(color: theme.border, width: 1.0),
                       ),
                       child: SettingsScreen(
                         currentVisibility: _visibilityMode,
                         onVisibilityChanged: _applyVisibilityMode,
                         temporarySecondsRemaining: _temporarySecondsRemaining,
-                        accentColor: widget.accentColor,
+                        accentColor: theme.textPrimary,
                         animationSettings: _animationSettings,
-                        onAnimationSettingsChanged: (s) => setState(() => _animationSettings = s),
+                        onAnimationSettingsChanged: (s) =>
+                            setState(() => _animationSettings = s),
+                        currentThemeMode: widget.currentThemeMode,
+                        onThemeModeChanged: widget.onThemeModeChanged,
                       ),
                     ),
                   );
                 },
+              ),
+              const SizedBox(width: 8),
+
+              // Profile Avatar Button
+              GestureDetector(
+                onTap: () => setState(() => _currentTabIndex = 4),
                 child: Container(
                   width: 32,
                   height: 32,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: Colors.white.withValues(alpha: 0.06),
-                    border: Border.all(color: Colors.white.withValues(alpha: 0.12), width: 0.6),
+                    color: theme.cardBackground,
+                    border: Border.all(color: theme.border, width: 1.0),
                   ),
-                  child: const Center(
-                    child: Icon(Icons.tune_rounded, color: Colors.white70, size: 16),
-                  ),
+                  child: hasAvatar
+                      ? ClipOval(
+                          child: Image.file(
+                            File(_userProfile.avatarPath),
+                            width: 32,
+                            height: 32,
+                            fit: BoxFit.cover,
+                          ),
+                        )
+                      : Center(
+                          child: Text(
+                            _deviceName.isNotEmpty
+                                ? _deviceName.substring(0, 1).toUpperCase()
+                                : 'A',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                              color: theme.textPrimary,
+                            ),
+                          ),
+                        ),
                 ),
               ),
             ],
@@ -815,137 +831,247 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
   }
 
   // ---------------------------------------------------------------------------
-  // RADAR & DISCOVERY SCREEN
+  // HOME SCREEN (HERO GLOBE + DISCOVERY + SHARE TRAY)
   // ---------------------------------------------------------------------------
-  Widget _buildRadarScreen() {
+  Widget _buildHomeScreen(AuraTheme theme) {
     final peerList = _peers.values.toList();
-    peerList.sort((a, b) {
-      if (a.isTrusted && !b.isTrusted) return -1;
-      if (!a.isTrusted && b.isTrusted) return 1;
-      return a.name.compareTo(b.name);
-    });
+    final globeSize = math.min(
+      MediaQuery.of(context).size.width * 0.76,
+      MediaQuery.of(context).size.height * 0.36,
+    );
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final center = Offset(constraints.maxWidth / 2, constraints.maxHeight * 0.42);
-        final maxRadius = math.min(constraints.maxWidth, constraints.maxHeight) * 0.40;
-
-        return Stack(
+        return Column(
           children: [
-            CustomPaint(
-              size: Size(constraints.maxWidth, constraints.maxHeight),
-              painter: GlassDiscoveryRadarPainter(
-                angle: _radarController.value * 2 * math.pi,
-                pulseFactor: _pulseController.value,
-                accentColor: widget.accentColor,
-                isScanning: _isDiscovering && _transferState == TransferState.idle,
+            // Status bar
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+              child: Row(
+                children: [
+                  Container(
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: _isDiscovering ? theme.textPrimary : theme.textSecondary,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    _visibilityMode == VisibilityMode.receivingOff
+                        ? 'Visibility is turned off'
+                        : (_peers.isEmpty
+                            ? 'Searching for nearby devices...'
+                            : '${_peers.length} nearby device${_peers.length == 1 ? '' : 's'} discovered'),
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: theme.textSecondary,
+                    ),
+                  ),
+                  const Spacer(),
+                  if (_isDiscovering)
+                    GestureDetector(
+                      onTap: () => _applyVisibilityMode(_visibilityMode),
+                      child: Icon(Icons.refresh_rounded, size: 16, color: theme.textSecondary),
+                    ),
+                ],
               ),
             ),
 
-            // Center Orb
-            Positioned(
-              left: center.dx - 42,
-              top: center.dy - 42,
-              child: AuraOrb(
-                pulseFactor: _pulseController.value,
-                accentColor: widget.accentColor,
-                isScanning: _isDiscovering,
-                onTap: _pickFiles,
+            // Globe Center Visualizer
+            Expanded(
+              child: SingleChildScrollView(
+                physics: const BouncingScrollPhysics(),
+                child: Column(
+                  children: [
+                    const SizedBox(height: 6),
+                    HeroGlobe(
+                      peers: _peers,
+                      selectedPeerId: _selectedPeer?.id,
+                      onPeerSelected: (peer) {
+                        setState(() {
+                          _selectedPeer = _selectedPeer?.id == peer.id ? null : peer;
+                        });
+                      },
+                      isTransferring: _transferState == TransferState.transferring ||
+                          _transferState == TransferState.verifying,
+                      size: globeSize,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Drag globe to rotate • Tap device node to select',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: theme.textSecondary.withValues(alpha: 0.7),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+
+                    // Selected Peer Card or Nearby List
+                    if (_selectedPeer != null)
+                      _buildSelectedPeerCard(_selectedPeer!, theme)
+                    else if (peerList.isNotEmpty)
+                      _buildNearbyPeerChips(peerList, theme)
+                    else
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
+                        child: Text(
+                          'No devices found yet. Ensure Wi-Fi is on and nearby devices have AuraDrop open.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 11, color: theme.textSecondary, height: 1.4),
+                        ),
+                      ),
+                    const SizedBox(height: 16),
+                  ],
+                ),
               ),
             ),
 
-            // Discovered Peers positioned in orbit with SpringButton physics
-            for (int i = 0; i < peerList.length; i++)
-              _buildOrbitPeerCard(peerList[i], i, peerList.length, center, maxRadius),
-
-            // Floating Share Tray
-            Positioned(
-              left: 16,
-              right: 16,
-              bottom: 16,
-              child: _buildFloatingShareTray(),
-            ),
+            // Docked Share Tray
+            _buildDockedShareTray(theme),
           ],
         );
       },
     );
   }
 
-  Widget _buildOrbitPeerCard(PeerDevice peer, int index, int total, Offset center, double radius) {
-    final double step = (2 * math.pi) / total;
-    final double angle = index * step - (math.pi / 2);
-    final double nodeRadius = radius * (0.70 + (index % 2) * 0.22);
-    final double dx = center.dx + nodeRadius * math.cos(angle) - 34;
-    final double dy = center.dy + nodeRadius * math.sin(angle) - 34;
-
-    return Positioned(
-      left: dx,
-      top: dy,
-      child: SpringButton(
-        onTap: () => _sendFilesToPeer(peer, tapOrigin: Offset(dx + 34, dy + 34)),
-        child: GestureDetector(
-          onLongPress: () {
-            HapticFeedback.mediumImpact();
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => ChatScreen(peer: peer, accentColor: widget.accentColor),
+  Widget _buildSelectedPeerCard(PeerDevice peer, AuraTheme theme) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: MinimalCard(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          children: [
+            MinimalPeerAvatar(peer: peer, size: 44, isSelected: true),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    peer.name,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: theme.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${peer.platform.toUpperCase()} • ${peer.ip}',
+                    style: TextStyle(fontSize: 11, color: theme.textSecondary),
+                  ),
+                ],
               ),
-            );
-          },
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              PeerAvatar(peer: peer, size: 62, accentColor: widget.accentColor),
-              const SizedBox(height: 6),
-              Container(
-                constraints: const BoxConstraints(maxWidth: 80),
-                child: Text(
-                  peer.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white),
-                ),
-              ),
-              const SizedBox(height: 2),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.08),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.chat_bubble_outline, size: 9, color: widget.accentColor),
-                    const SizedBox(width: 3),
-                    Text('Chat', style: TextStyle(fontSize: 8, fontWeight: FontWeight.bold, color: widget.accentColor)),
-                  ],
-                ),
-              ),
-            ],
-          ),
+            ),
+            MinimalIconButton(
+              icon: Icons.chat_bubble_outline_rounded,
+              size: 36,
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => ChatScreen(peer: peer)),
+                );
+              },
+            ),
+            const SizedBox(width: 8),
+            MinimalButton(
+              text: _selectedFiles.isNotEmpty ? 'Send (${_selectedFiles.length})' : 'Send',
+              icon: Icons.arrow_upward_rounded,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              onPressed: () => _sendFilesToPeer(peer),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildFloatingShareTray() {
+  Widget _buildNearbyPeerChips(List<PeerDevice> peers, AuraTheme theme) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Nearby Devices',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: theme.textSecondary,
+              letterSpacing: 0.4,
+            ),
+          ),
+          const SizedBox(height: 8),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            child: Row(
+              children: peers.map((p) {
+                final isSelected = _selectedPeer?.id == p.id;
+                return GestureDetector(
+                  onTap: () {
+                    HapticFeedback.selectionClick();
+                    setState(() => _selectedPeer = isSelected ? null : p);
+                  },
+                  child: Container(
+                    margin: const EdgeInsets.only(right: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: isSelected ? theme.actionBackground : theme.cardBackground,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: isSelected ? theme.actionBackground : theme.border,
+                        width: 1.0,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        MinimalPeerAvatar(peer: p, size: 28, isSelected: isSelected),
+                        const SizedBox(width: 8),
+                        Text(
+                          p.name,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: isSelected ? theme.actionText : theme.textPrimary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDockedShareTray(AuraTheme theme) {
     final count = _selectedFiles.length;
     final totalSize = _selectedFiles.fold(0, (acc, f) => acc + f.size);
 
-    return GlassCard(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      decoration: BoxDecoration(
+        color: theme.background,
+        border: Border(top: BorderSide(color: theme.border, width: 1.0)),
+      ),
       child: Row(
         children: [
           Container(
-            padding: const EdgeInsets.all(10),
+            padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: widget.accentColor.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(12),
+              color: theme.cardBackground,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: theme.border, width: 0.8),
             ),
-            child: Icon(Icons.attachment_rounded, color: widget.accentColor, size: 20),
+            child: Icon(Icons.attach_file_rounded, color: theme.textPrimary, size: 18),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -954,51 +1080,65 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  count > 0 ? '$count file(s) selected' : 'Ready to share',
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white),
+                  count > 0 ? '$count file(s) staged' : 'Ready to share',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: theme.textPrimary,
+                  ),
                 ),
                 Text(
-                  count > 0 ? _formatBytes(totalSize) : 'Tap "+ Add" to pick files or send',
-                  style: const TextStyle(fontSize: 11, color: Colors.white54),
+                  count > 0 ? _formatBytes(totalSize) : 'Tap "+ Add" to choose files',
+                  style: TextStyle(fontSize: 11, color: theme.textSecondary),
                 ),
               ],
             ),
           ),
-          GlassButton(
+          if (count > 0) ...[
+            TextButton(
+              onPressed: () {
+                HapticFeedback.lightImpact();
+                setState(() => _selectedFiles.clear());
+              },
+              child: Text(
+                'Clear',
+                style: TextStyle(fontSize: 12, color: theme.textSecondary),
+              ),
+            ),
+            const SizedBox(width: 4),
+          ],
+          MinimalButton(
             text: 'Add',
-            icon: Icons.add,
-            accentColor: widget.accentColor,
-            onPressed: _pickFiles,
+            icon: Icons.add_rounded,
+            isPrimary: _selectedPeer == null || count == 0,
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            onPressed: _pickFiles,
           ),
+          if (_selectedPeer != null && count > 0) ...[
+            const SizedBox(width: 8),
+            MinimalButton(
+              text: 'Send',
+              icon: Icons.arrow_upward_rounded,
+              isPrimary: true,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              onPressed: () => _sendFilesToPeer(_selectedPeer!),
+            ),
+          ],
         ],
       ),
     );
   }
 
   // ---------------------------------------------------------------------------
-  // PREMIUM FLOATING BOTTOM NAVIGATION BAR
-  // ---------------------------------------------------------------------------
-  Widget _buildGlassBottomNav() {
-    return PremiumNavigationBar(
-      currentIndex: _currentTabIndex,
-      onTabSelected: (index) {
-        setState(() => _currentTabIndex = index);
-      },
-      activeTransfersCount: _selectedFiles.length,
-      unreadChatCount: 0,
-    );
-  }
-
-  // ---------------------------------------------------------------------------
   // TRANSFER OVERLAY (DATA STREAM OR COMPLETION MODAL)
   // ---------------------------------------------------------------------------
-  Widget _buildTransferOverlay() {
+  Widget _buildTransferOverlay(AuraTheme theme) {
     return Container(
-      color: Colors.black.withValues(alpha: 0.82),
+      color: Colors.black.withValues(alpha: 0.85),
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Center(
-        child: _transferState == TransferState.completed || _transferState == TransferState.failed
+        child: _transferState == TransferState.completed ||
+                _transferState == TransferState.failed
             ? AuraCompletionModal(
                 isSuccess: _transferState == TransferState.completed,
                 fileName: _activeFileName,
@@ -1006,7 +1146,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                 sha256: _lastSha256,
                 localPath: _lastSavedPath,
                 errorMessage: _lastErrorMessage,
-                accentColor: widget.accentColor,
+                accentColor: theme.textPrimary,
                 onOpen: () async {
                   if (_lastSavedPath.isNotEmpty) {
                     await NativeBridgeService.openFile(_lastSavedPath);
@@ -1017,7 +1157,6 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                   });
                 },
                 onShare: () async {
-                  // Re-share or open
                   if (_lastSavedPath.isNotEmpty) {
                     await NativeBridgeService.openFile(_lastSavedPath);
                   }
@@ -1037,7 +1176,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                 totalBytes: _totalTransferBytes,
                 speedBytesPerSec: _speedBytesPerSec,
                 fileName: _activeFileName,
-                accentColor: widget.accentColor,
+                accentColor: theme.textPrimary,
                 isSending: _isSender,
                 onCancel: _cancelTransfer,
               ),
