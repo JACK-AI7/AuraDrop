@@ -1,6 +1,33 @@
 import { Pool, PoolConfig } from 'pg';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import dns from 'node:dns';
+
+// Ensure IPv4 lookup priority across Node.js environments where IPv6 WAN is unreachable
+try {
+  const origLookup = dns.lookup;
+  // @ts-ignore
+  dns.lookup = (hostname: string, options: any, callback: any) => {
+    let cb = callback;
+    let opts = options;
+    if (typeof options === 'function') {
+      cb = options;
+      opts = {};
+    }
+    return origLookup(hostname, { ...opts, family: 4 }, (err, address, family) => {
+      if (err) return cb(err);
+      if (opts && opts.all) {
+        if (Array.isArray(address)) {
+          return cb(null, address.filter((a: any) => a.family === 4));
+        }
+        return cb(null, [{ address, family: 4 }]);
+      }
+      return cb(null, address, family);
+    });
+  };
+} catch {
+  // Ignore
+}
 
 export interface UserRow {
   id: string;
@@ -116,6 +143,7 @@ export class NeonDatabaseClient {
   private memSecurityEvents = new Map<string, any>();
 
   constructor(connectionString?: string) {
+    this.tryLoadEnv();
     const connStr = connectionString || process.env.DATABASE_URL;
     if (connStr) {
       try {
@@ -123,7 +151,7 @@ export class NeonDatabaseClient {
           connectionString: connStr,
           max: 20,
           idleTimeoutMillis: 30000,
-          connectionTimeoutMillis: 5000,
+          connectionTimeoutMillis: 10000,
         };
 
         if (connStr.includes('neon') || connStr.includes('sslmode=require') || !connStr.includes('localhost')) {
@@ -133,6 +161,42 @@ export class NeonDatabaseClient {
         this.pool = new Pool(poolConfig);
       } catch (err) {
         console.warn('[NeonDatabaseClient] Warning initializing pool:', err);
+      }
+    }
+  }
+
+  private tryLoadEnv(): void {
+    if (process.env.DATABASE_URL) return;
+    const candidates = [
+      path.resolve(process.cwd(), '.env'),
+      path.resolve(process.cwd(), 'apps/backend/.env'),
+      path.resolve(__dirname, '../../../.env'),
+      path.resolve(__dirname, '../../../apps/backend/.env'),
+      path.resolve(__dirname, '../../.env'),
+    ];
+    for (const p of candidates) {
+      if (fs.existsSync(p)) {
+        try {
+          const content = fs.readFileSync(p, 'utf8');
+          for (const line of content.split('\n')) {
+            const trimmed = line.trim();
+            if (trimmed && !trimmed.startsWith('#')) {
+              const eq = trimmed.indexOf('=');
+              if (eq > 0) {
+                const k = trimmed.slice(0, eq).trim();
+                let v = trimmed.slice(eq + 1).trim();
+                if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+                  v = v.slice(1, -1);
+                }
+                if (!process.env[k]) {
+                  process.env[k] = v;
+                }
+              }
+            }
+          }
+        } catch {
+          // Ignore
+        }
       }
     }
   }
@@ -150,9 +214,20 @@ export class NeonDatabaseClient {
 
       // Check or run migrations
       try {
-        const migrationPath = path.resolve(__dirname, '../migrations/001_initial_schema.sql');
-        if (fs.existsSync(migrationPath)) {
-          const sql = fs.readFileSync(migrationPath, 'utf8');
+        const migrationPaths = [
+          path.resolve(__dirname, '../migrations/001_initial_schema.sql'),
+          path.resolve(__dirname, '../../packages/database/migrations/001_initial_schema.sql'),
+          path.resolve(process.cwd(), 'packages/database/migrations/001_initial_schema.sql'),
+        ];
+        let sql = '';
+        for (const mp of migrationPaths) {
+          if (fs.existsSync(mp)) {
+            sql = fs.readFileSync(mp, 'utf8');
+            break;
+          }
+        }
+
+        if (sql) {
           await client.query(sql);
           console.log('[NeonDatabaseClient] Executed migration 001_initial_schema.sql successfully.');
         }
