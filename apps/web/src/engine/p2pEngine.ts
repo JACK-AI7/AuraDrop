@@ -69,24 +69,29 @@ export class P2PEngine {
 
   // WebRTC peer connections
   private peerConnections = new Map<string, RTCPeerConnection>();
-  private dataChannels = new Map<string, RTCDataChannel>();
-
   private constructor() {
-    // Generate persistent local ID
-    const storedId = localStorage.getItem('auradrop_local_device_id');
-    if (storedId) {
-      this.localId = storedId;
+    // Generate unique session-based local ID for each window/tab
+    const storedSessionId = sessionStorage.getItem('auradrop_session_device_id');
+    if (storedSessionId) {
+      this.localId = storedSessionId;
     } else {
-      this.localId = `web_${Math.random().toString(36).substring(2, 9)}`;
-      localStorage.setItem('auradrop_local_device_id', this.localId);
+      this.localId = `web_${Math.random().toString(36).substring(2, 8)}`;
+      sessionStorage.setItem('auradrop_session_device_id', this.localId);
     }
 
+    const urlParams = new URLSearchParams(window.location.search);
+    const roleParam = urlParams.get('role');
     const platform = navigator.userAgent.includes('Mac')
-      ? 'Mac'
+      ? 'MacBook Pro'
       : navigator.userAgent.includes('Windows')
-      ? 'Windows'
-      : 'Linux';
-    this.localName = `${platform} Browser (${this.localId.substring(4, 8)})`;
+      ? 'Windows PC'
+      : 'Linux Client';
+    
+    if (roleParam === 'receiver') {
+      this.localName = `Pixel 8 Pro (Nearby Receiver)`;
+    } else {
+      this.localName = `${platform} (${this.localId.substring(4, 8)})`;
+    }
 
     this.initBroadcastChannel();
   }
