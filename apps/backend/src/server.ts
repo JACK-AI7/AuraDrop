@@ -52,7 +52,7 @@ export class BackendServer {
     });
   }
 
-  private async handleHttpRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  public async handleHttpRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     // Security Headers (Helmet-style)
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
@@ -73,6 +73,26 @@ export class BackendServer {
     const pathname = url.pathname;
 
     try {
+      // Root / Status info
+      if ((pathname === '/' || pathname === '/api') && req.method === 'GET') {
+        this.sendJson(res, 200, {
+          service: 'AuraDrop Backend API Gateway',
+          status: 'online',
+          version: '11.0.0',
+          timestamp: Date.now(),
+          endpoints: [
+            '/health',
+            '/presence/active',
+            '/auth/register',
+            '/auth/login',
+            '/devices/register',
+            '/sessions/active',
+            '/analytics/summary'
+          ]
+        });
+        return;
+      }
+
       // Health / Status
       if (pathname === '/health' && req.method === 'GET') {
         this.sendJson(res, 200, { status: 'healthy', timestamp: Date.now(), service: 'AuraDrop-Backend' });
