@@ -7,19 +7,24 @@ import { ProximityRipple } from './components/ProximityRipple';
 import { DockedShareTray } from './components/DockedShareTray';
 import { DiagnosticsView } from './components/DiagnosticsView';
 import { DevicePairModal } from './components/DevicePairModal';
+import { ReceiverView } from './components/ReceiverView';
 import { ChatModal, SettingsModal, ProfileModal } from './components/Modals';
-import { P2PEngine, TransferEvent } from './engine/p2pEngine';
-import { PeerDevice, PickedFile, TransferProgress, VisibilityMode } from './types';
+import { TransferEngine, TransferEngineEvent } from './engine/transferEngine';
+import { TransferStorage } from './engine/transferStorage';
+import { PeerDevice, PickedFile, TransferProgress, TransferRecord, VisibilityMode } from './types';
 
 export const App: React.FC = () => {
-  const engine = P2PEngine.getInstance();
+  const engine = TransferEngine.getInstance();
+  const storage = TransferStorage.getInstance();
 
-  // Navigation state matching media_1791373512430.png:
-  // 'globe' | 'transfers' | 'devices' | 'chat' | 'specs'
+  const urlParams = new URLSearchParams(window.location.search);
+  const isReceiverRole = urlParams.get('role') === 'receiver';
+
+  // Navigation tab: 'globe' | 'transfers' | 'devices' | 'chat' | 'specs'
   const [currentTab, setCurrentTab] = useState<ActiveTab>('globe');
   const [visibility, setVisibility] = useState<VisibilityMode>('everyone');
 
-  // Real Peers from P2PEngine
+  // Real Discovered Peers from TransferEngine
   const [peers, setPeers] = useState<PeerDevice[]>([]);
   const [selectedPeer, setSelectedPeer] = useState<PeerDevice | null>(null);
 
@@ -27,37 +32,30 @@ export const App: React.FC = () => {
   const [stagedFiles, setStagedFiles] = useState<PickedFile[]>([]);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
 
-  // Real AirDrop Card State (pops down on real incoming request)
-  const [isAirDropCardOpen, setIsAirDropCardOpen] = useState(false);
-  const [incomingTransferMeta, setIncomingTransferMeta] = useState<{
+  // Real Incoming Request Meta for the popping AirDrop card
+  const [incomingMeta, setIncomingMeta] = useState<{
     transferId: string;
     senderName: string;
     fileName: string;
     fileSize: number;
     sizeFormatted: string;
+    isOpen: boolean;
   }>({
     transferId: '',
     senderName: '',
     fileName: '',
     fileSize: 0,
     sizeFormatted: '',
+    isOpen: false,
   });
 
   // Real Transfer Progress
   const [transferProgress, setTransferProgress] = useState<TransferProgress | null>(null);
 
-  // Real Transfer History
-  const [transferHistory, setTransferHistory] = useState<Array<{
-    id: string;
-    fileName: string;
-    fileSize: number;
-    sha256?: string;
-    timestamp: Date;
-    isIncoming: boolean;
-    peerName: string;
-  }>>([]);
+  // Real Transfer History loaded from persistent TransferStorage
+  const [transferHistory, setTransferHistory] = useState<TransferRecord[]>(() => storage.getHistory());
 
-  // ReactBits proximity shockwave trigger
+  // Proximity shockwave ripple trigger
   const [rippleKey, setRippleKey] = useState(0);
 
   // Modals
@@ -80,79 +78,66 @@ export const App: React.FC = () => {
       });
     });
 
-    // 2. Transfer event subscription
-    const unsubscribeTransfers = engine.onTransferEvent((evt: TransferEvent) => {
+    // 2. Real transfer event subscription
+    const unsubscribeEvents = engine.onEngineEvent((evt: TransferEngineEvent) => {
       setRippleKey((prev) => prev + 1);
 
       if (evt.type === 'request') {
-        // Real incoming share request from another peer
-        const formattedSize =
+        const formatted =
           evt.fileSize < 1024 * 1024
             ? `${(evt.fileSize / 1024).toFixed(1)} KB`
             : `${(evt.fileSize / (1024 * 1024)).toFixed(1)} MB`;
 
-        setIncomingTransferMeta({
+        setIncomingMeta({
           transferId: evt.transferId,
           senderName: evt.senderName,
           fileName: evt.fileName,
           fileSize: evt.fileSize,
-          sizeFormatted: formattedSize,
+          sizeFormatted: formatted,
+          isOpen: true,
         });
-
-        setIsAirDropCardOpen(true);
       } else if (evt.type === 'progress') {
-        // Real byte stream progress
         setTransferProgress({
           transferId: evt.transferId,
           fileName: evt.fileName,
           fileSize: evt.fileSize,
           transferredBytes: evt.transferredBytes || 0,
+          verifiedBytes: evt.verifiedBytes || 0,
           speedBytesPerSec: evt.speedBytesPerSec || 0,
           etaSeconds: evt.etaSeconds || 0,
-          state: 'transferring',
+          state: evt.state || 'TRANSFERRING',
           isIncoming: true,
           peerName: evt.senderName,
         });
       } else if (evt.type === 'completed') {
-        // Real completed transfer with SHA-256
         setTransferProgress((prev) =>
           prev
             ? {
                 ...prev,
                 transferredBytes: evt.fileSize,
-                state: 'completed',
+                verifiedBytes: evt.fileSize,
+                state: 'COMPLETED',
                 sha256: evt.sha256,
               }
             : null
         );
-
-        setTransferHistory((prev) => [
-          {
-            id: evt.transferId,
-            fileName: evt.fileName,
-            fileSize: evt.fileSize,
-            sha256: evt.sha256,
-            timestamp: new Date(),
-            isIncoming: true,
-            peerName: evt.senderName,
-          },
-          ...prev,
-        ]);
+        // Refresh transfer history ledger
+        setTransferHistory(storage.getHistory());
       } else if (evt.type === 'error') {
-        alert(evt.error || 'Transfer failed');
-        setIsAirDropCardOpen(false);
+        alert(evt.error || 'Transfer error occurred');
+        setIncomingMeta((prev) => ({ ...prev, isOpen: false }));
         setTransferProgress(null);
       }
     });
 
     return () => {
       unsubscribePeers();
-      unsubscribeTransfers();
+      unsubscribeEvents();
     };
-  }, [engine]);
+  }, [engine, storage]);
 
   // ---------------------------------------------------------------------------
-  // DRAG & DROP FOR REAL FILES
+  // REAL DRAG & DROP
   // ---------------------------------------------------------------------------
   useEffect(() => {
     const handleDragOver = (e: DragEvent) => {
@@ -200,7 +185,7 @@ export const App: React.FC = () => {
   };
 
   // ---------------------------------------------------------------------------
-  // REAL SEND & REAL ACCEPT ACTIONS
+  // REAL SEND & REAL ACCEPT PIPELINES
   // ---------------------------------------------------------------------------
   const handleSendRealFiles = async () => {
     if (!selectedPeer || stagedFiles.length === 0) return;
@@ -211,7 +196,7 @@ export const App: React.FC = () => {
 
     try {
       await engine.startOutgoingTransfer(selectedPeer, fileToTransfer);
-      // Remove sent file from staging
+      // Remove sent file from staging tray
       setStagedFiles((prev) => prev.slice(1));
     } catch (err: any) {
       alert(`Transfer failed: ${err.message}`);
@@ -225,17 +210,17 @@ export const App: React.FC = () => {
 
   const handleDeclineRealTransfer = () => {
     engine.declineIncomingTransfer();
-    setIsAirDropCardOpen(false);
+    setIncomingMeta((prev) => ({ ...prev, isOpen: false }));
     setTransferProgress(null);
   };
 
   const handleDoneTransfer = () => {
-    setIsAirDropCardOpen(false);
+    setIncomingMeta((prev) => ({ ...prev, isOpen: false }));
     setTransferProgress(null);
   };
 
-  // Open a paired second window side-by-side to test real P2P transfer
-  const handleOpenTestWindow = () => {
+  // Open Receiver Window side-by-side (Section 27)
+  const handleOpenReceiverWindow = () => {
     const receiverUrl = `${window.location.origin}${window.location.pathname}?role=receiver`;
     window.open(receiverUrl, '_blank', 'width=560,height=760');
   };
@@ -261,12 +246,12 @@ export const App: React.FC = () => {
       {/* 2. REACTBITS PROXIMITY SHOCKWAVE LAYER */}
       <ProximityRipple triggerKey={rippleKey} color="#0A84FF" />
 
-      {/* 3. POPPING AIRDROP HEADS-UP CARD (Real System Request from reference) */}
+      {/* 3. POPPING AIRDROP HEADS-UP CARD (Media Reference 1791372100396) */}
       <AirDropNotification
-        isOpen={isAirDropCardOpen}
-        senderName={incomingTransferMeta.senderName}
+        isOpen={incomingMeta.isOpen}
+        senderName={incomingMeta.senderName}
         filesCount={1}
-        totalSizeText={incomingTransferMeta.sizeFormatted}
+        totalSizeText={incomingMeta.sizeFormatted}
         onAccept={handleAcceptRealTransfer}
         onDecline={handleDeclineRealTransfer}
         transferProgress={transferProgress}
@@ -295,17 +280,19 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      {/* 5. FLOATING VERTICAL PILL SIDE RAIL (Matching media_1791373512430.png) */}
-      <FloatingSideRail
-        currentTab={currentTab}
-        onSelectTab={(tab) => {
-          setCurrentTab(tab);
-          if (tab === 'devices') setIsPairModalOpen(true);
-          if (tab === 'chat') setIsChatOpen(true);
-        }}
-        activeTransfersCount={stagedFiles.length}
-        discoveredPeersCount={peers.length}
-      />
+      {/* 5. FLOATING 5-DOT VERTICAL PILL SIDE RAIL (Media Reference 1791373512430) */}
+      {!isReceiverRole && (
+        <FloatingSideRail
+          currentTab={currentTab}
+          onSelectTab={(tab) => {
+            setCurrentTab(tab);
+            if (tab === 'devices') setIsPairModalOpen(true);
+            if (tab === 'chat') setIsChatOpen(true);
+          }}
+          activeTransfersCount={stagedFiles.length}
+          discoveredPeersCount={peers.length}
+        />
+      )}
 
       {/* 6. MINIMAL HEADER */}
       <header
@@ -337,34 +324,35 @@ export const App: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          {/* Pair / Connect Second Device Quick Action */}
-          <button
-            onClick={handleOpenTestWindow}
-            title="Open second window to test real bidirectional transfer"
-            style={{
-              background: '#16161A',
-              border: '1px solid #242428',
-              borderRadius: '16px',
-              padding: '6px 14px',
-              color: '#0A84FF',
-              fontSize: '11px',
-              fontWeight: 700,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              transition: 'all 0.2s ease',
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.borderColor = '#0A84FF')}
-            onMouseLeave={(e) => (e.currentTarget.style.borderColor = '#242428')}
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
-              <line x1="8" y1="21" x2="16" y2="21" />
-              <line x1="12" y1="17" x2="12" y2="21" />
-            </svg>
-            Open Receiver Window
-          </button>
+          {/* Receiver Window Action */}
+          {!isReceiverRole && (
+            <button
+              onClick={handleOpenReceiverWindow}
+              title="Open dedicated Receiver Window side-by-side"
+              style={{
+                background: '#16161A',
+                border: '1px solid #242428',
+                borderRadius: '16px',
+                padding: '6px 14px',
+                color: '#0A84FF',
+                fontSize: '11px',
+                fontWeight: 700,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                transition: 'all 0.2s ease',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.borderColor = '#0A84FF')}
+              onMouseLeave={(e) => (e.currentTarget.style.borderColor = '#242428')}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                <line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" />
+              </svg>
+              Open Receiver Window
+            </button>
+          )}
 
           {/* Visibility Pill */}
           <div
@@ -475,7 +463,7 @@ export const App: React.FC = () => {
             {visibility === 'off'
               ? 'Receiving is turned off'
               : peers.length === 0
-              ? 'Scanning for local AuraDrop peers... (Open another tab or device to test real P2P transfer)'
+              ? 'Scanning for local AuraDrop peers... (Open Receiver Window to test real transfer)'
               : peers.length === 1
               ? '1 nearby device discovered'
               : `${peers.length} nearby devices discovered`}
@@ -483,16 +471,12 @@ export const App: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <span style={{ fontSize: '11px', color: '#636366' }}>
-            {engine.localName}
-          </span>
-          <span style={{ fontSize: '11px', color: '#34C759', fontWeight: 700 }}>
-            ● READY_TO_TRANSFER
-          </span>
+          <span style={{ fontSize: '11px', color: '#636366' }}>{engine.localName}</span>
+          <span style={{ fontSize: '11px', color: '#34C759', fontWeight: 700 }}>● READY_TO_TRANSFER</span>
         </div>
       </div>
 
-      {/* 8. MAIN VIEWPORT — DEAD CENTER GLOBE */}
+      {/* 8. MAIN VIEWPORT — DEAD CENTER GLOBE OR RECEIVER VIEW */}
       <main
         style={{
           flex: 1,
@@ -504,7 +488,19 @@ export const App: React.FC = () => {
           overflow: 'hidden',
         }}
       >
-        {currentTab === 'specs' ? (
+        {isReceiverRole ? (
+          <ReceiverView
+            localName={engine.localName}
+            visibility={visibility}
+            onVisibilityChange={setVisibility}
+            peersCount={peers.length}
+            transferProgress={transferProgress}
+            onAccept={handleAcceptRealTransfer}
+            onDecline={handleDeclineRealTransfer}
+            onDone={handleDoneTransfer}
+            incomingMeta={incomingMeta}
+          />
+        ) : currentTab === 'specs' ? (
           <DiagnosticsView />
         ) : currentTab === 'transfers' ? (
           <div
@@ -542,7 +538,7 @@ export const App: React.FC = () => {
                     <div>
                       <div style={{ fontSize: '13px', fontWeight: 700 }}>{item.fileName}</div>
                       <div style={{ fontSize: '11px', color: '#8E8E93', marginTop: '2px' }}>
-                        {(item.fileSize / (1024 * 1024)).toFixed(1)} MB • {item.peerName} • {item.timestamp.toLocaleTimeString()}
+                        {(item.fileSize / (1024 * 1024)).toFixed(1)} MB • {item.senderName} → {item.receiverName} • {new Date(item.timestamp).toLocaleTimeString()}
                       </div>
                       {item.sha256 && (
                         <div style={{ fontSize: '10px', color: '#34C759', fontFamily: 'monospace', marginTop: '4px' }}>
@@ -574,7 +570,7 @@ export const App: React.FC = () => {
                 setSelectedPeer((prev) => (prev?.id === p.id ? null : p));
                 setRippleKey((prev) => prev + 1);
               }}
-              isTransferring={transferProgress?.state === 'transferring'}
+              isTransferring={transferProgress?.state === 'TRANSFERRING'}
               size={360}
             />
 
@@ -669,7 +665,7 @@ export const App: React.FC = () => {
                       No nearby peers discovered yet.
                       <div style={{ marginTop: '6px' }}>
                         <button
-                          onClick={handleOpenTestWindow}
+                          onClick={handleOpenReceiverWindow}
                           style={{
                             background: '#0A84FF',
                             border: 'none',
@@ -696,13 +692,15 @@ export const App: React.FC = () => {
       </main>
 
       {/* 9. DOCKED SHARE TRAY AT BOTTOM */}
-      <DockedShareTray
-        files={stagedFiles}
-        onAddFiles={handleRealFilesStaged}
-        onRemoveFile={handleRemoveStagedFile}
-        selectedPeer={selectedPeer}
-        onSend={handleSendRealFiles}
-      />
+      {!isReceiverRole && (
+        <DockedShareTray
+          files={stagedFiles}
+          onAddFiles={handleRealFilesStaged}
+          onRemoveFile={handleRemoveStagedFile}
+          selectedPeer={selectedPeer}
+          onSend={handleSendRealFiles}
+        />
+      )}
 
       {/* 10. MODALS */}
       <DevicePairModal
@@ -711,7 +709,7 @@ export const App: React.FC = () => {
         localId={engine.localId}
         localName={engine.localName}
         peers={peers}
-        onOpenTestWindow={handleOpenTestWindow}
+        onOpenTestWindow={handleOpenReceiverWindow}
       />
       <ChatModal isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} peer={selectedPeer} />
       <SettingsModal
