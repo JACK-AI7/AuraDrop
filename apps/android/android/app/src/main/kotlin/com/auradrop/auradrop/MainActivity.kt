@@ -123,8 +123,10 @@ class MainActivity : FlutterActivity() {
             if (inst != null) {
                 if (accept) {
                     inst.acceptIncomingTransfer(transferId)
+                    inst.sendEvent("notificationAccept", mapOf("transferId" to transferId))
                 } else {
                     inst.declineIncomingTransfer(transferId)
+                    inst.sendEvent("notificationDecline", mapOf("transferId" to transferId))
                 }
             } else {
                 val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -445,6 +447,30 @@ class MainActivity : FlutterActivity() {
                     map["usable"] = downloadsDir.usableSpace
                     map["total"] = downloadsDir.totalSpace
                     result.success(map)
+                }
+                "showSystemIncomingShareNotification" -> {
+                    val transferId = call.argument<String>("transferId") ?: UUID.randomUUID().toString()
+                    val senderName = call.argument<String>("senderName") ?: "Nearby Peer"
+                    val senderDeviceName = call.argument<String>("senderDeviceName") ?: senderName
+                    val totalFiles = call.argument<Int>("totalFiles") ?: 1
+                    val totalBytes = (call.argument<Number>("totalBytes"))?.toLong() ?: 0L
+                    val fileName = call.argument<String>("fileName") ?: "Incoming File"
+
+                    showSystemIncomingShareNotification(
+                        transferId = transferId,
+                        senderName = senderName,
+                        senderDeviceName = senderDeviceName,
+                        totalFiles = totalFiles,
+                        totalBytes = totalBytes,
+                        firstFileName = fileName,
+                        sasCode = "4829 1049"
+                    )
+                    result.success(true)
+                }
+                "showNameDropProximityAlert" -> {
+                    val peerName = call.argument<String>("peerName") ?: "Nearby Peer"
+                    showSystemNameDropProximityNotification(peerName)
+                    result.success(true)
                 }
                 else -> result.notImplemented()
             }
@@ -2098,6 +2124,38 @@ class MainActivity : FlutterActivity() {
 
             nm.notify(System.currentTimeMillis().toInt(), builder.build())
         } catch (e: Exception) {}
+    }
+
+    private fun showSystemNameDropProximityNotification(peerName: String) {
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val openAppIntent = packageManager.getLaunchIntentForPackage(packageName)
+            val openPendingIntent = if (openAppIntent != null) {
+                PendingIntent.getActivity(this, 9999, openAppIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            } else null
+
+            val customView = android.widget.RemoteViews(packageName, R.layout.notification_incoming_share)
+            customView.setTextViewText(R.id.tv_sender_name, peerName)
+            customView.setTextViewText(R.id.tv_file_info, "NameDrop proximity connected • Ready to share")
+            customView.setViewVisibility(R.id.btn_decline_container, android.view.View.GONE)
+
+            val builder = NotificationCompat.Builder(this, INCOMING_REQUEST_CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.stat_sys_download)
+                .setContentTitle("AuraDrop NameDrop")
+                .setContentText("$peerName is nearby • Ready to share")
+                .setSubText("NameDrop")
+                .setPriority(NotificationCompat.PRIORITY_MAX)
+                .setCategory(NotificationCompat.CATEGORY_CALL)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setAutoCancel(true)
+                .setContentIntent(openPendingIntent)
+                .setCustomHeadsUpContentView(customView)
+                .setFullScreenIntent(openPendingIntent, true)
+
+            nm.notify(9999, builder.build())
+        } catch (e: Exception) {
+            Log.e(TAG, "Error posting NameDrop proximity notification: ${e.message}")
+        }
     }
 
     override fun onDestroy() {

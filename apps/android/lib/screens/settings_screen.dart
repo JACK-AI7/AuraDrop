@@ -34,6 +34,9 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  late String _selectedThemeMode;
+  late VisibilityMode _selectedVisibilityMode;
+  late AnimationSettings _selectedAnimationSettings;
   List<Map<String, dynamic>> _trustedPeers = [];
   List<BlockedPeer> _blockedPeers = [];
   bool _isLoadingPeers = true;
@@ -44,6 +47,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
+    _selectedThemeMode = widget.currentThemeMode;
+    _selectedVisibilityMode = widget.currentVisibility;
+    _selectedAnimationSettings = widget.animationSettings;
     _loadAllData();
   }
 
@@ -51,6 +57,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final trusted = await NativeBridgeService.getTrustedPeers();
     final blocked = await NativeBridgeService.getBlockedPeers();
     final info = await NativeBridgeService.getDeviceInfo();
+    final profile = await ProfileRepository().loadProfile();
 
     if (mounted) {
       setState(() {
@@ -58,6 +65,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _blockedPeers = blocked;
         _deviceInfo = info;
         _isLoadingPeers = false;
+        if (profile.theme.isNotEmpty) {
+          _selectedThemeMode = profile.theme;
+        }
+        if (profile.visibility.isNotEmpty) {
+          _selectedVisibilityMode = VisibilityMode.values.firstWhere(
+            (v) => v.name.toLowerCase() == profile.visibility.toLowerCase(),
+            orElse: () => _selectedVisibilityMode,
+          );
+        }
       });
     }
   }
@@ -120,6 +136,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   void _updateSettings(AnimationSettings newSettings) {
+    setState(() {
+      _selectedAnimationSettings = newSettings;
+    });
     widget.onAnimationSettingsChanged(newSettings);
     NativeBridgeService.saveUserProfile(
       'reduced_motion',
@@ -130,7 +149,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = AuraTheme.of(context);
-    final anim = widget.animationSettings;
 
     return Container(
       color: theme.background,
@@ -212,7 +230,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   Divider(color: theme.border, height: 1),
                   _buildVisibilityTile(
                     'Everyone for 10 Minutes',
-                    widget.currentVisibility == VisibilityMode.temporaryEveryone
+                    _selectedVisibilityMode == VisibilityMode.temporaryEveryone
                         ? 'Reverting in ${widget.temporarySecondsRemaining ~/ 60}:${(widget.temporarySecondsRemaining % 60).toString().padLeft(2, '0')}'
                         : 'Temporarily discoverable, then reverts to Contacts',
                     VisibilityMode.temporaryEveryone,
@@ -298,8 +316,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _buildSwitchRow(
                     'Reduced Motion',
                     'Disable 3D sphere spin momentum and edge wave animations',
-                    anim.reducedMotion,
-                    (v) => _updateSettings(anim.copyWith(reducedMotion: v)),
+                    _selectedAnimationSettings.reducedMotion,
+                    (v) => _updateSettings(_selectedAnimationSettings.copyWith(reducedMotion: v)),
                     theme,
                   ),
                 ],
@@ -498,27 +516,45 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     runSpacing: 6,
                     children: [
                       ActionChip(
-                        label: const Text('⚡ Cloud Prod', style: TextStyle(fontSize: 10)),
+                        label: Text('⚡ Cloud Prod', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: theme.textPrimary)),
+                        backgroundColor: theme.cardBackground,
+                        side: BorderSide(color: theme.border, width: 1.0),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                         onPressed: () {
                           HapticFeedback.lightImpact();
                           AuraSignalingService().setSignalingUrl(AuraSignalingService.defaultProductionSignalingUrl);
                           setState(() {});
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Switched to Cloud Signaling'), duration: Duration(seconds: 2)),
+                          );
                         },
                       ),
                       ActionChip(
-                        label: const Text('🏠 Wi-Fi LAN', style: TextStyle(fontSize: 10)),
+                        label: Text('🏠 Wi-Fi LAN', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: theme.textPrimary)),
+                        backgroundColor: theme.cardBackground,
+                        side: BorderSide(color: theme.border, width: 1.0),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                         onPressed: () {
                           HapticFeedback.lightImpact();
                           AuraSignalingService().setSignalingUrl('ws://192.168.0.21:48280');
                           setState(() {});
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Switched to Wi-Fi LAN Signaling'), duration: Duration(seconds: 2)),
+                          );
                         },
                       ),
                       ActionChip(
-                        label: const Text('📱 Emulator', style: TextStyle(fontSize: 10)),
+                        label: Text('📱 Emulator', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: theme.textPrimary)),
+                        backgroundColor: theme.cardBackground,
+                        side: BorderSide(color: theme.border, width: 1.0),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                         onPressed: () {
                           HapticFeedback.lightImpact();
                           AuraSignalingService().setSignalingUrl('ws://10.0.2.2:48280');
                           setState(() {});
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Switched to Android Emulator Signaling'), duration: Duration(seconds: 2)),
+                          );
                         },
                       ),
                     ],
@@ -556,11 +592,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _buildThemeOption(String label, String value, IconData icon, AuraTheme theme) {
-    final isSelected = widget.currentThemeMode == value;
+    final isSelected = _selectedThemeMode == value;
     return Expanded(
       child: GestureDetector(
         onTap: () {
           HapticFeedback.selectionClick();
+          setState(() {
+            _selectedThemeMode = value;
+          });
           widget.onThemeModeChanged?.call(value);
           ProfileRepository().updateTheme(value);
         },
@@ -598,10 +637,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _buildVisibilityTile(String title, String subtitle, VisibilityMode mode, AuraTheme theme) {
-    final isSelected = widget.currentVisibility == mode;
+    final isSelected = _selectedVisibilityMode == mode;
     return InkWell(
       onTap: () {
         HapticFeedback.selectionClick();
+        setState(() {
+          _selectedVisibilityMode = mode;
+        });
         widget.onVisibilityChanged(mode);
         final modeString = mode.name;
         ProfileRepository().updateVisibility(modeString);
@@ -653,12 +695,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _buildTierButton(String title, String subtitle, AnimationQuality q, AuraTheme theme) {
-    final isSelected = widget.animationSettings.quality == q;
+    final isSelected = _selectedAnimationSettings.quality == q;
     return Expanded(
       child: GestureDetector(
         onTap: () {
           HapticFeedback.selectionClick();
-          _updateSettings(widget.animationSettings.copyWith(quality: q));
+          _updateSettings(_selectedAnimationSettings.copyWith(quality: q));
         },
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),

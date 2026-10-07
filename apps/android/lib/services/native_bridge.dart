@@ -87,6 +87,34 @@ class NativeBridgeService {
     await _channel.invokeMethod('cancelTransfer', {'transferId': transferId});
   }
 
+  static Future<void> showSystemIncomingShareNotification({
+    required String transferId,
+    required String senderName,
+    required String senderDeviceName,
+    required int totalFiles,
+    required int totalBytes,
+    required String fileName,
+  }) async {
+    await _channel.invokeMethod('showSystemIncomingShareNotification', {
+      'transferId': transferId,
+      'senderName': senderName,
+      'senderDeviceName': senderDeviceName,
+      'totalFiles': totalFiles,
+      'totalBytes': totalBytes,
+      'fileName': fileName,
+    });
+  }
+
+  static Future<void> showNameDropProximityAlert({
+    required String peerId,
+    required String peerName,
+  }) async {
+    await _channel.invokeMethod('showNameDropProximityAlert', {
+      'peerId': peerId,
+      'peerName': peerName,
+    });
+  }
+
   static Future<bool> openFile(String filePath) async {
     final bool? ok = await _channel.invokeMethod<bool>('openFile', {'filePath': filePath});
     return ok ?? false;

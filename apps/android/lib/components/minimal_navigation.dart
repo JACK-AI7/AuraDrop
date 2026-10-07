@@ -82,7 +82,9 @@ class MinimalNavigationBar extends StatelessWidget {
     int badgeCount = 0,
   }) {
     final isSelected = currentIndex == index;
-    final itemColor = isSelected ? theme.textPrimary : theme.textSecondary;
+    final itemColor = isSelected
+        ? (theme.isDark ? Colors.white : Colors.black)
+        : (theme.isDark ? const Color(0xFFA1A1AA) : const Color(0xFF6B7280));
 
     return GestureDetector(
       onTap: () {
@@ -92,8 +94,15 @@ class MinimalNavigationBar extends StatelessWidget {
         }
       },
       behavior: HitTestBehavior.opaque,
-      child: Container(
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? (theme.isDark ? Colors.white.withValues(alpha: 0.10) : Colors.black.withValues(alpha: 0.06))
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(16),
+        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           mainAxisAlignment: MainAxisAlignment.center,
@@ -103,7 +112,7 @@ class MinimalNavigationBar extends StatelessWidget {
               children: [
                 Icon(
                   icon,
-                  size: 20,
+                  size: isSelected ? 21 : 20,
                   color: itemColor,
                 ),
                 if (badgeCount > 0)
@@ -134,7 +143,7 @@ class MinimalNavigationBar extends StatelessWidget {
             Text(
               label,
               style: TextStyle(
-                fontSize: 10,
+                fontSize: 10.5,
                 fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
                 color: itemColor,
                 letterSpacing: 0.1,
@@ -146,7 +155,7 @@ class MinimalNavigationBar extends StatelessWidget {
               width: isSelected ? 12 : 0,
               height: 2,
               decoration: BoxDecoration(
-                color: isSelected ? theme.textPrimary : Colors.transparent,
+                color: isSelected ? (theme.isDark ? Colors.white : Colors.black) : Colors.transparent,
                 borderRadius: BorderRadius.circular(1),
               ),
             ),

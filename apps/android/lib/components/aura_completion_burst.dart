@@ -251,15 +251,22 @@ class _AuraCompletionModalState extends State<AuraCompletionModal> with SingleTi
                     Expanded(
                       child: ElevatedButton.icon(
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: widget.accentColor,
+                          backgroundColor: const Color(0xFF0A84FF),
                           foregroundColor: Colors.white,
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                           padding: const EdgeInsets.symmetric(vertical: 12),
                           elevation: 0,
                         ),
                         onPressed: widget.onOpen,
-                        icon: const Icon(Icons.folder_open_rounded, size: 18),
-                        label: const Text('Open'),
+                        icon: const Icon(Icons.folder_open_rounded, size: 18, color: Colors.white),
+                        label: const Text(
+                          'Open',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
+                          ),
+                        ),
                       ),
                     ),
                   ],

@@ -249,6 +249,17 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
         });
         if (isNew) {
           _rippleController.triggerPeerDiscovered();
+          NativeBridgeService.showNameDropProximityAlert(
+            peerId: peer.id,
+            peerName: peer.name,
+          );
+          InAppNotificationController().showNameDrop(
+            peerName: peer.name,
+            deviceName: peer.deviceName,
+            onTap: () {
+              setState(() => _selectedPeer = peer);
+            },
+          );
         }
       });
 
@@ -364,6 +375,17 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
           });
           if (isNew) {
             _rippleController.triggerPeerDiscovered();
+            NativeBridgeService.showNameDropProximityAlert(
+              peerId: peer.id,
+              peerName: peer.name,
+            );
+            InAppNotificationController().showNameDrop(
+              peerName: peer.name,
+              deviceName: peer.deviceName,
+              onTap: () {
+                setState(() => _selectedPeer = peer);
+              },
+            );
           }
         }
         break;
@@ -371,10 +393,11 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
       case 'dataChannelState':
         final st = event['state']?.toString();
         setState(() {
-          if (st == 'DATA_CHANNEL_CONNECTING') _transferState = TransferState.connecting;
           if (st == 'READY_TO_TRANSFER') {
-            _transferState = TransferState.preparing;
             _rippleController.triggerConnectionEstablished();
+            if (_selectedPeer != null) {
+              _selectedPeer = _selectedPeer!.copyWith(connectionState: 'READY_TO_TRANSFER');
+            }
           }
         });
         break;
@@ -500,6 +523,35 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
             NativeBridgeService.setPeerTrusted(_activePeer!.id, _activePeer!.name, true);
           }
         });
+        break;
+
+      case 'notificationAccept':
+        final tId = event['transferId']?.toString() ?? '';
+        if (tId == _activeTransferId && _activePeer != null) {
+          _rippleController.triggerTransferStart();
+          setState(() {
+            _transferState = TransferState.transferring;
+            _transferredBytes = 0;
+          });
+          AuraSignalingService().sendTransferAccept(
+            targetDeviceId: _activePeer!.id,
+            transferId: tId,
+          );
+        }
+        break;
+
+      case 'notificationDecline':
+        final tId = event['transferId']?.toString() ?? '';
+        if (tId == _activeTransferId && _activePeer != null) {
+          setState(() {
+            _transferState = TransferState.idle;
+            _activeTransferId = '';
+          });
+          AuraSignalingService().sendTransferDecline(
+            targetDeviceId: _activePeer!.id,
+            transferId: tId,
+          );
+        }
         break;
 
       case 'transferError':
@@ -629,6 +681,27 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
     final totalBytes = (event['totalBytes'] as num?)?.toInt() ?? 0;
     final totalFiles = (event['totalFiles'] as num?)?.toInt() ?? 1;
     final fileName = event['fileName']?.toString() ?? (totalFiles == 1 ? 'Incoming File' : '$totalFiles Files');
+
+    _activeTransferId = transferId;
+    _activePeer = PeerDevice(
+      id: senderId,
+      name: senderName,
+      deviceName: senderName,
+      platform: 'web',
+      ip: 'WebRTC P2P',
+      port: 0,
+      lastSeen: DateTime.now(),
+      transport: 'WebRTC Direct',
+    );
+
+    NativeBridgeService.showSystemIncomingShareNotification(
+      transferId: transferId,
+      senderName: senderName,
+      senderDeviceName: senderName,
+      totalFiles: totalFiles,
+      totalBytes: totalBytes,
+      fileName: fileName,
+    );
 
     InAppNotificationController().showTransferRequest(
       transferId: transferId,
@@ -961,11 +1034,15 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                   ],
                 ),
 
-                // Active Transfer Stream or Completion Burst Modal
-                if (_transferState.isActive &&
-                        _transferState != TransferState.waitingForAccept ||
-                    _transferState == TransferState.completed ||
-                    _transferState == TransferState.failed)
+                // Active Transfer Stream or Completion Burst Modal (Files ONLY, never for chat messages)
+                if (_activeTransferId.isNotEmpty &&
+                    _totalTransferBytes > 0 &&
+                    (_transferState == TransferState.transferring ||
+                     _transferState == TransferState.transferFinished ||
+                     _transferState == TransferState.flushing ||
+                     _transferState == TransferState.verifying ||
+                     _transferState == TransferState.completed ||
+                     _transferState == TransferState.failed))
                   _buildTransferOverlay(theme),
               ],
             ),

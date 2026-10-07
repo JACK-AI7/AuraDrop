@@ -8,6 +8,7 @@ enum InAppNotificationType {
   chatMessage,
   transferCompleted,
   transferFailed,
+  nameDrop,
   info,
 }
 
@@ -55,6 +56,22 @@ class InAppNotificationController extends ChangeNotifier {
     if (_queue.length == 1) {
       _scheduleDismiss(item);
     }
+  }
+
+  void showNameDrop({
+    required String peerName,
+    required String deviceName,
+    VoidCallback? onTap,
+  }) {
+    show(InAppNotificationItem(
+      id: 'namedrop_${peerName}_${DateTime.now().millisecondsSinceEpoch}',
+      type: InAppNotificationType.nameDrop,
+      title: peerName,
+      message: '$deviceName is nearby • NameDrop connected',
+      subtitle: 'Tap to instantly share photos & files',
+      duration: const Duration(seconds: 6),
+      onTap: onTap,
+    ));
   }
 
   void showTransferRequest({
@@ -245,144 +262,168 @@ class _InAppNotificationHostState extends State<InAppNotificationHost>
 
     return Material(
       color: Colors.transparent,
-      child: Container(
-        decoration: BoxDecoration(
-          color: theme.isDark ? const Color(0xFF141414) : const Color(0xFFFFFFFF),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: theme.border,
-            width: 1.0,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: theme.isDark ? 0.5 : 0.12),
-              blurRadius: 20,
-              offset: const Offset(0, 8),
+      child: GestureDetector(
+        onTap: item.onTap != null
+            ? () {
+                HapticFeedback.lightImpact();
+                _controller.dismissCurrent();
+                item.onTap?.call();
+              }
+            : null,
+        child: Container(
+          decoration: BoxDecoration(
+            color: theme.isDark ? const Color(0xFF0D0D10) : const Color(0xFFFFFFFF),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(
+              color: theme.isDark ? const Color(0xFF38383A) : const Color(0xFFE5E5EA),
+              width: 1.2,
             ),
-          ],
-        ),
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                _buildIcon(item.type, theme),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        isRequest ? 'AuraDrop' : item.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: theme.textPrimary,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        isRequest && item.subtitle != null
-                            ? '${item.message} • ${item.subtitle}'
-                            : item.message,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: theme.textSecondary,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                if (isRequest)
-                  Container(
-                    width: 46,
-                    height: 46,
-                    margin: const EdgeInsets.only(left: 8),
-                    decoration: BoxDecoration(
-                      color: theme.isDark ? const Color(0xFF242426) : const Color(0xFFE5E5EA),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(
-                        color: theme.border,
-                        width: 0.8,
-                      ),
-                    ),
-                    child: Center(
-                      child: Icon(
-                        Icons.insert_drive_file_outlined,
-                        size: 22,
-                        color: theme.textSecondary,
-                      ),
-                    ),
-                  )
-                else
-                  IconButton(
-                    icon: Icon(Icons.close_rounded, size: 18, color: theme.textSecondary),
-                    onPressed: () {
-                      _controller.dismissCurrent();
-                    },
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                  ),
-              ],
-            ),
-            if (isRequest) ...[
-              const SizedBox(height: 14),
-              Row(
-                children: [
-                  Expanded(
-                    child: SizedBox(
-                      height: 40,
-                      child: ElevatedButton(
-                        onPressed: () {
-                          HapticFeedback.lightImpact();
-                          _controller.dismissCurrent();
-                          item.onDecline?.call();
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: theme.isDark ? const Color(0xFF3A3A3C) : const Color(0xFFD1D1D6),
-                          foregroundColor: theme.isDark ? Colors.white : Colors.black87,
-                          elevation: 0,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                        ),
-                        child: const Text('Decline', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: SizedBox(
-                      height: 40,
-                      child: ElevatedButton(
-                        onPressed: () {
-                          HapticFeedback.mediumImpact();
-                          _controller.dismissCurrent();
-                          item.onAccept?.call();
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF0A84FF),
-                          foregroundColor: Colors.white,
-                          elevation: 0,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                        ),
-                        child: const Text('Accept', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-                      ),
-                    ),
-                  ),
-                ],
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: theme.isDark ? 0.65 : 0.16),
+                blurRadius: 24,
+                offset: const Offset(0, 10),
               ),
             ],
-          ],
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  _buildIcon(item.type, theme),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          isRequest ? 'AuraDrop Share' : item.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 14.5,
+                            fontWeight: FontWeight.w700,
+                            color: theme.isDark ? Colors.white : Colors.black,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          item.message,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w400,
+                            color: theme.isDark ? const Color(0xFFD1D1D6) : const Color(0xFF3A3A3C),
+                            height: 1.25,
+                          ),
+                        ),
+                        if (item.subtitle != null) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            item.subtitle!,
+                            style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF0A84FF),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  if (isRequest)
+                    Container(
+                      width: 44,
+                      height: 44,
+                      margin: const EdgeInsets.only(left: 8),
+                      decoration: BoxDecoration(
+                        color: theme.isDark ? const Color(0xFF242426) : const Color(0xFFF2F2F7),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: theme.isDark ? const Color(0xFF38383A) : const Color(0xFFE5E5EA),
+                          width: 1.0,
+                        ),
+                      ),
+                      child: const Center(
+                        child: Icon(
+                          Icons.insert_drive_file_rounded,
+                          size: 22,
+                          color: Color(0xFF0A84FF),
+                        ),
+                      ),
+                    )
+                  else
+                    IconButton(
+                      icon: Icon(
+                        Icons.close_rounded,
+                        size: 18,
+                        color: theme.isDark ? const Color(0xFFA1A1AA) : const Color(0xFF8E8E93),
+                      ),
+                      onPressed: () {
+                        _controller.dismissCurrent();
+                      },
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                    ),
+                ],
+              ),
+              if (isRequest) ...[
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: SizedBox(
+                        height: 38,
+                        child: ElevatedButton(
+                          onPressed: () {
+                            HapticFeedback.lightImpact();
+                            _controller.dismissCurrent();
+                            item.onDecline?.call();
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: theme.isDark ? const Color(0xFF2C2C2E) : const Color(0xFFE5E5EA),
+                            foregroundColor: theme.isDark ? Colors.white : Colors.black87,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(19),
+                            ),
+                          ),
+                          child: const Text('Decline', style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700)),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: SizedBox(
+                        height: 38,
+                        child: ElevatedButton(
+                          onPressed: () {
+                            HapticFeedback.mediumImpact();
+                            _controller.dismissCurrent();
+                            item.onAccept?.call();
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF0A84FF),
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(19),
+                            ),
+                          ),
+                          child: const Text('Accept', style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700)),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );
@@ -391,8 +432,8 @@ class _InAppNotificationHostState extends State<InAppNotificationHost>
   Widget _buildIcon(InAppNotificationType type, AuraTheme theme) {
     if (type == InAppNotificationType.transferRequest) {
       return Container(
-        width: 40,
-        height: 40,
+        width: 42,
+        height: 42,
         decoration: const BoxDecoration(
           color: Color(0xFF0A84FF),
           shape: BoxShape.circle,
@@ -401,33 +442,56 @@ class _InAppNotificationHostState extends State<InAppNotificationHost>
       );
     }
 
+    if (type == InAppNotificationType.nameDrop) {
+      return Container(
+        width: 42,
+        height: 42,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: const RadialGradient(
+            colors: [Color(0xFF5856D6), Color(0xFF007AFF)],
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF007AFF).withValues(alpha: 0.4),
+              blurRadius: 10,
+              spreadRadius: 2,
+            ),
+          ],
+        ),
+        child: const Icon(Icons.contactless_rounded, size: 22, color: Colors.white),
+      );
+    }
+
     IconData icon;
+    Color iconColor;
     switch (type) {
-      case InAppNotificationType.transferRequest:
-        icon = Icons.downloading_rounded;
-        break;
       case InAppNotificationType.chatMessage:
         icon = Icons.chat_bubble_rounded;
+        iconColor = const Color(0xFF34C759);
         break;
       case InAppNotificationType.transferCompleted:
         icon = Icons.check_circle_rounded;
+        iconColor = const Color(0xFF10B981);
         break;
       case InAppNotificationType.transferFailed:
         icon = Icons.error_outline_rounded;
+        iconColor = const Color(0xFFEF4444);
         break;
-      case InAppNotificationType.info:
+      default:
         icon = Icons.info_outline_rounded;
+        iconColor = const Color(0xFF0A84FF);
         break;
     }
 
     return Container(
-      width: 32,
-      height: 32,
+      width: 36,
+      height: 36,
       decoration: BoxDecoration(
-        color: theme.subtleHighlight,
-        borderRadius: BorderRadius.circular(8),
+        color: iconColor.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(10),
       ),
-      child: Icon(icon, size: 18, color: theme.textPrimary),
+      child: Icon(icon, size: 20, color: iconColor),
     );
   }
 }

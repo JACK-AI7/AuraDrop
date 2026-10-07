@@ -167,7 +167,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final hasCustomAvatar = _avatarPath.isNotEmpty && File(_avatarPath).existsSync();
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 110),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
