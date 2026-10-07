@@ -45,8 +45,12 @@ class AuraSignalingService {
   Stream<Map<String, dynamic>> get onTransferDecline => _transferDeclineController.stream;
   Stream<Map<String, dynamic>> get onSignal => _signalController.stream;
 
-  bool get isConnected => _socket != null && _socket!.readyState == WebSocket.open;
+  bool get isConnected => (_socket != null && _socket!.readyState == WebSocket.open) || _isHttpSignaling;
   String get currentUrl => _signalingUrl;
+
+  bool _isHttpSignaling = false;
+  Timer? _httpPollTimer;
+  final HttpClient _httpClient = HttpClient()..connectionTimeout = const Duration(seconds: 6);
 
   void configureIdentity({
     required String deviceId,
@@ -78,6 +82,13 @@ class AuraSignalingService {
   Future<void> connect() async {
     if (_isConnecting || isConnected) return;
     _isConnecting = true;
+
+    // Check if HTTP/HTTPS serverless signaling
+    if (_signalingUrl.startsWith('http://') || _signalingUrl.startsWith('https://')) {
+      _isConnecting = false;
+      await _connectHttp();
+      return;
+    }
 
     try {
       debugPrint('[AuraSignaling] Connecting to $_signalingUrl as $_deviceId...');
@@ -111,6 +122,83 @@ class AuraSignalingService {
       debugPrint('[AuraSignaling] Failed to connect: $e');
       _isConnecting = false;
       _handleDisconnect();
+    }
+  }
+
+  Future<void> _connectHttp() async {
+    _isHttpSignaling = true;
+    _connectionStateController.add(true);
+    _reconnectAttempts = 0;
+    debugPrint('[AuraSignaling] Starting HTTP Serverless Signaling to $_signalingUrl');
+
+    // 1. Register device
+    await _httpSend({
+      'action': 'register',
+      'deviceId': _deviceId,
+      'displayName': _displayName,
+      'deviceName': _deviceName,
+      'platform': 'android',
+      'visibility': _visibility,
+      'avatarIndex': _avatarIndex,
+    });
+
+    // 2. Start polling
+    _httpPollTimer?.cancel();
+    _httpPollTimer = Timer.periodic(const Duration(milliseconds: 1200), (timer) async {
+      if (!_shouldReconnect || !_isHttpSignaling) {
+        timer.cancel();
+        return;
+      }
+      try {
+        final sep = _signalingUrl.contains('?') ? '&' : '?';
+        final pollUri = Uri.parse('$_signalingUrl${sep}action=poll&deviceId=${Uri.encodeComponent(_deviceId)}&name=${Uri.encodeComponent(_displayName)}');
+        final req = await _httpClient.getUrl(pollUri);
+        final resp = await req.close();
+        if (resp.statusCode == 200) {
+          final body = await resp.transform(utf8.decoder).join();
+          final data = jsonDecode(body);
+          if (data is Map) {
+            final peersRaw = data['peers'];
+            if (peersRaw is List) {
+              final peers = peersRaw
+                  .whereType<Map>()
+                  .map((m) => _mapToPeerDevice(Map<String, dynamic>.from(m)))
+                  .where((p) => p.id != _deviceId)
+                  .toList();
+              _peerListController.add(peers);
+            }
+            final msgs = data['messages'];
+            if (msgs is List) {
+              for (final m in msgs) {
+                if (m is Map) {
+                  _onMessage(jsonEncode(m));
+                }
+              }
+            }
+          }
+        }
+      } catch (_) {
+        // Transient poll network blip
+      }
+    });
+  }
+
+  Future<void> _httpSend(Map<String, dynamic> data) async {
+    try {
+      final sep = _signalingUrl.contains('?') ? '&' : '?';
+      final uri = Uri.parse('$_signalingUrl${sep}action=send');
+      final req = await _httpClient.postUrl(uri);
+      req.headers.contentType = ContentType.json;
+      req.add(utf8.encode(jsonEncode({
+        'action': 'send',
+        ...data,
+        'senderId': data['senderId'] ?? _deviceId,
+        'deviceId': _deviceId,
+      })));
+      final resp = await req.close();
+      await resp.drain();
+    } catch (e) {
+      debugPrint('[AuraSignaling] HTTP send notice: $e');
     }
   }
 
@@ -253,10 +341,15 @@ class AuraSignalingService {
 
   void _send(Map<String, dynamic> data) {
     if (!isConnected) return;
-    try {
-      _socket!.add(jsonEncode(data));
-    } catch (e) {
-      debugPrint('[AuraSignaling] Send error: $e');
+    if (_socket != null && _socket!.readyState == WebSocket.open) {
+      try {
+        _socket!.add(jsonEncode(data));
+      } catch (e) {
+        debugPrint('[AuraSignaling] WS Send error: $e');
+      }
+    }
+    if (_isHttpSignaling) {
+      _httpSend(data);
     }
   }
 
@@ -357,6 +450,8 @@ class AuraSignalingService {
     _shouldReconnect = false;
     _stopHeartbeat();
     _reconnectTimer?.cancel();
+    _httpPollTimer?.cancel();
+    _isHttpSignaling = false;
     _socket?.close();
     _socket = null;
     _connectionStateController.add(false);

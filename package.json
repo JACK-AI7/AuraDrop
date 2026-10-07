@@ -8,7 +8,7 @@
     "apps/*"
   ],
   "scripts": {
-    "build": "pnpm -r run build",
+    "build": "pnpm -r run build && node scripts/copy-web-dist.js",
     "test": "pnpm -r run test",
     "test:e2e": "tsx tests/run-all-tests.ts",
     "test:cross-device": "tsx tests/cross-device-webrtc-e2e.ts",

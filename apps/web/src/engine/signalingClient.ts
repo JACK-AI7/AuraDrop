@@ -53,8 +53,15 @@ export class SignalingClient {
   private lastHeartbeat: number | null = null;
   private reconnectAttempts = 0;
 
+  // Serverless HTTP Signaling Polling
+  private httpPollTimer: any = null;
+  private isHttpPolling = false;
+  private lastHttpPollTime: number | null = null;
+  private serverlessApiUrl = '';
+
   private constructor(identity: DeviceIdentity) {
     this.identity = identity;
+    this.serverlessApiUrl = typeof window !== 'undefined' ? `${window.location.origin}/api/signaling` : '';
     this.setupNetworkLifecycleListeners();
   }
 
@@ -108,6 +115,8 @@ export class SignalingClient {
           wsState = 'CLOSED';
           break;
       }
+    } else if (this.lastHttpPollTime && Date.now() - this.lastHttpPollTime < 8000) {
+      wsState = 'OPEN';
     }
 
     return {
@@ -119,7 +128,7 @@ export class SignalingClient {
       lastWsCloseCode: this.lastWsCloseCode,
       registrationStatus: this.registrationStatus,
       connectedPeersCount: this.connectedPeersCount,
-      lastHeartbeat: this.lastHeartbeat,
+      lastHeartbeat: this.lastHeartbeat || this.lastHttpPollTime,
       reconnectAttempts: this.reconnectAttempts,
       isSecureContext: typeof window !== 'undefined' ? Boolean(window.isSecureContext) : false,
     };
@@ -151,16 +160,28 @@ export class SignalingClient {
   }
 
   public connect(): void {
+    this.shouldReconnect = true;
+    this.startHttpPolling();
+
     if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
       return;
     }
 
-    this.isConnecting = true;
     this.activeSignalingUrl = this.resolveSignalingUrl();
     this.lastWsError = null;
-    this.registrationStatus = 'UNREGISTERED';
 
-    console.log(`[AuraDrop Signaling] Connecting to ${this.activeSignalingUrl}`);
+    // If activeSignalingUrl is HTTP / Serverless (e.g. Vercel deployment), rely on HTTP polling
+    if (!this.activeSignalingUrl.startsWith('ws://') && !this.activeSignalingUrl.startsWith('wss://')) {
+      console.log(`[AuraDrop Signaling] Using Serverless Wi-Fi Signaling: ${this.activeSignalingUrl}`);
+      this.isConnecting = false;
+      this.registrationStatus = 'CONFIRMED';
+      this.callbacks.onConnectionStatus?.(true);
+      this.callbacks.onDiagnosticsUpdate?.();
+      return;
+    }
+
+    this.isConnecting = true;
+    console.log(`[AuraDrop Signaling] Connecting WebSocket to ${this.activeSignalingUrl}`);
 
     try {
       this.socket = new WebSocket(this.activeSignalingUrl);
@@ -203,9 +224,12 @@ export class SignalingClient {
       this.socket.onclose = (e) => {
         this.isConnecting = false;
         this.lastWsCloseCode = e.code;
-        this.registrationStatus = 'UNREGISTERED';
         this.stopHeartbeat();
-        this.callbacks.onConnectionStatus?.(false);
+
+        if (!this.lastHttpPollTime || Date.now() - this.lastHttpPollTime > 8000) {
+          this.registrationStatus = 'UNREGISTERED';
+          this.callbacks.onConnectionStatus?.(false);
+        }
         this.callbacks.onDiagnosticsUpdate?.();
 
         console.warn(`[AuraDrop Signaling] Socket closed (code: ${e.code}, reason: "${e.reason || 'None'}")`);
@@ -228,6 +252,92 @@ export class SignalingClient {
     }
   }
 
+  private startHttpPolling(): void {
+    if (this.isHttpPolling || !this.serverlessApiUrl) return;
+    this.isHttpPolling = true;
+
+    // 1. Initial Device Registration via Serverless API
+    const regPayload = {
+      action: 'register',
+      deviceId: this.identity.deviceId,
+      displayName: this.identity.displayName,
+      deviceName: this.identity.deviceName,
+      platform: this.identity.platform,
+      visibility: this.identity.visibility,
+    };
+
+    fetch(`${this.serverlessApiUrl}?action=register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(regPayload),
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data && Array.isArray(data.peers)) {
+          this.lastHttpPollTime = Date.now();
+          this.registrationStatus = 'CONFIRMED';
+          this.callbacks.onConnectionStatus?.(true);
+          this.handleDiscoveredPeers(data.peers);
+        }
+      })
+      .catch(() => {});
+
+    // 2. Periodic Long/Fast-Poll Loop
+    const pollLoop = async () => {
+      if (!this.shouldReconnect) {
+        this.isHttpPolling = false;
+        return;
+      }
+
+      try {
+        const pollUrl = `${this.serverlessApiUrl}?action=poll&deviceId=${encodeURIComponent(this.identity.deviceId)}&name=${encodeURIComponent(this.identity.displayName)}`;
+        const res = await fetch(pollUrl);
+        if (res.ok) {
+          const data = await res.json();
+          this.lastHttpPollTime = Date.now();
+          this.registrationStatus = 'CONFIRMED';
+          this.callbacks.onConnectionStatus?.(true);
+
+          if (Array.isArray(data.peers)) {
+            this.handleDiscoveredPeers(data.peers);
+          }
+
+          if (Array.isArray(data.messages) && data.messages.length > 0) {
+            for (const msg of data.messages) {
+              this.handleIncomingMessage(msg);
+            }
+          }
+        }
+      } catch {
+        // Transient network switch
+      } finally {
+        if (this.shouldReconnect) {
+          this.httpPollTimer = setTimeout(pollLoop, 1200);
+        } else {
+          this.isHttpPolling = false;
+        }
+      }
+    };
+
+    this.httpPollTimer = setTimeout(pollLoop, 600);
+  }
+
+  private stopHttpPolling(): void {
+    if (this.httpPollTimer) {
+      clearTimeout(this.httpPollTimer);
+      this.httpPollTimer = null;
+    }
+    this.isHttpPolling = false;
+  }
+
+  private handleDiscoveredPeers(peers: any[]): void {
+    const valid = peers.filter((p) => p && (p.deviceId || p.id) !== this.identity.deviceId);
+    this.connectedPeersCount = valid.length;
+    const peerDevices: PeerDevice[] = valid.map((p: any) => this.mapToPeerDevice(p));
+    this.callbacks.onPeerList?.(peerDevices);
+    this.callbacks.onDiagnosticsUpdate?.();
+  }
+
   private resolveSignalingUrl(): string {
     // 1. User manual override in UI Settings/Diagnostics (Section 3)
     const custom = this.getCustomSignalingUrl();
@@ -243,9 +353,9 @@ export class SignalingClient {
       const host = window.location.hostname || 'localhost';
       const port = window.location.port;
 
-      // 3. If on Vercel without custom env, point to AuraDrop production signaling
+      // 3. If on Vercel without custom env, use high-speed Serverless Wi-Fi signaling
       if (host.includes('vercel.app')) {
-        return 'wss://api.auradrop.network/ws';
+        return `${window.location.origin}/api/signaling`;
       }
 
       // 4. If loaded via Vite dev server proxy (port 5173/5174)
@@ -272,9 +382,7 @@ export class SignalingClient {
       case 'REGISTERED': {
         this.registrationStatus = 'CONFIRMED';
         if (Array.isArray(msg.peers)) {
-          this.connectedPeersCount = msg.peers.length;
-          const peerDevices: PeerDevice[] = msg.peers.map((p: any) => this.mapToPeerDevice(p));
-          this.callbacks.onPeerList?.(peerDevices);
+          this.handleDiscoveredPeers(msg.peers);
         }
         this.callbacks.onDiagnosticsUpdate?.();
         console.log(`[AuraDrop Signaling] Registration confirmed. Discovered ${this.connectedPeersCount} peers.`);
@@ -282,9 +390,10 @@ export class SignalingClient {
       }
 
       case 'PEER_ONLINE': {
-        if (msg.peer && msg.peer.deviceId !== this.identity.deviceId) {
+        const peer = msg.peer || msg;
+        if (peer && (peer.deviceId || peer.id) !== this.identity.deviceId) {
           this.connectedPeersCount++;
-          const peerDevice = this.mapToPeerDevice(msg.peer);
+          const peerDevice = this.mapToPeerDevice(peer);
           this.callbacks.onPeerOnline?.(peerDevice);
           this.callbacks.onDiagnosticsUpdate?.();
           console.log(`[AuraDrop Signaling] Remote peer joined: ${peerDevice.name} (${peerDevice.id})`);
@@ -293,11 +402,12 @@ export class SignalingClient {
       }
 
       case 'PEER_OFFLINE': {
-        if (msg.deviceId) {
+        const devId = msg.deviceId || msg.id;
+        if (devId) {
           this.connectedPeersCount = Math.max(0, this.connectedPeersCount - 1);
-          this.callbacks.onPeerOffline?.(msg.deviceId);
+          this.callbacks.onPeerOffline?.(devId);
           this.callbacks.onDiagnosticsUpdate?.();
-          console.log(`[AuraDrop Signaling] Remote peer offline: ${msg.deviceId}`);
+          console.log(`[AuraDrop Signaling] Remote peer offline: ${devId}`);
         }
         break;
       }
@@ -321,12 +431,26 @@ export class SignalingClient {
         break;
       }
 
+      case 'TRANSFER_ACCEPT':
+      case 'TRANSFER_DECLINE':
       case 'TRANSFER_RESPONSE': {
-        this.callbacks.onTransferResponse?.(msg);
+        const isAccept = msg.type === 'TRANSFER_ACCEPT' || msg.payload?.accepted === true || msg.accepted === true;
+        const normalized = {
+          ...msg,
+          type: 'TRANSFER_RESPONSE',
+          payload: {
+            ...(msg.payload || {}),
+            transferId: msg.transferId || msg.payload?.transferId,
+            accepted: isAccept,
+            verifiedOffset: msg.verifiedOffset || msg.payload?.verifiedOffset || 0,
+          },
+        };
+        this.callbacks.onTransferResponse?.(normalized);
         break;
       }
 
-      case 'TRANSFER_ACK_COMPLETE': {
+      case 'TRANSFER_ACK_COMPLETE':
+      case 'TRANSFER_COMPLETE': {
         this.callbacks.onTransferAck?.(msg);
         break;
       }
@@ -340,13 +464,14 @@ export class SignalingClient {
   }
 
   private mapToPeerDevice(p: any): PeerDevice {
+    const id = p.deviceId || p.id || '';
     return {
-      id: p.deviceId,
-      deviceId: p.deviceId,
-      name: p.displayName || p.deviceId.substring(0, 8),
+      id,
+      deviceId: id,
+      name: p.displayName || p.name || id.substring(0, 8),
       deviceName: p.deviceName || `${p.platform?.toUpperCase() || 'DEVICE'} • WebRTC Direct`,
       platform: p.platform || 'web',
-      ip: p.remoteIp || 'WebRTC P2P',
+      ip: p.clientIp || p.remoteIp || p.ip || 'WebRTC P2P',
       port: 0,
       lastSeen: new Date(p.lastSeen || Date.now()),
       isTrusted: p.visibility === 'trusted',
@@ -371,16 +496,28 @@ export class SignalingClient {
       deviceId: this.identity.deviceId,
       senderId: this.identity.deviceId,
       targetDeviceId,
+      transferId: payload.transferId,
       payload,
     });
   }
 
   public sendTransferResponse(targetDeviceId: string, payload: any): void {
+    const isAccepted = payload.accepted === true;
+    this.send({
+      type: isAccepted ? 'TRANSFER_ACCEPT' : 'TRANSFER_DECLINE',
+      deviceId: this.identity.deviceId,
+      senderId: this.identity.deviceId,
+      targetDeviceId,
+      transferId: payload.transferId,
+      accepted: isAccepted,
+      payload,
+    });
     this.send({
       type: 'TRANSFER_RESPONSE',
       deviceId: this.identity.deviceId,
       senderId: this.identity.deviceId,
       targetDeviceId,
+      transferId: payload.transferId,
       payload,
     });
   }
@@ -391,13 +528,34 @@ export class SignalingClient {
       deviceId: this.identity.deviceId,
       senderId: this.identity.deviceId,
       targetDeviceId,
+      transferId: payload.transferId,
       payload,
     });
   }
 
   private send(data: any): void {
+    const outgoing = {
+      ...data,
+      senderId: data.senderId || this.identity.deviceId,
+      deviceId: data.deviceId || this.identity.deviceId,
+    };
+
     if (this.socket && this.socket.readyState === WebSocket.OPEN) {
-      this.socket.send(JSON.stringify(data));
+      this.socket.send(JSON.stringify(outgoing));
+    }
+
+    // Mirror to Serverless Signaling if targetDeviceId is present
+    if (typeof window !== 'undefined' && this.serverlessApiUrl && data.targetDeviceId) {
+      fetch(`${this.serverlessApiUrl}?action=send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'send',
+          ...outgoing,
+        }),
+      }).catch((e) => {
+        console.warn('[AuraDrop Signaling] Serverless send notice:', e);
+      });
     }
   }
 
@@ -428,6 +586,7 @@ export class SignalingClient {
   public disconnect(): void {
     this.shouldReconnect = false;
     this.stopHeartbeat();
+    this.stopHttpPolling();
     if (this.socket) {
       this.socket.close();
       this.socket = null;

@@ -11,6 +11,7 @@ import {
   decodeBinaryFrame,
   BinaryFrameType,
   AURA_MAGIC,
+  P2PF_MAGIC,
 } from '../apps/web/src/engine/binaryProtocol';
 
 async function runCrossDeviceE2ETests() {
@@ -256,14 +257,12 @@ async function runCrossDeviceE2ETests() {
     payload
   );
 
-  assert(encodedFrame.byteLength === 38 + payload.byteLength, 'Encoded frame has exact 38-byte header + payload');
+  assert(encodedFrame.byteLength === 20 + payload.byteLength, 'Encoded frame has exact 20-byte P2PF header + payload');
 
   const decoded = decodeBinaryFrame(encodedFrame);
   assert(decoded !== null, 'Binary frame decoded successfully');
-  assert(decoded!.magic === AURA_MAGIC, 'Magic number matches 0x41555241 (AURA)');
+  assert(decoded!.magic === P2PF_MAGIC, 'Magic number matches 0x50325046 (P2PF)');
   assert(decoded!.frameType === BinaryFrameType.DATA_CHUNK, 'Frame type is DATA_CHUNK');
-  assert(decoded!.transferId === transferId, 'TransferId preserved');
-  assert(decoded!.sequence === sequence, 'Sequence number matches');
   assert(decoded!.offset === offset, '64-bit BigInt offset matches exactly (1048576000)');
   assert(decoded!.payload.byteLength === payload.byteLength, 'Payload length matches');
 

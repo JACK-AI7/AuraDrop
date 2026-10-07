@@ -14,6 +14,7 @@ export class WebRtcTransport implements P2PTransport {
   private dataChannel: RTCDataChannel | null = null;
   private signaling: SignalingClient;
   private targetPeer: PeerDevice | null = null;
+  private targetPeerId: string | null = null;
 
   // Candidate buffering to prevent race conditions during signaling
   private pendingCandidates: RTCIceCandidateInit[] = [];
@@ -80,6 +81,7 @@ export class WebRtcTransport implements P2PTransport {
   // ---------------------------------------------------------------------------
   public async connect(peer: PeerDevice): Promise<boolean> {
     this.targetPeer = peer;
+    this.targetPeerId = peer.deviceId;
     this.pendingCandidates = [];
     this.updateState('CONNECTING');
 
@@ -89,7 +91,7 @@ export class WebRtcTransport implements P2PTransport {
     this.setupPeerConnectionEvents();
 
     // Create reliable binary data channel (ordered, reliable delivery)
-    this.dataChannel = this.peerConnection.createDataChannel('auradrop_data', {
+    this.dataChannel = this.peerConnection.createDataChannel('auradrop-p2pfs', {
       ordered: true,
     });
     this.setupDataChannel(this.dataChannel);
@@ -119,6 +121,7 @@ export class WebRtcTransport implements P2PTransport {
 
     if (signal.type === 'offer') {
       console.log(`[WebRTC] Received SDP Offer from ${senderId}`);
+      this.targetPeerId = senderId;
       this.updateState('CONNECTING');
       this.pendingCandidates = [];
 
@@ -197,9 +200,14 @@ export class WebRtcTransport implements P2PTransport {
     if (!this.peerConnection) return;
 
     this.peerConnection.onicecandidate = (e) => {
-      if (e.candidate && this.targetPeer) {
-        this.signaling.sendSignal(this.targetPeer.deviceId, {
-          candidate: e.candidate,
+      const targetId = this.targetPeer?.deviceId || this.targetPeerId;
+      if (e.candidate && targetId) {
+        this.signaling.sendSignal(targetId, {
+          candidate: {
+            candidate: e.candidate.candidate,
+            sdpMid: e.candidate.sdpMid,
+            sdpMLineIndex: e.candidate.sdpMLineIndex,
+          },
         });
 
         if (e.candidate.type) {
@@ -374,6 +382,20 @@ export class WebRtcTransport implements P2PTransport {
       this.peerConnection.close();
       this.peerConnection = null;
     }
+  }
+
+  public async waitForDataChannel(timeoutMs = 15000): Promise<boolean> {
+    if (this.dataChannel && this.dataChannel.readyState === 'open') {
+      return true;
+    }
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (this.dataChannel && this.dataChannel.readyState === 'open') {
+        return true;
+      }
+      await new Promise((r) => setTimeout(r, 80));
+    }
+    return Boolean(this.dataChannel && this.dataChannel.readyState === 'open');
   }
 
   public getStatistics(): TransportStatistics {

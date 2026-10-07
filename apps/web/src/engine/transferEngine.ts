@@ -267,20 +267,23 @@ export class TransferEngine {
   // ---------------------------------------------------------------------------
   private async handleTransferRequestMessage(msg: any): Promise<void> {
     const payload = msg.payload || msg;
-    const safeName = this.storage.sanitizeFilename(payload.fileName);
-    const checkpoint = this.storage.getCheckpoint(payload.transferId);
+    const rawName = payload.fileName || payload.name || (Array.isArray(payload.files) && payload.files[0]?.name) || 'received_file';
+    const safeName = this.storage.sanitizeFilename(rawName);
+    const transferId = payload.transferId || msg.transferId || `xfer_${Date.now()}`;
+    const fileSize = Number(payload.fileSize || payload.totalBytes || payload.size || 0);
+    const checkpoint = this.storage.getCheckpoint(transferId);
     const resumeOffset = checkpoint ? checkpoint.verifiedOffset : 0;
 
-    const diskWriter = new ProgressiveDiskWriter(payload.transferId, safeName);
+    const diskWriter = new ProgressiveDiskWriter(transferId, safeName);
     await diskWriter.init();
 
     this.activeIncomingTransfer = {
-      transferId: payload.transferId,
+      transferId,
       senderId: msg.senderId || payload.senderId,
-      senderName: payload.senderName || 'Remote Peer',
+      senderName: payload.senderName || msg.senderName || 'Remote Peer',
       fileName: safeName,
-      fileSize: payload.fileSize,
-      expectedSha256: payload.sha256,
+      fileSize,
+      expectedSha256: payload.sha256 || '',
       receivedBytes: resumeOffset,
       verifiedOffset: resumeOffset,
       hasher: new IncrementalSha256(),
@@ -295,12 +298,12 @@ export class TransferEngine {
     this.notifyEvent(
       {
         type: 'request',
-        transferId: payload.transferId,
+        transferId,
         senderName: this.activeIncomingTransfer.senderName,
         fileName: safeName,
-        fileSize: payload.fileSize,
+        fileSize,
         state: 'WAITING_FOR_ACCEPTANCE',
-        sha256: payload.sha256,
+        sha256: payload.sha256 || '',
         transport: 'WebRTC Direct',
       },
       true
@@ -308,8 +311,46 @@ export class TransferEngine {
   }
 
   private async handleBinaryFrame(frame: any): Promise<void> {
+    // 1. Handshake & Health Ping (Cross-platform P2PFS/1 interop)
+    if (frame.frameType === BinaryFrameType.HANDSHAKE_INIT) {
+      const respPayload = new TextEncoder().encode(JSON.stringify({
+        protocolVersion: 'P2PFS/1',
+        status: 'OK',
+        timestamp: Date.now(),
+      }));
+      const resp = encodeBinaryFrame(BinaryFrameType.HANDSHAKE_RESP, '', 0, 0n, respPayload);
+      this.webRtcTransport.sendFrame(new Uint8Array(resp)).catch(() => {});
+      return;
+    }
+
+    if (frame.frameType === BinaryFrameType.HEALTH_PING) {
+      const pong = encodeBinaryFrame(BinaryFrameType.HEALTH_PONG, '', 0, 0n, frame.payload);
+      this.webRtcTransport.sendFrame(new Uint8Array(pong)).catch(() => {});
+      return;
+    }
+
+    // 2. In-band FILE_START frame
+    if (frame.frameType === BinaryFrameType.FILE_START) {
+      try {
+        const text = new TextDecoder().decode(frame.payload);
+        const info = JSON.parse(text);
+        if (info && !this.activeIncomingTransfer) {
+          await this.handleTransferRequestMessage({
+            transferId: info.transferId || frame.transferId,
+            senderId: 'remote_peer',
+            senderName: 'Remote Peer',
+            fileName: info.filename || 'received_file',
+            fileSize: info.size || 0,
+            sha256: info.checksum || '',
+          });
+        }
+      } catch {}
+      return;
+    }
+
     const xfer = this.activeIncomingTransfer;
-    if (!xfer || xfer.transferId !== frame.transferId) return;
+    if (!xfer) return;
+    if (frame.transferId && frame.transferId !== xfer.transferId) return;
 
     if (frame.frameType === BinaryFrameType.DATA_CHUNK) {
       xfer.state = 'TRANSFERRING';
@@ -524,10 +565,14 @@ export class TransferEngine {
       transferId,
       senderId: this.localId,
       senderName: this.localName,
+      senderDeviceName: this.identity.deviceName,
       fileName: safeName,
       fileSize: file.size,
+      totalBytes: file.size,
+      totalFiles: 1,
       sha256: senderSha256,
       verifiedOffset: resumeOffset,
+      files: [{ name: safeName, size: file.size, sha256: senderSha256 }],
     });
 
     this.notifyEvent(
@@ -553,9 +598,11 @@ export class TransferEngine {
   private handleTransferResponseMessage(msg: any): void {
     const payload = msg.payload || msg;
     const xfer = this.activeOutgoingTransfer;
-    if (!xfer || xfer.transferId !== payload.transferId) return;
+    const tid = payload.transferId || msg.transferId;
+    if (!xfer || (tid && xfer.transferId !== tid)) return;
 
-    if (payload.accepted) {
+    const isAccepted = payload.accepted === true || msg.type === 'TRANSFER_ACCEPT';
+    if (isAccepted) {
       const startOffset = payload.verifiedOffset || 0;
       this.executeOutgoingStream(startOffset);
     } else {
@@ -586,17 +633,72 @@ export class TransferEngine {
     const xfer = this.activeOutgoingTransfer;
     if (!xfer) return;
 
-    xfer.state = 'TRANSFERRING';
+    xfer.state = 'CONNECTING';
     const file = xfer.file;
     const totalBytes = file.size;
     let offset = startOffset;
     let sequence = Math.floor(startOffset / xfer.chunkSize);
 
     // Make sure WebRTC is connected
-    const targetPeer = this.peersMap.get(xfer.targetPeerId);
-    if (targetPeer && targetPeer.connectionState !== 'READY_TO_TRANSFER') {
+    const targetPeer = this.peersMap.get(xfer.targetPeerId) || {
+      id: xfer.targetPeerId,
+      deviceId: xfer.targetPeerId,
+      name: xfer.targetPeerName,
+      deviceName: xfer.targetPeerName,
+      platform: 'unknown',
+      ip: 'WebRTC P2P',
+      port: 0,
+      lastSeen: new Date(),
+      isTrusted: true,
+      connectionState: 'CONNECTING' as any,
+      transport: 'WebRTC Direct',
+    };
+
+    if (targetPeer.connectionState !== 'READY_TO_TRANSFER') {
       await this.connectToPeer(targetPeer);
     }
+
+    const isDcReady = await this.webRtcTransport.waitForDataChannel(15000);
+    if (!isDcReady) {
+      this.notifyEvent(
+        {
+          type: 'error',
+          transferId: xfer.transferId,
+          senderName: this.localName,
+          fileName: file.name,
+          fileSize: totalBytes,
+          error: 'WebRTC connection timed out. Devices could not establish direct P2P channel.',
+          state: 'FAILED_CONNECTION',
+        },
+        true
+      );
+      this.activeOutgoingTransfer = null;
+      return;
+    }
+
+    // 1. Send FILE_START frame before data chunks (required for mobile & cross-platform)
+    try {
+      const startPayload = new TextEncoder().encode(
+        JSON.stringify({
+          filename: file.name,
+          size: totalBytes,
+          checksum: xfer.expectedSha256,
+          transferId: xfer.transferId,
+        })
+      );
+      const startFrame = encodeBinaryFrame(
+        BinaryFrameType.FILE_START,
+        xfer.transferId,
+        0,
+        0n,
+        startPayload
+      );
+      await this.webRtcTransport.sendFrame(new Uint8Array(startFrame));
+    } catch (e) {
+      console.warn('[TransferEngine] FILE_START send warning:', e);
+    }
+
+    xfer.state = 'TRANSFERRING';
 
     const sendLoop = async () => {
       if (xfer.isCancelled) return;
