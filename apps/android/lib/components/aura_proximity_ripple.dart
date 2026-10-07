@@ -120,7 +120,10 @@ class _AuraProximityRippleState extends State<AuraProximityRipple>
     _ticker = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 1),
-    )..repeat();
+    );
+    if (widget.controller.pulses.isNotEmpty) {
+      _ticker.repeat();
+    }
     widget.controller.addListener(_onControllerChange);
   }
 
@@ -132,7 +135,14 @@ class _AuraProximityRippleState extends State<AuraProximityRipple>
   }
 
   void _onControllerChange() {
-    if (mounted) setState(() {});
+    if (mounted) {
+      setState(() {});
+      if (widget.controller.pulses.isEmpty) {
+        _ticker.stop();
+      } else if (!_ticker.isAnimating) {
+        _ticker.repeat();
+      }
+    }
   }
 
   @override

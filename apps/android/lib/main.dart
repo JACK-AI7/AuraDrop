@@ -118,6 +118,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
   // Subscriptions & Timers
   StreamSubscription? _eventSubscription;
   Timer? _temporaryVisibilityTimer;
+  Timer? _peerCleanupTimer;
   int _temporarySecondsRemaining = 600;
 
   // Local Device Identity & Profile
@@ -176,6 +177,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _temporaryVisibilityTimer?.cancel();
+    _peerCleanupTimer?.cancel();
     _eventSubscription?.cancel();
     _rippleController.dispose();
     super.dispose();
@@ -212,6 +214,22 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
       _eventSubscription = NativeBridgeService.events.listen(_onNativeEvent);
       _applyVisibilityMode(_visibilityMode);
       _checkSystemShare();
+      
+      _peerCleanupTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+        if (!mounted) return;
+        final now = DateTime.now();
+        bool changed = false;
+        _peers.removeWhere((id, peer) {
+          if (now.difference(peer.lastSeen).inSeconds > 10) {
+            if (_selectedPeer?.id == id) _selectedPeer = null;
+            changed = true;
+            return true;
+          }
+          return false;
+        });
+        if (changed) setState(() {});
+      });
+      
     } catch (e) {
       debugPrint('Initialization error: $e');
     }

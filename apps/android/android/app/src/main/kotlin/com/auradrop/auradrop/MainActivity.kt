@@ -896,6 +896,10 @@ class MainActivity : FlutterActivity() {
         var overallReceived = resumeOffset
         val startTime = System.currentTimeMillis()
         var lastEventTime = 0L
+        
+        var lastSpeedUpdateTime = startTime
+        var lastSpeedUpdateBytes = overallReceived
+        var movingAvgSpeed = 0L
 
         val currentDigest = MessageDigest.getInstance("SHA-256")
         // If resuming, read existing bytes into digest
@@ -936,11 +940,22 @@ class MainActivity : FlutterActivity() {
                     val now = System.currentTimeMillis()
                     if (now - lastEventTime >= PROGRESS_EVENT_INTERVAL_MS) {
                         lastEventTime = now
-                        val elapsedSec = Math.max(0.1, (now - startTime) / 1000.0)
-                        val speedBytesPerSec = (overallReceived / elapsedSec).toLong()
+                        
+                        val speedDeltaTime = Math.max(1L, now - lastSpeedUpdateTime)
+                        val speedDeltaBytes = overallReceived - lastSpeedUpdateBytes
+                        val currentInstantSpeed = (speedDeltaBytes * 1000L) / speedDeltaTime
+                        
+                        movingAvgSpeed = (movingAvgSpeed * 0.7 + currentInstantSpeed * 0.3).toLong()
+                        if (movingAvgSpeed == 0L && currentInstantSpeed > 0) {
+                            movingAvgSpeed = currentInstantSpeed
+                        }
+                        
+                        lastSpeedUpdateTime = now
+                        lastSpeedUpdateBytes = overallReceived
+                        
                         val rawPct = (overallReceived.toDouble() / Math.max(1L, totalExpectedTransferBytes).toDouble()) * 100.0
                         val safePct = if (overallReceived >= totalExpectedTransferBytes) 99.9 else Math.min(99.9, rawPct)
-                        val eta = Math.max(0, ((totalExpectedTransferBytes - overallReceived) / Math.max(1L, speedBytesPerSec)).toInt())
+                        val eta = Math.max(0, ((totalExpectedTransferBytes - overallReceived) / Math.max(1L, movingAvgSpeed)).toInt())
 
                         sendEvent("transferProgress", mapOf(
                             "transferId" to transferId,
@@ -948,13 +963,13 @@ class MainActivity : FlutterActivity() {
                             "fileName" to currentFinalFile.name,
                             "transferredBytes" to overallReceived,
                             "totalBytes" to totalExpectedTransferBytes,
-                            "speedBytesPerSec" to speedBytesPerSec,
+                            "speedBytesPerSec" to movingAvgSpeed,
                             "percentage" to safePct,
                             "etaSeconds" to eta,
                             "verificationState" to "STREAMING"
                         ))
 
-                        updateForegroundTransferProgress(safePct.toInt(), formatSpeed(speedBytesPerSec))
+                        updateForegroundTransferProgress(safePct.toInt(), formatSpeed(movingAvgSpeed))
                     }
                 }
 
@@ -1204,6 +1219,10 @@ class MainActivity : FlutterActivity() {
                 var overallSent = 0L
                 val startTime = System.currentTimeMillis()
                 var lastEventTime = 0L
+                
+                var lastSpeedUpdateTime = startTime
+                var lastSpeedUpdateBytes = 0L
+                var movingAvgSpeed = 0L
 
                 for (fileMap in filesList) {
                     if (session.isCancelled.get()) break
@@ -1273,11 +1292,22 @@ class MainActivity : FlutterActivity() {
                             val now = System.currentTimeMillis()
                             if (now - lastEventTime >= PROGRESS_EVENT_INTERVAL_MS) {
                                 lastEventTime = now
-                                val elapsedSec = Math.max(0.1, (now - startTime) / 1000.0)
-                                val speedBytesPerSec = (overallSent / elapsedSec).toLong()
+                                
+                                val speedDeltaTime = Math.max(1L, now - lastSpeedUpdateTime)
+                                val speedDeltaBytes = overallSent - lastSpeedUpdateBytes
+                                val currentInstantSpeed = (speedDeltaBytes * 1000L) / speedDeltaTime
+                                
+                                movingAvgSpeed = (movingAvgSpeed * 0.7 + currentInstantSpeed * 0.3).toLong()
+                                if (movingAvgSpeed == 0L && currentInstantSpeed > 0) {
+                                    movingAvgSpeed = currentInstantSpeed
+                                }
+                                
+                                lastSpeedUpdateTime = now
+                                lastSpeedUpdateBytes = overallSent
+                                
                                 val rawPct = (overallSent.toDouble() / Math.max(1L, totalBytes).toDouble()) * 100.0
                                 val safePct = if (overallSent >= totalBytes) 99.9 else Math.min(99.9, rawPct)
-                                val eta = Math.max(0, ((totalBytes - overallSent) / Math.max(1L, speedBytesPerSec)).toInt())
+                                val eta = Math.max(0, ((totalBytes - overallSent) / Math.max(1L, movingAvgSpeed)).toInt())
 
                                 sendEvent("transferProgress", mapOf(
                                     "transferId" to transferId,
@@ -1285,13 +1315,13 @@ class MainActivity : FlutterActivity() {
                                     "fileName" to fileName,
                                     "transferredBytes" to overallSent,
                                     "totalBytes" to totalBytes,
-                                    "speedBytesPerSec" to speedBytesPerSec,
+                                    "speedBytesPerSec" to movingAvgSpeed,
                                     "percentage" to safePct,
                                     "etaSeconds" to eta,
                                     "verificationState" to "STREAMING"
                                 ))
 
-                                updateForegroundTransferProgress(safePct.toInt(), formatSpeed(speedBytesPerSec))
+                                updateForegroundTransferProgress(safePct.toInt(), formatSpeed(movingAvgSpeed))
                             }
                         }
                     }
@@ -1393,7 +1423,7 @@ class MainActivity : FlutterActivity() {
             "senderId" to deviceId,
             "text" to text,
             "timestamp" to timestamp,
-            "status" to "sending"
+            "status" to "sent" // Immediate local P2P assumption
         )
         dbHelper.insertChatMessage(msgMap)
         sendEvent("chatMessageSent", msgMap)
