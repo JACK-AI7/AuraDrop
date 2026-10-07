@@ -123,10 +123,10 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
 
   // Local Device Identity & Profile
   String _deviceId = 'android_local';
-  String _deviceName = 'My Device';
+  String _deviceName = '';
   String _localIp = '127.0.0.1';
   UserProfile _userProfile = UserProfile(
-    displayName: 'AuraDrop User',
+    displayName: '',
     avatarIndex: 0,
     bio: 'Nearby sharing made effortless',
     theme: 'system',
@@ -197,11 +197,14 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
       final prof = await NativeBridgeService.getUserProfile();
       final trusted = await NativeBridgeService.getTrustedPeers();
 
+      final realDevName = info['deviceName']?.toString() ?? 'Unknown Device';
+      final realDispName = (prof.displayName.isNotEmpty && prof.displayName != 'AuraDrop User')
+          ? prof.displayName
+          : realDevName;
+
       setState(() {
         _deviceId = info['deviceId']?.toString() ?? _deviceId;
-        _deviceName = prof.displayName.isNotEmpty
-            ? prof.displayName
-            : (info['deviceName']?.toString() ?? _deviceName);
+        _deviceName = realDispName;
         _localIp = info['ipAddress']?.toString() ?? _localIp;
         _userProfile = prof;
         for (final t in trusted) {
@@ -335,9 +338,20 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
         _showIncomingTransferModal(event);
         break;
 
+      case 'peerExpired':
+        final expiredId = event['peerId']?.toString();
+        if (expiredId != null) {
+          setState(() {
+            _peers.remove(expiredId);
+            if (_selectedPeer?.id == expiredId) _selectedPeer = null;
+          });
+        }
+        break;
+
       case 'chatMessageReceived':
+        _rippleController.triggerChatReceived();
         final pId = event['peerId']?.toString() ?? '';
-        final sName = event['senderName']?.toString() ?? 'Nearby Peer';
+        final sName = event['senderName']?.toString() ?? 'Unknown Device';
         final text = event['text']?.toString() ?? '';
         if (_currentTabIndex != 2) {
           InAppNotificationController().showChatMessage(
@@ -407,6 +421,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
 
       case 'transferError':
         HapticFeedback.vibrate();
+        _rippleController.triggerTransferFailed();
         final err = event['error']?.toString() ?? 'Transfer failed';
         setState(() {
           _transferState = TransferState.failed;
@@ -964,8 +979,10 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                 _visibilityMode == VisibilityMode.receivingOff
                     ? 'Visibility is turned off'
                     : (_peers.isEmpty
-                        ? 'Searching for nearby devices...'
-                        : '${_peers.length} nearby device${_peers.length == 1 ? '' : 's'} discovered'),
+                        ? '0 nearby devices'
+                        : (_peers.length == 1
+                            ? '1 nearby device discovered'
+                            : '${_peers.length} nearby devices discovered')),
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
@@ -1064,7 +1081,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    '${peer.platform.toUpperCase()} • ${peer.ip}',
+                    '${peer.deviceName} • ${peer.connectionState.toUpperCase()} • ${peer.transport}',
                     style: TextStyle(fontSize: 11, color: theme.textSecondary),
                   ),
                 ],

@@ -54,6 +54,20 @@ class AuraDropDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATAB
         const val COL_BLOCK_PEER_ID = "peer_id"
         const val COL_BLOCK_PEER_NAME = "peer_name"
         const val COL_BLOCK_TIMESTAMP = "blocked_since"
+
+        // Table Incoming Share Requests (Section 16)
+        const val TABLE_INCOMING_REQUESTS = "incoming_requests"
+        const val COL_REQ_ID = "request_id"
+        const val COL_REQ_SESSION_ID = "transfer_session_id"
+        const val COL_REQ_SENDER_DEVICE_ID = "sender_device_id"
+        const val COL_REQ_SENDER_DISPLAY_NAME = "sender_display_name"
+        const val COL_REQ_SENDER_DEVICE_NAME = "sender_device_name"
+        const val COL_REQ_FILE_COUNT = "file_count"
+        const val COL_REQ_FILE_MANIFEST = "file_manifest"
+        const val COL_REQ_TOTAL_BYTES = "total_bytes"
+        const val COL_REQ_CREATED_AT = "created_at"
+        const val COL_REQ_EXPIRES_AT = "expires_at"
+        const val COL_REQ_STATUS = "status"
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -111,8 +125,26 @@ class AuraDropDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATAB
             )
         """.trimIndent())
 
-        // Insert default profile settings
-        db.execSQL("INSERT OR IGNORE INTO $TABLE_PROFILE VALUES ('display_name', 'AuraDrop User')")
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS $TABLE_INCOMING_REQUESTS (
+                $COL_REQ_ID TEXT PRIMARY KEY,
+                $COL_REQ_SESSION_ID TEXT NOT NULL,
+                $COL_REQ_SENDER_DEVICE_ID TEXT NOT NULL,
+                $COL_REQ_SENDER_DISPLAY_NAME TEXT NOT NULL,
+                $COL_REQ_SENDER_DEVICE_NAME TEXT NOT NULL,
+                $COL_REQ_FILE_COUNT INTEGER NOT NULL,
+                $COL_REQ_FILE_MANIFEST TEXT NOT NULL,
+                $COL_REQ_TOTAL_BYTES INTEGER NOT NULL,
+                $COL_REQ_CREATED_AT INTEGER NOT NULL,
+                $COL_REQ_EXPIRES_AT INTEGER NOT NULL,
+                $COL_REQ_STATUS TEXT NOT NULL
+            )
+        """.trimIndent())
+
+        // Insert real hardware device name as default profile name
+        val defaultDeviceModel = "${android.os.Build.MANUFACTURER.replaceFirstChar { it.uppercase() }} ${android.os.Build.MODEL}"
+        db.execSQL("INSERT OR IGNORE INTO $TABLE_PROFILE VALUES ('display_name', '$defaultDeviceModel')")
+        db.execSQL("INSERT OR IGNORE INTO $TABLE_PROFILE VALUES ('device_name', '$defaultDeviceModel')")
         db.execSQL("INSERT OR IGNORE INTO $TABLE_PROFILE VALUES ('avatar_index', '0')")
         db.execSQL("INSERT OR IGNORE INTO $TABLE_PROFILE VALUES ('bio', 'Nearby sharing made effortless')")
         db.execSQL("INSERT OR IGNORE INTO $TABLE_PROFILE VALUES ('theme', 'dark')")
@@ -329,5 +361,65 @@ class AuraDropDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATAB
             }
         }
         return list
+    }
+
+    // -------------------------------------------------------------------------
+    // INCOMING SHARE REQUEST METHODS (Section 16)
+    // -------------------------------------------------------------------------
+    fun insertIncomingRequest(req: Map<String, Any>): Boolean {
+        val db = writableDatabase
+        val cv = ContentValues().apply {
+            put(COL_REQ_ID, req["requestId"]?.toString())
+            put(COL_REQ_SESSION_ID, req["transferSessionId"]?.toString())
+            put(COL_REQ_SENDER_DEVICE_ID, req["senderDeviceId"]?.toString())
+            put(COL_REQ_SENDER_DISPLAY_NAME, req["senderDisplayName"]?.toString())
+            put(COL_REQ_SENDER_DEVICE_NAME, req["senderDeviceName"]?.toString())
+            put(COL_REQ_FILE_COUNT, (req["fileCount"] as? Number)?.toInt() ?: 1)
+            put(COL_REQ_FILE_MANIFEST, req["fileManifest"]?.toString() ?: "[]")
+            put(COL_REQ_TOTAL_BYTES, (req["totalBytes"] as? Number)?.toLong() ?: 0L)
+            put(COL_REQ_CREATED_AT, (req["createdAt"] as? Number)?.toLong() ?: System.currentTimeMillis())
+            put(COL_REQ_EXPIRES_AT, (req["expiresAt"] as? Number)?.toLong() ?: (System.currentTimeMillis() + 60000L))
+            put(COL_REQ_STATUS, req["status"]?.toString() ?: "PENDING")
+        }
+        return db.insertWithOnConflict(TABLE_INCOMING_REQUESTS, null, cv, SQLiteDatabase.CONFLICT_REPLACE) != -1L
+    }
+
+    fun updateIncomingRequestStatus(requestId: String, status: String): Boolean {
+        val db = writableDatabase
+        val cv = ContentValues().apply {
+            put(COL_REQ_STATUS, status)
+        }
+        return db.update(TABLE_INCOMING_REQUESTS, cv, "$COL_REQ_ID = ?", arrayOf(requestId)) > 0
+    }
+
+    fun getIncomingRequest(requestId: String): Map<String, Any>? {
+        val db = readableDatabase
+        val cursor = db.rawQuery("SELECT * FROM $TABLE_INCOMING_REQUESTS WHERE $COL_REQ_ID = ?", arrayOf(requestId))
+        cursor.use { c ->
+            if (c.moveToFirst()) {
+                return mapOf(
+                    "requestId" to c.getString(c.getColumnIndexOrThrow(COL_REQ_ID)),
+                    "transferSessionId" to c.getString(c.getColumnIndexOrThrow(COL_REQ_SESSION_ID)),
+                    "senderDeviceId" to c.getString(c.getColumnIndexOrThrow(COL_REQ_SENDER_DEVICE_ID)),
+                    "senderDisplayName" to c.getString(c.getColumnIndexOrThrow(COL_REQ_SENDER_DISPLAY_NAME)),
+                    "senderDeviceName" to c.getString(c.getColumnIndexOrThrow(COL_REQ_SENDER_DEVICE_NAME)),
+                    "fileCount" to c.getInt(c.getColumnIndexOrThrow(COL_REQ_FILE_COUNT)),
+                    "fileManifest" to c.getString(c.getColumnIndexOrThrow(COL_REQ_FILE_MANIFEST)),
+                    "totalBytes" to c.getLong(c.getColumnIndexOrThrow(COL_REQ_TOTAL_BYTES)),
+                    "createdAt" to c.getLong(c.getColumnIndexOrThrow(COL_REQ_CREATED_AT)),
+                    "expiresAt" to c.getLong(c.getColumnIndexOrThrow(COL_REQ_EXPIRES_AT)),
+                    "status" to c.getString(c.getColumnIndexOrThrow(COL_REQ_STATUS))
+                )
+            }
+        }
+        return null
+    }
+
+    fun cleanupLegacyAuraDropUser(realDeviceName: String) {
+        val db = writableDatabase
+        try {
+            db.execSQL("UPDATE $TABLE_PROFILE SET value = ? WHERE key = 'display_name' AND (value = 'AuraDrop User' OR value = '')", arrayOf(realDeviceName))
+            db.execSQL("UPDATE $TABLE_PROFILE SET value = ? WHERE key = 'device_name' AND (value = 'My Device' OR value = 'AuraDrop Device' OR value = '')", arrayOf(realDeviceName))
+        } catch (e: Exception) {}
     }
 }

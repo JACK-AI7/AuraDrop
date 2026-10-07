@@ -135,8 +135,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final devName = _deviceNameController.text.trim();
     final bio = _bioController.text.trim();
 
-    final finalName = name.isNotEmpty ? name : 'AuraDrop User';
-    final finalDevName = devName.isNotEmpty ? devName : 'My Device';
+    final finalDevName = devName.isNotEmpty ? devName : 'Unknown Device';
+    final finalName = name.isNotEmpty ? name : finalDevName;
 
     final repo = ProfileRepository();
     final ok1 = await repo.updateDisplayName(finalName);
@@ -249,7 +249,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  _nameController.text.isNotEmpty ? _nameController.text : 'AuraDrop User',
+                  _nameController.text.isNotEmpty
+                      ? _nameController.text
+                      : (_deviceNameController.text.isNotEmpty
+                          ? _deviceNameController.text
+                          : 'Unknown Device'),
                   style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w800,
@@ -258,7 +262,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  _deviceNameController.text.isNotEmpty ? _deviceNameController.text : 'AuraDrop Device',
+                  _deviceNameController.text.isNotEmpty ? _deviceNameController.text : 'Unknown Device',
                   style: TextStyle(
                     fontSize: 12,
                     color: theme.textSecondary,

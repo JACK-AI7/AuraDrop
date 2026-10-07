@@ -35,6 +35,70 @@ import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
+data class PeerInfo(
+    val deviceId: String,
+    val displayName: String,
+    val deviceName: String,
+    val platform: String = "android",
+    val ip: String,
+    val port: Int,
+    val avatarIndex: Int = 0,
+    val avatarPath: String = "",
+    val status: String = "",
+    val transport: String = "LAN",
+    var connectionState: String = "DISCOVERED",
+    var lastSeen: Long = System.currentTimeMillis()
+) {
+    fun toMap(): Map<String, Any> = mapOf(
+        "id" to deviceId,
+        "name" to displayName,
+        "deviceName" to deviceName,
+        "platform" to platform,
+        "ip" to ip,
+        "port" to port,
+        "avatarIndex" to avatarIndex,
+        "avatarPath" to avatarPath,
+        "status" to status,
+        "transport" to transport,
+        "connectionState" to connectionState,
+        "lastSeen" to lastSeen
+    )
+}
+
+object PeerRegistry {
+    private val peers = ConcurrentHashMap<String, PeerInfo>()
+
+    fun updateOrAdd(peer: PeerInfo): Boolean {
+        val existing = peers[peer.deviceId]
+        peers[peer.deviceId] = peer
+        return existing == null
+    }
+
+    fun get(deviceId: String): PeerInfo? = peers[deviceId]
+
+    fun remove(deviceId: String): PeerInfo? = peers.remove(deviceId)
+
+    fun pruneExpired(timeoutMs: Long = 8000L): List<PeerInfo> {
+        val now = System.currentTimeMillis()
+        val expired = mutableListOf<PeerInfo>()
+        val it = peers.entries.iterator()
+        while (it.hasNext()) {
+            val entry = it.next()
+            if (now - entry.value.lastSeen > timeoutMs) {
+                expired.add(entry.value)
+                it.remove()
+            }
+        }
+        return expired
+    }
+
+    fun getActivePeers(): List<PeerInfo> = peers.values.toList()
+
+    fun updateConnectionState(deviceId: String, state: String) {
+        peers[deviceId]?.connectionState = state
+    }
+}
+
 class MainActivity : FlutterActivity() {
     companion object {
         private const val TAG = "AuraDropNative"
@@ -62,9 +126,10 @@ class MainActivity : FlutterActivity() {
                 } else {
                     inst.declineIncomingTransfer(transferId)
                 }
+            } else {
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                nm.cancel(transferId.hashCode())
             }
-            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            nm.cancel(transferId.hashCode())
         }
     }
 
@@ -90,8 +155,8 @@ class MainActivity : FlutterActivity() {
     // Database
     private lateinit var dbHelper: AuraDropDatabaseHelper
 
-    private val deviceId = "android_" + UUID.randomUUID().toString().replace("-", "").substring(0, 10)
-    private var deviceName = "${Build.MANUFACTURER.replaceFirstChar { it.uppercase() }} ${Build.MODEL}"
+    private var deviceId: String = ""
+    private var deviceName: String = ""
 
     // Initial files received from Android System Share intent
     private val sharedFilesList = Collections.synchronizedList(mutableListOf<Map<String, Any>>())
@@ -99,21 +164,49 @@ class MainActivity : FlutterActivity() {
     data class TransferSession(
         val transferId: String,
         val socket: Socket,
+        var senderName: String = "Unknown Device",
+        var senderDeviceName: String = "Unknown Device",
+        val expiresAt: Long = System.currentTimeMillis() + 60000L,
         var isCancelled: AtomicBoolean = AtomicBoolean(false),
         var isPaused: AtomicBoolean = AtomicBoolean(false),
         var isAccepted: AtomicBoolean = AtomicBoolean(false),
         var isDeclined: AtomicBoolean = AtomicBoolean(false)
     )
 
+    private fun getSystemDeviceName(): String {
+        try {
+            val name = android.provider.Settings.Global.getString(contentResolver, "device_name")
+            if (!name.isNullOrBlank()) return name
+        } catch (e: Exception) {}
+        try {
+            val bluetoothName = android.bluetooth.BluetoothAdapter.getDefaultAdapter()?.name
+            if (!bluetoothName.isNullOrBlank()) return bluetoothName
+        } catch (e: Exception) {}
+        return "${Build.MANUFACTURER.replaceFirstChar { it.uppercase() }} ${Build.MODEL}"
+    }
+
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
         activeInstance = this
         createSystemNotificationChannels()
         dbHelper = AuraDropDatabaseHelper(this)
+
+        val prefs = getSharedPreferences("auradrop_identity", Context.MODE_PRIVATE)
+        var storedId = prefs.getString("device_id", null)
+        if (storedId.isNullOrBlank()) {
+            storedId = "android_" + UUID.randomUUID().toString().replace("-", "").substring(0, 10)
+            prefs.edit().putString("device_id", storedId).apply()
+        }
+        deviceId = storedId
+
+        val sysDev = getSystemDeviceName()
+        dbHelper.cleanupLegacyAuraDropUser(sysDev)
         val profile = dbHelper.getProfile()
-        if (profile.containsKey("display_name")) {
-            val name = profile["display_name"]
-            if (!name.isNullOrBlank()) deviceName = name
+        val savedName = profile["display_name"]
+        if (!savedName.isNullOrBlank() && savedName != "AuraDrop User") {
+            deviceName = savedName
+        } else {
+            deviceName = sysDev
         }
         handleSendIntent(intent)
     }
@@ -185,6 +278,9 @@ class MainActivity : FlutterActivity() {
                         "ipAddress" to getLocalIpAddress(),
                         "port" to DEFAULT_PORT
                     ))
+                }
+                "getDiscoveredPeers" -> {
+                    result.success(PeerRegistry.getActivePeers().map { it.toMap() })
                 }
                 "requestPermissions" -> {
                     checkAndRequestPermissions()
@@ -479,6 +575,7 @@ class MainActivity : FlutterActivity() {
         discoveryJob = scope.launch {
             launch { runUdpListener() }
             launch { runUdpBroadcaster() }
+            launch { runPeerPruner() }
         }
     }
 
@@ -492,6 +589,16 @@ class MainActivity : FlutterActivity() {
         multicastLock = null
     }
 
+    private suspend fun runPeerPruner() = withContext(Dispatchers.IO) {
+        while (isDiscovering && isActive) {
+            delay(2500)
+            val expired = PeerRegistry.pruneExpired(8000L)
+            for (p in expired) {
+                sendEvent("peerExpired", mapOf("peerId" to p.deviceId))
+            }
+        }
+    }
+
     private suspend fun runUdpBroadcaster() = withContext(Dispatchers.IO) {
         val group = InetAddress.getByName(DISCOVERY_GROUP)
         val broadcastAddr = InetAddress.getByName("255.255.255.255")
@@ -501,11 +608,17 @@ class MainActivity : FlutterActivity() {
             while (isDiscovering && isActive) {
                 try {
                     val prof = dbHelper.getProfile()
+                    val savedName = prof["display_name"]
+                    val resolvedDisplayName = if (!savedName.isNullOrBlank() && savedName != "AuraDrop User") {
+                        savedName
+                    } else {
+                        deviceName
+                    }
                     val beacon = JSONObject().apply {
                         put("type", "AURADROP_BEACON")
                         put("protocol", "P2PFS/1")
                         put("deviceId", deviceId)
-                        put("name", prof["display_name"] ?: deviceName)
+                        put("name", resolvedDisplayName)
                         put("deviceName", deviceName)
                         put("platform", "android")
                         put("transferPort", DEFAULT_PORT)
@@ -543,19 +656,28 @@ class MainActivity : FlutterActivity() {
                 try {
                     val json = JSONObject(raw)
                     val remoteDeviceId = json.optString("deviceId")
-                    if (remoteDeviceId.isNotEmpty() && remoteDeviceId != deviceId) {
-                        val peer = mapOf(
-                            "id" to remoteDeviceId,
-                            "name" to json.optString("name", "Nearby Device"),
-                            "deviceName" to json.optString("deviceName", json.optString("name", "Nearby Device")),
-                            "platform" to json.optString("platform", "android"),
-                            "ip" to packet.address.hostAddress,
-                            "port" to json.optInt("transferPort", DEFAULT_PORT),
-                            "avatarIndex" to json.optInt("avatarIndex", 0),
-                            "avatarPath" to json.optString("avatarPath", ""),
-                            "status" to json.optString("status", "")
+                    val remoteIp = packet.address.hostAddress ?: ""
+                    val localIp = getLocalIpAddress()
+                    if (remoteDeviceId.isNotEmpty() && remoteDeviceId != deviceId && remoteIp != localIp && !packet.address.isLoopbackAddress) {
+                        val peerName = json.optString("name", "Unknown Device")
+                        val peerDevName = json.optString("deviceName", peerName)
+                        val resolvedName = if (peerName.isNotBlank() && peerName != "AuraDrop User") peerName else peerDevName
+                        val peer = PeerInfo(
+                            deviceId = remoteDeviceId,
+                            displayName = resolvedName,
+                            deviceName = peerDevName,
+                            platform = json.optString("platform", "android"),
+                            ip = remoteIp,
+                            port = json.optInt("transferPort", DEFAULT_PORT),
+                            avatarIndex = json.optInt("avatarIndex", 0),
+                            avatarPath = json.optString("avatarPath", ""),
+                            status = json.optString("status", ""),
+                            transport = "LAN",
+                            connectionState = "DISCOVERED",
+                            lastSeen = System.currentTimeMillis()
                         )
-                        sendEvent("peerDiscovered", mapOf("peer" to peer))
+                        PeerRegistry.updateOrAdd(peer)
+                        sendEvent("peerDiscovered", mapOf("peer" to peer.toMap()))
                     }
                 } catch (e: Exception) {
                     // Ignore malformed beacon
@@ -654,15 +776,37 @@ class MainActivity : FlutterActivity() {
                         input.readFully(negBytes)
                         val negJson = JSONObject(String(negBytes, Charsets.UTF_8))
 
-                        val senderName = negJson.optString("senderName", "Nearby Peer")
+                        val senderName = negJson.optString("senderName", "Unknown Device")
+                        val senderDeviceName = negJson.optString("senderDeviceName", senderName)
                         val senderDeviceId = negJson.optString("deviceId", "peer")
                         val totalFiles = negJson.optInt("totalFiles", 1)
                         val totalBytes = negJson.optLong("totalBytes", 0L)
                         val filesArray = negJson.optJSONArray("files") ?: JSONArray()
+                        val createdAt = negJson.optLong("createdAt", System.currentTimeMillis())
+                        val expiresAt = negJson.optLong("expiresAt", System.currentTimeMillis() + 60000L)
                         val filesList = mutableListOf<Map<String, Any>>()
+
+                        session.senderName = senderName
+                        session.senderDeviceName = senderDeviceName
+
+                        // Persist IncomingShareRequest (Section 16)
+                        dbHelper.insertIncomingRequest(mapOf(
+                            "requestId" to transferId,
+                            "transferSessionId" to transferId,
+                            "senderDeviceId" to senderDeviceId,
+                            "senderDisplayName" to senderName,
+                            "senderDeviceName" to senderDeviceName,
+                            "fileCount" to totalFiles,
+                            "fileManifest" to filesArray.toString(),
+                            "totalBytes" to totalBytes,
+                            "createdAt" to createdAt,
+                            "expiresAt" to expiresAt,
+                            "status" to "PENDING"
+                        ))
 
                         // Enforce Blocked Peers
                         if (dbHelper.isPeerBlocked(senderDeviceId)) {
+                            dbHelper.updateIncomingRequestStatus(transferId, "DECLINED")
                             val declineJson = JSONObject().apply {
                                 put("transferId", transferId)
                                 put("accepted", false)
@@ -677,6 +821,7 @@ class MainActivity : FlutterActivity() {
                         val prof = dbHelper.getProfile()
                         val vis = prof["visibility"] ?: "everyone"
                         if (vis == "receivingOff" || vis == "noOne") {
+                            dbHelper.updateIncomingRequestStatus(transferId, "DECLINED")
                             val declineJson = JSONObject().apply {
                                 put("transferId", transferId)
                                 put("accepted", false)
@@ -689,6 +834,7 @@ class MainActivity : FlutterActivity() {
                         if (vis == "contactsOnly") {
                             val trusted = dbHelper.getTrustedPeers().any { it["peerId"] == senderDeviceId }
                             if (!trusted) {
+                                dbHelper.updateIncomingRequestStatus(transferId, "DECLINED")
                                 val declineJson = JSONObject().apply {
                                     put("transferId", transferId)
                                     put("accepted", false)
@@ -729,20 +875,30 @@ class MainActivity : FlutterActivity() {
                         val sasCode = generateSasCode(deviceId, senderDeviceId)
 
                         // Store negotiation response data on session
+                        val firstFileName = if (filesList.isNotEmpty()) filesList[0]["name"]?.toString() ?: "" else ""
                         sendEvent("transferRequest", mapOf(
                             "transferId" to transferId,
                             "senderName" to senderName,
                             "senderDeviceId" to senderDeviceId,
                             "totalFiles" to totalFiles,
                             "totalBytes" to totalBytes,
+                            "fileName" to firstFileName,
                             "sas" to sasCode,
                             "files" to filesList,
                             "resumeOffsets" to resumeOffsets.toString(),
                             "connectionState" to "WAITING_FOR_ACCEPTANCE"
                         ))
 
-                        // System-Level Nearby Sharing Notification (Works in background per V8)
-                        showSystemIncomingShareNotification(transferId, senderName, totalFiles, totalBytes, sasCode)
+                        // System-Level Nearby Sharing Notification (Works in background per V8/V10)
+                        showSystemIncomingShareNotification(
+                            transferId = transferId,
+                            senderName = senderName,
+                            senderDeviceName = senderDeviceName,
+                            totalFiles = totalFiles,
+                            totalBytes = totalBytes,
+                            firstFileName = firstFileName,
+                            sasCode = sasCode
+                        )
                     }
 
                     // ---------------------------------------------------------
@@ -824,6 +980,19 @@ class MainActivity : FlutterActivity() {
     private fun acceptIncomingTransfer(transferId: String) {
         val session = activeTransfersState[transferId] ?: return
         if (session.isDeclined.get() || session.isAccepted.getAndSet(true)) return
+
+        if (System.currentTimeMillis() > session.expiresAt) {
+            dbHelper.updateIncomingRequestStatus(transferId, "EXPIRED")
+            cancelSystemIncomingShareNotification(transferId)
+            sendEvent("transferError", mapOf(
+                "transferId" to transferId,
+                "error" to "Incoming share request expired."
+            ))
+            return
+        }
+
+        dbHelper.updateIncomingRequestStatus(transferId, "ACCEPTED")
+        cancelSystemIncomingShareNotification(transferId)
         val socket = session.socket
 
         scope.launch(Dispatchers.IO) {
@@ -1043,7 +1212,7 @@ class MainActivity : FlutterActivity() {
                     dbHelper.insertTransfer(mapOf(
                         "id" to transferId,
                         "timestamp" to System.currentTimeMillis(),
-                        "senderName" to "Nearby Device",
+                        "senderName" to session.senderName,
                         "receiverName" to deviceName,
                         "fileName" to currentFinalFile.name,
                         "fileType" to currentMimeType,
@@ -1057,6 +1226,7 @@ class MainActivity : FlutterActivity() {
                         "transportType" to "LAN_TCP"
                     ))
 
+                    dbHelper.updateIncomingRequestStatus(transferId, "COMPLETED")
                     notifyForegroundTransferComplete(currentFinalFile.name, currentFinalFile.absolutePath)
 
                     sendEvent("transferCompleted", mapOf(
@@ -1079,6 +1249,8 @@ class MainActivity : FlutterActivity() {
     private fun declineIncomingTransfer(transferId: String) {
         val session = activeTransfersState.remove(transferId) ?: return
         if (session.isAccepted.get() || session.isDeclined.getAndSet(true)) return
+        dbHelper.updateIncomingRequestStatus(transferId, "DECLINED")
+        cancelSystemIncomingShareNotification(transferId)
         val socket = session.socket
         scope.launch(Dispatchers.IO) {
             try {
@@ -1181,13 +1353,20 @@ class MainActivity : FlutterActivity() {
                     })
                 }
 
+                val prof = dbHelper.getProfile()
+                val savedName = prof["display_name"]
+                val senderDisplayName = if (!savedName.isNullOrBlank() && savedName != "AuraDrop User") savedName else deviceName
+
                 val negJson = JSONObject().apply {
                     put("transferId", transferId)
-                    put("senderName", deviceName)
+                    put("senderName", senderDisplayName)
+                    put("senderDeviceName", deviceName)
                     put("deviceId", deviceId)
                     put("totalFiles", filesList.size)
                     put("totalBytes", totalBytes)
                     put("files", filesJsonArr)
+                    put("createdAt", System.currentTimeMillis())
+                    put("expiresAt", System.currentTimeMillis() + 60000L)
                 }
                 output.write(buildFrame(0x10, negJson.toString().toByteArray()))
                 output.flush()
@@ -1200,17 +1379,24 @@ class MainActivity : FlutterActivity() {
                     "percentage" to 0
                 ))
 
-                // Negotiation Response
+                // Negotiation Response with 60-second timeout
+                socket.soTimeout = 60000
                 input.readFully(header)
                 val negRespLen = header.readUInt32BE(8)
                 val negRespBytes = ByteArray(negRespLen)
                 input.readFully(negRespBytes)
                 val negRespJson = JSONObject(String(negRespBytes, Charsets.UTF_8))
+                socket.soTimeout = 0
 
                 if (!negRespJson.optBoolean("accepted", false)) {
+                    val declineReason = negRespJson.optString("reason", "declined")
+                    val errorMsg = if (declineReason == "blocked") "Transfer was blocked by recipient."
+                    else if (declineReason == "visibility_off") "Recipient has sharing turned off."
+                    else if (declineReason == "not_trusted") "Recipient only accepts transfers from trusted contacts."
+                    else "Recipient declined the transfer request."
                     sendEvent("transferError", mapOf(
                         "transferId" to transferId,
-                        "error" to "Recipient declined the transfer request."
+                        "error" to errorMsg
                     ))
                     return@launch
                 }
@@ -1753,8 +1939,10 @@ class MainActivity : FlutterActivity() {
     private fun showSystemIncomingShareNotification(
         transferId: String,
         senderName: String,
+        senderDeviceName: String,
         totalFiles: Int,
         totalBytes: Long,
+        firstFileName: String,
         sasCode: String
     ) {
         try {
@@ -1796,23 +1984,42 @@ class MainActivity : FlutterActivity() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
+            val fileSummary = if (totalFiles > 1) {
+                "wants to share $totalFiles files • ${formatBytes(totalBytes)}"
+            } else if (firstFileName.isNotBlank()) {
+                "wants to share $firstFileName • ${formatBytes(totalBytes)}"
+            } else {
+                "wants to share files • ${formatBytes(totalBytes)}"
+            }
+
+            val displayNameHeader = if (senderDeviceName.isNotBlank() && senderDeviceName != senderName) {
+                "$senderName ($senderDeviceName)"
+            } else {
+                senderName
+            }
+
             val customView = android.widget.RemoteViews(packageName, R.layout.notification_incoming_share)
-            customView.setTextViewText(R.id.tv_sender_name, senderName)
-            customView.setTextViewText(R.id.tv_file_info, "wants to share $totalFiles file(s) • ${formatBytes(totalBytes)}")
-            
+            customView.setTextViewText(R.id.tv_sender_name, displayNameHeader)
+            customView.setTextViewText(R.id.tv_file_info, fileSummary)
+
             customView.setOnClickPendingIntent(R.id.btn_decline_container, declinePendingIntent)
             customView.setOnClickPendingIntent(R.id.btn_accept_container, acceptPendingIntent)
 
             val builder = NotificationCompat.Builder(this, INCOMING_REQUEST_CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.stat_sys_download)
-                .setPriority(NotificationCompat.PRIORITY_MAX) // Use MAX for heads-up
+                .setContentTitle(senderName)
+                .setContentText(fileSummary)
+                .setSubText("AuraDrop")
+                .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setDefaults(NotificationCompat.DEFAULT_ALL)
                 .setAutoCancel(true)
                 .setContentIntent(openPendingIntent)
+                .addAction(android.R.drawable.ic_delete, "Decline", declinePendingIntent)
+                .addAction(android.R.drawable.stat_sys_download, "Accept", acceptPendingIntent)
                 .setStyle(androidx.core.app.NotificationCompat.DecoratedCustomViewStyle())
                 .setCustomContentView(customView)
                 .setCustomHeadsUpContentView(customView)
-                .setFullScreenIntent(openPendingIntent, true) // Force Heads-Up even if locked
+                .setFullScreenIntent(openPendingIntent, true)
 
             nm.notify(transferId.hashCode(), builder.build())
         } catch (e: Exception) {

@@ -41,6 +41,14 @@ class NativeBridgeService {
     await _channel.invokeMethod('stopDiscovery');
   }
 
+  static Future<List<Map<String, dynamic>>> getDiscoveredPeers() async {
+    final dynamic res = await _channel.invokeMethod('getDiscoveredPeers');
+    if (res is List) {
+      return res.whereType<Map>().map((m) => Map<String, dynamic>.from(m)).toList();
+    }
+    return [];
+  }
+
   // File Picker
   static Future<List<PickedFileMeta>> pickFiles() async {
     final dynamic res = await _channel.invokeMethod('pickFiles');
@@ -156,11 +164,11 @@ class NativeBridgeService {
       return UserProfile.fromMap(res);
     }
     return UserProfile(
-      displayName: 'AuraDrop User',
+      displayName: 'Unknown Device',
       avatarIndex: 0,
       bio: 'Nearby sharing made effortless',
-      theme: 'glass_dark',
-      accent: 'cyan',
+      theme: 'dark',
+      accent: 'white',
       visibility: 'everyone',
     );
   }

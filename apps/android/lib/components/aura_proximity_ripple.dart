@@ -6,7 +6,10 @@ enum RippleTriggerType {
   peerSelected,
   connectionEstablished,
   transferStart,
+  realTransferMilestone,
   transferComplete,
+  transferFailed,
+  chatReceived,
 }
 
 class FourSidedRipplePulse {
@@ -79,11 +82,35 @@ class AuraProximityRippleController extends ChangeNotifier {
     );
   }
 
+  void triggerRealTransferMilestone() {
+    trigger(
+      type: RippleTriggerType.realTransferMilestone,
+      intensity: 0.7,
+      duration: const Duration(milliseconds: 1000),
+    );
+  }
+
   void triggerTransferComplete() {
     trigger(
       type: RippleTriggerType.transferComplete,
       intensity: 1.0,
       duration: const Duration(milliseconds: 1800),
+    );
+  }
+
+  void triggerTransferFailed() {
+    trigger(
+      type: RippleTriggerType.transferFailed,
+      intensity: 0.85,
+      duration: const Duration(milliseconds: 1200),
+    );
+  }
+
+  void triggerChatReceived() {
+    trigger(
+      type: RippleTriggerType.chatReceived,
+      intensity: 0.65,
+      duration: const Duration(milliseconds: 1100),
     );
   }
 

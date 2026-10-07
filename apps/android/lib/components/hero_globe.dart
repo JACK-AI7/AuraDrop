@@ -195,32 +195,7 @@ class _GlobePainter extends CustomPainter {
     final center = Offset(size.width / 2, size.height / 2);
     final radius = size.width * 0.42;
 
-    // 1. Subtle outline sphere ring
-    final outlinePaint = Paint()
-      ..color = theme.isDark
-          ? const Color(0xFF222222)
-          : const Color(0xFFE5E5E5)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.0;
-    canvas.drawCircle(center, radius, outlinePaint);
-
-    // 2. Subtle latitude / meridian rings for 3D depth
-    final meridianPaint = Paint()
-      ..color = theme.isDark
-          ? const Color(0xFF141414)
-          : const Color(0xFFF0F0F0)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 0.8;
-    canvas.drawOval(
-      Rect.fromCenter(center: center, width: radius * 2, height: radius * 0.7),
-      meridianPaint,
-    );
-    canvas.drawOval(
-      Rect.fromCenter(center: center, width: radius * 0.7, height: radius * 2),
-      meridianPaint,
-    );
-
-    // 3. Render Sphere Dot Matrix
+    // 1. Render Sphere Dot Matrix (Clean 3D particle sphere, zero permanent decorative lines)
     final frontDotPaint = Paint()
       ..color = theme.isDark
           ? const Color(0xFFCCCCCC)

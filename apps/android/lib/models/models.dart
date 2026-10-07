@@ -282,6 +282,8 @@ class PeerDevice {
   final int avatarIndex;
   final String avatarPath;
   final String status;
+  final String connectionState;
+  final String transport;
 
   PeerDevice({
     required this.id,
@@ -295,14 +297,17 @@ class PeerDevice {
     this.avatarIndex = 0,
     this.avatarPath = '',
     this.status = '',
+    this.connectionState = 'DISCOVERED',
+    this.transport = 'LAN',
   });
 
   factory PeerDevice.fromMap(Map<dynamic, dynamic> map, {bool isTrusted = false}) {
-    final name = map['name']?.toString() ?? 'Nearby Peer';
+    final name = map['name']?.toString() ?? 'Unknown Device';
+    final devName = map['deviceName']?.toString() ?? name;
     return PeerDevice(
       id: map['id']?.toString() ?? '',
-      name: name,
-      deviceName: map['deviceName']?.toString() ?? name,
+      name: name.isNotEmpty ? name : 'Unknown Device',
+      deviceName: devName.isNotEmpty ? devName : 'Unknown Device',
       platform: map['platform']?.toString() ?? 'android',
       ip: map['ip']?.toString() ?? '127.0.0.1',
       port: (map['port'] as num?)?.toInt() ?? 48291,
@@ -311,6 +316,8 @@ class PeerDevice {
       avatarIndex: (map['avatarIndex'] as num?)?.toInt() ?? (name.hashCode.abs() % 6),
       avatarPath: map['avatarPath']?.toString() ?? '',
       status: map['status']?.toString() ?? '',
+      connectionState: map['connectionState']?.toString() ?? 'DISCOVERED',
+      transport: map['transport']?.toString() ?? 'LAN',
     );
   }
 
@@ -319,6 +326,8 @@ class PeerDevice {
     int? avatarIndex,
     String? avatarPath,
     String? status,
+    String? connectionState,
+    String? transport,
   }) {
     return PeerDevice(
       id: id,
@@ -332,6 +341,8 @@ class PeerDevice {
       avatarIndex: avatarIndex ?? this.avatarIndex,
       avatarPath: avatarPath ?? this.avatarPath,
       status: status ?? this.status,
+      connectionState: connectionState ?? this.connectionState,
+      transport: transport ?? this.transport,
     );
   }
 }
@@ -520,9 +531,11 @@ class UserProfile {
   });
 
   factory UserProfile.fromMap(Map<dynamic, dynamic> map) {
+    final devName = map['device_name']?.toString() ?? 'Unknown Device';
+    final dispName = map['display_name']?.toString() ?? '';
     return UserProfile(
-      displayName: map['display_name']?.toString() ?? 'AuraDrop User',
-      deviceName: map['device_name']?.toString() ?? 'My Device',
+      displayName: dispName.isNotEmpty && dispName != 'AuraDrop User' ? dispName : devName,
+      deviceName: devName,
       avatarIndex: int.tryParse(map['avatar_index']?.toString() ?? '0') ?? 0,
       avatarPath: map['avatar_path']?.toString() ?? '',
       bio: map['bio']?.toString() ?? 'Nearby sharing made effortless',
