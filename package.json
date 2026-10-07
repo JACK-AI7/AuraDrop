@@ -16,6 +16,7 @@
     "test:v15": "tsx tests/v15-cross-device-protocol-test.ts",
     "test:auth": "tsx tests/v16-auth-database-test.ts",
     "test:neon": "tsx tests/verify-neon-live.ts",
+    "test:v18": "tsx tests/v18-chat-group-production-test.ts",
     "test:cluster": "tsx tests/v17-multi-instance-cluster-test.ts",
     "test:db-failure": "tsx tests/v17-production-db-failure-test.ts",
     "test:load": "tsx tests/load-test-1000-devices.ts",

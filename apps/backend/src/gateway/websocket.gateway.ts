@@ -5,9 +5,11 @@ import { NeonDatabaseClient } from '@auradrop/database';
 
 export interface DevicePeerInfo {
   deviceId: string;
+  userId?: string;
   displayName: string;
   deviceName: string;
   platform: string;
+  avatarUrl?: string;
   visibility: 'everyone' | 'trusted' | 'off';
   capabilities?: {
     webrtc: boolean;
@@ -37,13 +39,20 @@ export interface SignalingMessage {
     | 'TRANSFER_DECLINE'
     | 'TRANSFER_COMPLETE'
     | 'TRANSFER_ACK_COMPLETE'
-    | 'TRANSFER_ALERT';
+    | 'TRANSFER_ALERT'
+    | 'CHAT_MESSAGE'
+    | 'CHAT_RECEIPT'
+    | 'CHAT_TYPING'
+    | 'CONVERSATION_UPDATE';
   deviceId: string;
+  conversationId?: string;
   targetDeviceId?: string;
+  targetUserId?: string;
   senderId?: string;
   targetId?: string;
   payload?: any;
   signal?: any;
+  message?: any;
   peers?: DevicePeerInfo[];
   peer?: DevicePeerInfo;
   _originInstance?: string;
@@ -124,9 +133,11 @@ export class WebSocketGateway {
               const payload = msg.payload || {};
               const info: DevicePeerInfo = {
                 deviceId: devId,
+                userId: payload.userId,
                 displayName: payload.displayName || `Device ${devId.substring(devId.length - 4)}`,
                 deviceName: payload.deviceName || payload.platform || 'Unknown Device',
                 platform: payload.platform || 'web',
+                avatarUrl: payload.avatarUrl,
                 visibility: payload.visibility || 'everyone',
                 capabilities: payload.capabilities || { webrtc: true, directLan: true },
                 remoteIp,
@@ -345,6 +356,36 @@ export class WebSocketGateway {
               );
               break;
             }
+
+            case 'CHAT_MESSAGE':
+            case 'CHAT_RECEIPT':
+            case 'CHAT_TYPING':
+            case 'CONVERSATION_UPDATE': {
+              const convId = msg.conversationId || msg.payload?.conversationId;
+              const target = msg.targetDeviceId || msg.targetId || msg.targetUserId;
+              if (target && this.clients.has(target)) {
+                this.safeSend(this.clients.get(target)!.ws, JSON.stringify(msg));
+              } else if (this.redisService && target) {
+                await this.redisService.publishSignaling('auradrop:signaling', msg);
+              }
+
+              // If conversationId is provided and db is initialized, broadcast to conversation members
+              if (convId && this.db) {
+                this.db.conversations.getMembers(convId).then((members) => {
+                  const sender = msg.senderId || msg.deviceId;
+                  for (const m of members) {
+                    if (m.user_id !== sender) {
+                      for (const [cId, client] of this.clients.entries()) {
+                        if (client.info.userId === m.user_id || cId === m.user_id) {
+                          this.safeSend(client.ws, JSON.stringify(msg));
+                        }
+                      }
+                    }
+                  }
+                }).catch(() => {});
+              }
+              break;
+            }
           }
         } catch (err) {
           console.error(`[WS ERROR] Error processing message from ${remoteIp}:`, err);
@@ -395,5 +436,30 @@ export class WebSocketGateway {
       return this.safeSend(client.ws, JSON.stringify(message));
     }
     return false;
+  }
+
+  broadcastChatMessage(conversationId: string, message: any, memberUserIds: string[]): void {
+    const payload = JSON.stringify({
+      type: 'CHAT_MESSAGE',
+      deviceId: 'gateway',
+      conversationId,
+      message,
+    });
+
+    for (const [cId, client] of this.clients.entries()) {
+      if ((client.info.userId && memberUserIds.includes(client.info.userId)) || memberUserIds.includes(cId)) {
+        this.safeSend(client.ws, payload);
+      }
+    }
+
+    if (this.redisService) {
+      this.redisService.publishSignaling('auradrop:signaling', {
+        type: 'CHAT_MESSAGE',
+        deviceId: 'gateway',
+        conversationId,
+        message,
+        payload: { memberUserIds },
+      }).catch(() => {});
+    }
   }
 }

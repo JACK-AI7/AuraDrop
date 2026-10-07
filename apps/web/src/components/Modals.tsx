@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { PeerDevice, PickedFile, VisibilityMode } from '../types';
 
 interface ModalWrapperProps {
@@ -270,7 +270,7 @@ export const ProfileModal: React.FC<{
 }> = ({ isOpen, onClose, deviceName }) => {
   const [tab, setTab] = useState<'device' | 'account'>('device');
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
-  const [user, setUser] = useState<{ id: string; username: string; email: string; displayName: string } | null>(() => {
+  const [user, setUser] = useState<{ id: string; username: string; email: string; displayName: string; avatarUrl?: string | null } | null>(() => {
     try {
       const saved = localStorage.getItem('auradrop_user');
       return saved ? JSON.parse(saved) : null;
@@ -279,12 +279,74 @@ export const ProfileModal: React.FC<{
     }
   });
 
+  const [avatarUploading, setAvatarUploading] = useState(false);
+  const avatarInputRef = useRef<HTMLInputElement | null>(null);
+
   const [loginInput, setLoginInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [emailInput, setEmailInput] = useState('');
   const [displayNameInput, setDisplayNameInput] = useState('');
   const [authError, setAuthError] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
+
+  const handleAvatarFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !user) return;
+
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+      alert('Please upload a PNG, JPEG, or WEBP image.');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      alert('Avatar image cannot exceed 5MB.');
+      return;
+    }
+
+    setAvatarUploading(true);
+    try {
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const base64 = reader.result as string;
+        const token = localStorage.getItem('auradrop_auth_token');
+        const res = await fetch(`${getApiUrl()}/api/users/avatar`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ imageBase64: base64, mimeType: file.type }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const updatedUser = { ...user, avatarUrl: data.avatarUrl };
+          setUser(updatedUser);
+          localStorage.setItem('auradrop_user', JSON.stringify(updatedUser));
+        } else {
+          alert('Failed to upload avatar image');
+        }
+        setAvatarUploading(false);
+      };
+      reader.readAsDataURL(file);
+    } catch {
+      setAvatarUploading(false);
+    }
+  };
+
+  const handleRemoveAvatar = async () => {
+    if (!user) return;
+    try {
+      const token = localStorage.getItem('auradrop_auth_token');
+      await fetch(`${getApiUrl()}/api/users/avatar`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const updatedUser = { ...user, avatarUrl: null };
+      setUser(updatedUser);
+      localStorage.setItem('auradrop_user', JSON.stringify(updatedUser));
+    } catch {
+      // Ignore
+    }
+  };
 
   const getApiUrl = () => {
     return (
@@ -469,27 +531,79 @@ export const ProfileModal: React.FC<{
             <div style={{ display: 'flex', alignItems: 'center', gap: '14px', background: '#0D0D10', padding: '16px', borderRadius: '16px', border: '1px solid #1F1F24' }}>
               <div
                 style={{
-                  width: '50px',
-                  height: '50px',
+                  width: '56px',
+                  height: '56px',
                   borderRadius: '50%',
-                  background: '#30D158',
+                  background: '#0A84FF',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   fontSize: '20px',
                   fontWeight: 800,
                   color: '#FFFFFF',
+                  overflow: 'hidden',
+                  flexShrink: 0,
+                  border: '2px solid #2C2C32',
                 }}
               >
-                {user.displayName.charAt(0).toUpperCase()}
+                {user.avatarUrl ? (
+                  <img src={user.avatarUrl} alt={user.displayName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : (
+                  user.displayName.charAt(0).toUpperCase()
+                )}
               </div>
-              <div style={{ flex: 1 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: '16px', fontWeight: 800, color: '#FFFFFF' }}>{user.displayName}</div>
                 <div style={{ fontSize: '12px', color: '#8E8E93' }}>@{user.username} • {user.email}</div>
                 <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', marginTop: '4px', background: 'rgba(48, 209, 88, 0.15)', color: '#30D158', padding: '2px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700 }}>
                   ● Authenticated Account
                 </div>
               </div>
+            </div>
+
+            {/* Avatar upload / remove controls */}
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <input
+                type="file"
+                ref={avatarInputRef}
+                accept="image/png,image/jpeg,image/webp"
+                onChange={handleAvatarFile}
+                style={{ display: 'none' }}
+              />
+              <button
+                onClick={() => avatarInputRef.current?.click()}
+                disabled={avatarUploading}
+                style={{
+                  flex: 1,
+                  background: '#1F1F24',
+                  border: '1px solid #323238',
+                  borderRadius: '12px',
+                  padding: '10px',
+                  color: '#0A84FF',
+                  fontWeight: 700,
+                  fontSize: '12px',
+                  cursor: 'pointer',
+                }}
+              >
+                {avatarUploading ? 'Uploading...' : '📷 Change Photo'}
+              </button>
+              {user.avatarUrl && (
+                <button
+                  onClick={handleRemoveAvatar}
+                  style={{
+                    background: '#241416',
+                    border: '1px solid #42181C',
+                    borderRadius: '12px',
+                    padding: '10px 14px',
+                    color: '#FF453A',
+                    fontWeight: 700,
+                    fontSize: '12px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Remove Photo
+                </button>
+              )}
             </div>
 
             <button

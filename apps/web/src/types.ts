@@ -33,6 +33,7 @@ export interface PeerDevice {
   port: number;
   lastSeen: Date;
   isTrusted?: boolean;
+  avatarUrl?: string | null;
   connectionState?: ConnectionState;
   transport?: 'WebRTC Direct' | 'LAN TCP' | 'Relay';
 }

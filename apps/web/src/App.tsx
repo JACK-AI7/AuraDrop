@@ -3,7 +3,8 @@ import { GitHubStarBar } from './components/GitHubStarBar';
 import { FloatingSideRail, ActiveTab } from './components/FloatingSideRail';
 import { HeroGlobe } from './components/HeroGlobe';
 import { AirDropNotification } from './components/AirDropNotification';
-import { ProximityRipple } from './components/ProximityRipple';
+import { FluidProximityAura } from './components/FluidProximityAura';
+import { ChatView } from './components/ChatView';
 import { DockedShareTray } from './components/DockedShareTray';
 import { DiagnosticsView } from './components/DiagnosticsView';
 import { DevicePairModal } from './components/DevicePairModal';
@@ -36,6 +37,7 @@ export const App: React.FC = () => {
   const [incomingMeta, setIncomingMeta] = useState<{
     transferId: string;
     senderName: string;
+    senderAvatarUrl?: string | null;
     fileName: string;
     fileSize: number;
     sizeFormatted: string;
@@ -43,6 +45,7 @@ export const App: React.FC = () => {
   }>({
     transferId: '',
     senderName: '',
+    senderAvatarUrl: null,
     fileName: '',
     fileSize: 0,
     sizeFormatted: '',
@@ -55,8 +58,9 @@ export const App: React.FC = () => {
   // Real Transfer History loaded from persistent TransferStorage
   const [transferHistory, setTransferHistory] = useState<TransferRecord[]>(() => storage.getHistory());
 
-  // Proximity shockwave ripple trigger
+  // Proximity shockwave ripple trigger & fluid light-ripple aura state
   const [rippleKey, setRippleKey] = useState(0);
+  const [isAuraActive, setIsAuraActive] = useState(false);
 
   // Modals
   const [isPairModalOpen, setIsPairModalOpen] = useState(false);
@@ -91,11 +95,13 @@ export const App: React.FC = () => {
         setIncomingMeta({
           transferId: evt.transferId,
           senderName: evt.senderName,
+          senderAvatarUrl: (evt as any).senderAvatarUrl || null,
           fileName: evt.fileName,
           fileSize: evt.fileSize,
           sizeFormatted: formatted,
           isOpen: true,
         });
+        setIsAuraActive(true);
       } else if (evt.type === 'progress') {
         setTransferProgress({
           transferId: evt.transferId,
@@ -193,6 +199,7 @@ export const App: React.FC = () => {
     if (!fileToTransfer) return;
 
     setRippleKey((prev) => prev + 1);
+    setIsAuraActive(true);
 
     try {
       await engine.startOutgoingTransfer(selectedPeer, fileToTransfer);
@@ -206,6 +213,7 @@ export const App: React.FC = () => {
   const handleAcceptRealTransfer = () => {
     engine.acceptIncomingTransfer();
     setRippleKey((prev) => prev + 1);
+    setIsAuraActive(true);
   };
 
   const handleDeclineRealTransfer = () => {
@@ -243,14 +251,19 @@ export const App: React.FC = () => {
       {/* 1. TOP GITHUB STAR BANNER */}
       <GitHubStarBar />
 
-      {/* 2. REACTBITS PROXIMITY SHOCKWAVE LAYER */}
-      <ProximityRipple triggerKey={rippleKey} color="#0A84FF" />
+      {/* 2. FLUID PROXIMITY LIGHT-RIPPLE AURA (Apple NameDrop Image 1 Reference) */}
+      <FluidProximityAura
+        isActive={isAuraActive}
+        onAnimationComplete={() => setIsAuraActive(false)}
+      />
 
-      {/* 3. POPPING AIRDROP HEADS-UP CARD (Media Reference 1791372100396) */}
+      {/* 3. APPLE AIRDROP DYNAMIC ISLAND FLOATING PILL (Images 2 & 3 References) */}
       <AirDropNotification
         isOpen={incomingMeta.isOpen}
         senderName={incomingMeta.senderName}
+        senderAvatarUrl={incomingMeta.senderAvatarUrl}
         filesCount={1}
+        fileName={incomingMeta.fileName}
         totalSizeText={incomingMeta.sizeFormatted}
         onAccept={handleAcceptRealTransfer}
         onDecline={handleDeclineRealTransfer}
@@ -287,7 +300,6 @@ export const App: React.FC = () => {
           onSelectTab={(tab) => {
             setCurrentTab(tab);
             if (tab === 'devices') setIsPairModalOpen(true);
-            if (tab === 'chat') setIsChatOpen(true);
           }}
           activeTransfersCount={stagedFiles.length}
           discoveredPeersCount={peers.length}
@@ -555,6 +567,27 @@ export const App: React.FC = () => {
           />
         ) : currentTab === 'specs' ? (
           <DiagnosticsView />
+        ) : currentTab === 'chat' ? (
+          <div
+            style={{
+              width: '100%',
+              maxWidth: '960px',
+              height: 'calc(100vh - 120px)',
+              padding: '16px',
+              display: 'flex',
+              flexDirection: 'column',
+              boxSizing: 'border-box',
+            }}
+          >
+            <ChatView
+              currentUserId={engine.localId}
+              currentUsername={engine.localName}
+              peers={peers}
+              onStartFileTransfer={(peer, file) => {
+                engine.startOutgoingTransfer(peer, file);
+              }}
+            />
+          </div>
         ) : currentTab === 'transfers' ? (
           <div
             style={{
@@ -624,6 +657,7 @@ export const App: React.FC = () => {
                   const next = prev?.id === p.id ? null : p;
                   if (next) {
                     engine.connectToPeer(next);
+                    setIsAuraActive(true);
                   }
                   return next;
                 });
@@ -674,8 +708,8 @@ export const App: React.FC = () => {
                   </div>
 
                   <button
-                    onClick={() => setIsChatOpen(true)}
-                    title="Chat"
+                    onClick={() => setCurrentTab('chat')}
+                    title="Open Chat"
                     style={{
                       width: '36px',
                       height: '36px',

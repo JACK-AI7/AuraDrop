@@ -1,5 +1,7 @@
 import * as http from 'node:http';
 import * as os from 'node:os';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { WebSocketServer } from 'ws';
 import { AuthService } from './auth/auth.service';
 import {
@@ -199,9 +201,34 @@ export class BackendServer {
         return;
       }
 
-      // Read Body for POST/PUT requests
+      // Static Uploads Serving (Avatars & Chat Media)
+      if (pathname.startsWith('/uploads/') && req.method === 'GET') {
+        const safePath = path.normalize(pathname.replace(/^\/uploads\//, '')).replace(/^(\.\.[\/\\])+/, '');
+        const fullPath = path.resolve(process.cwd(), 'apps/backend/uploads', safePath);
+        if (fs.existsSync(fullPath)) {
+          const ext = path.extname(fullPath).toLowerCase();
+          const mimeTypes: Record<string, string> = {
+            '.png': 'image/png',
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.webp': 'image/webp',
+            '.gif': 'image/gif',
+            '.svg': 'image/svg+xml',
+          };
+          res.writeHead(200, {
+            'Content-Type': mimeTypes[ext] || 'application/octet-stream',
+            'Cache-Control': 'public, max-age=86400',
+          });
+          fs.createReadStream(fullPath).pipe(res);
+          return;
+        } else {
+          return this.sendJson(res, 404, { error: 'Upload not found' });
+        }
+      }
+
+      // Read Body for POST/PUT/DELETE requests
       let body: any = {};
-      if (req.method === 'POST' || req.method === 'PUT') {
+      if (req.method === 'POST' || req.method === 'PUT' || req.method === 'DELETE') {
         const raw = await this.readBody(req);
         if (raw) {
           try {
@@ -498,6 +525,157 @@ export class BackendServer {
         return this.sendJson(res, 201, { pairing });
       }
 
+      // ==========================================
+      // SECTION 9 & 31: REAL PROFILE AVATAR UPLOAD & DELETE
+      // ==========================================
+      if (pathname === '/api/users/avatar' && req.method === 'POST') {
+        if (!currentUser) return this.sendJson(res, 401, { error: 'Unauthorized' });
+        const { imageBase64, mimeType } = body;
+        if (!imageBase64 || !mimeType) {
+          return this.sendJson(res, 400, { error: 'imageBase64 and mimeType required' });
+        }
+        const allowedMimes = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+        if (!allowedMimes.includes(mimeType)) {
+          return this.sendJson(res, 400, { error: 'Invalid image format. Allowed: PNG, JPEG, WEBP, GIF' });
+        }
+        const buffer = Buffer.from(imageBase64.replace(/^data:image\/\w+;base64,/, ''), 'base64');
+        if (buffer.length > 5 * 1024 * 1024) {
+          return this.sendJson(res, 400, { error: 'Image exceeds maximum 5MB size limit' });
+        }
+        const ext = mimeType === 'image/png' ? '.png' : mimeType === 'image/webp' ? '.webp' : mimeType === 'image/gif' ? '.gif' : '.jpg';
+        const filename = `avatar_${currentUser.userId}_${Date.now()}${ext}`;
+        const uploadDir = path.resolve(process.cwd(), 'apps/backend/uploads/avatars');
+        if (!fs.existsSync(uploadDir)) {
+          fs.mkdirSync(uploadDir, { recursive: true });
+        }
+        const filePath = path.join(uploadDir, filename);
+        fs.writeFileSync(filePath, buffer);
+        const publicUrl = `/uploads/avatars/${filename}`;
+
+        await this.db.media.recordUpload({
+          userId: currentUser.userId,
+          mediaType: 'AVATAR',
+          fileName: filename,
+          fileSize: buffer.length,
+          mimeType,
+          storagePath: `uploads/avatars/${filename}`,
+          publicUrl,
+        });
+        await this.db.media.updateUserAvatar(currentUser.userId, publicUrl);
+
+        return this.sendJson(res, 200, {
+          success: true,
+          avatarUrl: publicUrl,
+        });
+      }
+
+      if (pathname === '/api/users/avatar' && req.method === 'DELETE') {
+        if (!currentUser) return this.sendJson(res, 401, { error: 'Unauthorized' });
+        await this.db.media.removeUserAvatar(currentUser.userId);
+        return this.sendJson(res, 200, { success: true });
+      }
+
+      // ==========================================
+      // SECTION 2, 3, 4, 7, 8: CHAT & GROUPS REST API
+      // ==========================================
+      if (pathname === '/api/conversations' && req.method === 'GET') {
+        if (!currentUser) return this.sendJson(res, 401, { error: 'Unauthorized' });
+        const conversations = await this.db.conversations.listForUser(currentUser.userId);
+        return this.sendJson(res, 200, { conversations });
+      }
+
+      if (pathname === '/api/conversations/direct' && req.method === 'POST') {
+        if (!currentUser) return this.sendJson(res, 401, { error: 'Unauthorized' });
+        const { targetUserId } = body;
+        if (!targetUserId) return this.sendJson(res, 400, { error: 'targetUserId is required' });
+        const conversation = await this.db.conversations.createDirect(currentUser.userId, targetUserId);
+        return this.sendJson(res, 200, { conversation });
+      }
+
+      if (pathname === '/api/conversations/group' && req.method === 'POST') {
+        if (!currentUser) return this.sendJson(res, 401, { error: 'Unauthorized' });
+        const { title, memberIds, avatarUrl } = body;
+        if (!title || !Array.isArray(memberIds)) {
+          return this.sendJson(res, 400, { error: 'title and memberIds array are required' });
+        }
+        const conversation = await this.db.conversations.createGroup(title, currentUser.userId, memberIds, avatarUrl);
+        return this.sendJson(res, 201, { conversation });
+      }
+
+      // /api/conversations/:id/messages
+      const convMsgMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/messages$/);
+      if (convMsgMatch) {
+        const conversationId = convMsgMatch[1];
+        if (!currentUser) return this.sendJson(res, 401, { error: 'Unauthorized' });
+
+        if (req.method === 'GET') {
+          const cursor = url.searchParams.get('cursor') || undefined;
+          const limit = parseInt(url.searchParams.get('limit') || '50', 10);
+          const messages = await this.db.messages.list(conversationId, currentUser.userId, cursor, limit);
+          return this.sendJson(res, 200, { messages });
+        }
+
+        if (req.method === 'POST') {
+          const { text, type, replyToId, attachments, clientMsgId } = body;
+          const message = await this.db.messages.create({
+            conversationId,
+            senderId: currentUser.userId,
+            clientMsgId,
+            text,
+            type: type || 'TEXT',
+            replyToId,
+            attachments,
+          });
+
+          // Broadcast to conversation members via WebSocket & Redis cluster
+          const members = await this.db.conversations.getMembers(conversationId);
+          this.wsGateway.broadcastChatMessage(conversationId, message, members.map(m => m.user_id));
+
+          return this.sendJson(res, 201, { message });
+        }
+      }
+
+      // /api/conversations/:id/disappearing
+      const convDisMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/disappearing$/);
+      if (convDisMatch && req.method === 'PUT') {
+        if (!currentUser) return this.sendJson(res, 401, { error: 'Unauthorized' });
+        const conversationId = convDisMatch[1];
+        const seconds = parseInt(body.seconds || '0', 10);
+        await this.db.conversations.setDisappearing(conversationId, seconds);
+        return this.sendJson(res, 200, { success: true, disappearingSeconds: seconds });
+      }
+
+      // /api/conversations/:id/clear
+      const convClearMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/clear$/);
+      if (convClearMatch && req.method === 'DELETE') {
+        if (!currentUser) return this.sendJson(res, 401, { error: 'Unauthorized' });
+        const conversationId = convClearMatch[1];
+        await this.db.conversations.clearChat(conversationId, currentUser.userId);
+        return this.sendJson(res, 200, { success: true });
+      }
+
+      // /api/conversations/:id/read
+      const convReadMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/read$/);
+      if (convReadMatch && req.method === 'POST') {
+        if (!currentUser) return this.sendJson(res, 401, { error: 'Unauthorized' });
+        const conversationId = convReadMatch[1];
+        await this.db.messages.markConversationRead(conversationId, currentUser.userId);
+        return this.sendJson(res, 200, { success: true });
+      }
+
+      // /api/messages/:id (delete for everyone or for me)
+      const msgDelMatch = pathname.match(/^\/api\/messages\/([^/]+)$/);
+      if (msgDelMatch && req.method === 'DELETE') {
+        if (!currentUser) return this.sendJson(res, 401, { error: 'Unauthorized' });
+        const messageId = msgDelMatch[1];
+        const { deleteForEveryone } = body || {};
+        if (deleteForEveryone) {
+          const success = await this.db.messages.deleteForEveryone(messageId, currentUser.userId);
+          return this.sendJson(res, 200, { success });
+        }
+        return this.sendJson(res, 200, { success: true });
+      }
+
       // Analytics Summary
       if (pathname === '/analytics/summary' && req.method === 'GET') {
         return this.sendJson(res, 200, this.analyticsService.getSummary());
@@ -521,7 +699,7 @@ export class BackendServer {
       let body = '';
       req.on('data', (chunk) => {
         body += chunk;
-        if (body.length > 2 * 1024 * 1024) {
+        if (body.length > 10 * 1024 * 1024) {
           req.destroy();
           reject(new Error('Payload too large'));
         }
