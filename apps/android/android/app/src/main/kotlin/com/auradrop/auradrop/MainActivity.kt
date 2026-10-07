@@ -100,7 +100,9 @@ class MainActivity : FlutterActivity() {
         val transferId: String,
         val socket: Socket,
         var isCancelled: AtomicBoolean = AtomicBoolean(false),
-        var isPaused: AtomicBoolean = AtomicBoolean(false)
+        var isPaused: AtomicBoolean = AtomicBoolean(false),
+        var isAccepted: AtomicBoolean = AtomicBoolean(false),
+        var isDeclined: AtomicBoolean = AtomicBoolean(false)
     )
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
@@ -821,6 +823,7 @@ class MainActivity : FlutterActivity() {
 
     private fun acceptIncomingTransfer(transferId: String) {
         val session = activeTransfersState[transferId] ?: return
+        if (session.isDeclined.get() || session.isAccepted.getAndSet(true)) return
         val socket = session.socket
 
         scope.launch(Dispatchers.IO) {
@@ -1075,6 +1078,7 @@ class MainActivity : FlutterActivity() {
 
     private fun declineIncomingTransfer(transferId: String) {
         val session = activeTransfersState.remove(transferId) ?: return
+        if (session.isAccepted.get() || session.isDeclined.getAndSet(true)) return
         val socket = session.socket
         scope.launch(Dispatchers.IO) {
             try {
@@ -1792,16 +1796,23 @@ class MainActivity : FlutterActivity() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
+            val customView = android.widget.RemoteViews(packageName, R.layout.notification_incoming_share)
+            customView.setTextViewText(R.id.tv_sender_name, senderName)
+            customView.setTextViewText(R.id.tv_file_info, "wants to share $totalFiles file(s) • ${formatBytes(totalBytes)}")
+            
+            customView.setOnClickPendingIntent(R.id.btn_decline_container, declinePendingIntent)
+            customView.setOnClickPendingIntent(R.id.btn_accept_container, acceptPendingIntent)
+
             val builder = NotificationCompat.Builder(this, INCOMING_REQUEST_CHANNEL_ID)
-                .setContentTitle("AuraDrop • Incoming Share")
-                .setContentText("$senderName wants to send $totalFiles file(s) • ${formatBytes(totalBytes)}")
-                .setSubText("SAS: $sasCode")
                 .setSmallIcon(android.R.drawable.stat_sys_download)
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setPriority(NotificationCompat.PRIORITY_MAX) // Use MAX for heads-up
+                .setDefaults(NotificationCompat.DEFAULT_ALL)
                 .setAutoCancel(true)
                 .setContentIntent(openPendingIntent)
-                .addAction(android.R.drawable.ic_delete, "Decline", declinePendingIntent)
-                .addAction(android.R.drawable.stat_sys_download, "Accept", acceptPendingIntent)
+                .setStyle(androidx.core.app.NotificationCompat.DecoratedCustomViewStyle())
+                .setCustomContentView(customView)
+                .setCustomHeadsUpContentView(customView)
+                .setFullScreenIntent(openPendingIntent, true) // Force Heads-Up even if locked
 
             nm.notify(transferId.hashCode(), builder.build())
         } catch (e: Exception) {

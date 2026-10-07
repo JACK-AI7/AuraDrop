@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="16dp"
+    android:background="#000000">
+
+    <!-- Header Row -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+        
+        <ImageView
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:src="@android:drawable/stat_sys_download"
+            android:tint="#FFFFFF"
+            android:background="@android:color/transparent"/>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:layout_marginStart="16dp">
+            
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="AuraDrop"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"
+                android:textSize="18sp"/>
+                
+            <TextView
+                android:id="@+id/tv_sender_name"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Sender Name"
+                android:textColor="#E0E0E0"
+                android:textSize="15sp"
+                android:layout_marginTop="2dp"
+                android:textStyle="bold"
+                android:maxLines="1"
+                android:ellipsize="end"/>
+                
+            <TextView
+                android:id="@+id/tv_file_info"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="wants to share 1 file • 100 MB"
+                android:textColor="#A0A0A0"
+                android:textSize="14sp"
+                android:layout_marginTop="2dp"
+                android:maxLines="2"
+                android:ellipsize="end"/>
+                
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Actions Row -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:layout_marginTop="20dp">
+        
+        <!-- Decline Button -->
+        <FrameLayout
+            android:id="@+id/btn_decline_container"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="48dp"
+            android:background="#1A1A1A"
+            android:layout_marginEnd="8dp">
+            
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:text="Decline"
+                android:textColor="#FFFFFF"
+                android:textSize="16sp"
+                android:textStyle="bold"/>
+        </FrameLayout>
+
+        <!-- Accept Button -->
+        <FrameLayout
+            android:id="@+id/btn_accept_container"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="48dp"
+            android:background="#FFFFFF"
+            android:layout_marginStart="8dp">
+            
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:text="Accept"
+                android:textColor="#000000"
+                android:textSize="16sp"
+                android:textStyle="bold"/>
+        </FrameLayout>
+            
+    </LinearLayout>
+
+</LinearLayout>
