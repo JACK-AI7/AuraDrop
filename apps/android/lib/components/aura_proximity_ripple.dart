@@ -17,11 +17,13 @@ class FourSidedRipplePulse {
   final double intensity;
   final Duration duration;
   final DateTime startTime;
+  final Offset? origin;
 
   FourSidedRipplePulse({
     required this.type,
     this.intensity = 1.0,
-    this.duration = const Duration(milliseconds: 1400),
+    this.duration = const Duration(milliseconds: 1200),
+    this.origin,
   }) : startTime = DateTime.now();
 
   double get progress {
@@ -40,77 +42,87 @@ class AuraProximityRippleController extends ChangeNotifier {
   void trigger({
     RippleTriggerType type = RippleTriggerType.peerDiscovered,
     double intensity = 1.0,
-    Duration duration = const Duration(milliseconds: 1400),
+    Duration duration = const Duration(milliseconds: 1200),
+    Offset? origin,
   }) {
     _pulses.add(FourSidedRipplePulse(
       type: type,
       intensity: intensity,
       duration: duration,
+      origin: origin,
     ));
     notifyListeners();
   }
 
-  void triggerPeerDiscovered() {
+  void triggerPeerDiscovered({Offset? origin}) {
     trigger(
       type: RippleTriggerType.peerDiscovered,
-      intensity: 0.55,
-      duration: const Duration(milliseconds: 1100),
+      intensity: 0.6,
+      duration: const Duration(milliseconds: 1000),
+      origin: origin,
     );
   }
 
-  void triggerPeerSelected() {
+  void triggerPeerSelected({Offset? origin}) {
     trigger(
       type: RippleTriggerType.peerSelected,
-      intensity: 0.75,
-      duration: const Duration(milliseconds: 1250),
+      intensity: 0.8,
+      duration: const Duration(milliseconds: 1100),
+      origin: origin,
     );
   }
 
-  void triggerConnectionEstablished() {
+  void triggerConnectionEstablished({Offset? origin}) {
     trigger(
       type: RippleTriggerType.connectionEstablished,
       intensity: 0.9,
-      duration: const Duration(milliseconds: 1500),
+      duration: const Duration(milliseconds: 1250),
+      origin: origin,
     );
   }
 
-  void triggerTransferStart() {
+  void triggerTransferStart({Offset? origin}) {
     trigger(
       type: RippleTriggerType.transferStart,
-      intensity: 0.95,
-      duration: const Duration(milliseconds: 1600),
+      intensity: 1.0,
+      duration: const Duration(milliseconds: 1300),
+      origin: origin,
     );
   }
 
-  void triggerRealTransferMilestone() {
+  void triggerRealTransferMilestone({Offset? origin}) {
     trigger(
       type: RippleTriggerType.realTransferMilestone,
       intensity: 0.7,
-      duration: const Duration(milliseconds: 1000),
+      duration: const Duration(milliseconds: 900),
+      origin: origin,
     );
   }
 
-  void triggerTransferComplete() {
+  void triggerTransferComplete({Offset? origin}) {
     trigger(
       type: RippleTriggerType.transferComplete,
       intensity: 1.0,
-      duration: const Duration(milliseconds: 1800),
+      duration: const Duration(milliseconds: 1400),
+      origin: origin,
     );
   }
 
-  void triggerTransferFailed() {
+  void triggerTransferFailed({Offset? origin}) {
     trigger(
       type: RippleTriggerType.transferFailed,
       intensity: 0.85,
-      duration: const Duration(milliseconds: 1200),
+      duration: const Duration(milliseconds: 1100),
+      origin: origin,
     );
   }
 
-  void triggerChatReceived() {
+  void triggerChatReceived({Offset? origin}) {
     trigger(
       type: RippleTriggerType.chatReceived,
       intensity: 0.65,
-      duration: const Duration(milliseconds: 1100),
+      duration: const Duration(milliseconds: 950),
+      origin: origin,
     );
   }
 
@@ -181,7 +193,7 @@ class _AuraProximityRippleState extends State<AuraProximityRipple>
       child: CustomPaint(
         foregroundPainter: widget.controller.pulses.isEmpty
             ? null
-            : _FourSidedRipplePainter(
+            : _AuraShockwavePainter(
                 pulses: widget.controller.pulses,
                 isDark: isDark,
               ),
@@ -191,11 +203,11 @@ class _AuraProximityRippleState extends State<AuraProximityRipple>
   }
 }
 
-class _FourSidedRipplePainter extends CustomPainter {
+class _AuraShockwavePainter extends CustomPainter {
   final List<FourSidedRipplePulse> pulses;
   final bool isDark;
 
-  _FourSidedRipplePainter({
+  _AuraShockwavePainter({
     required this.pulses,
     required this.isDark,
   });
@@ -204,70 +216,73 @@ class _FourSidedRipplePainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     if (pulses.isEmpty || size.width <= 0 || size.height <= 0) return;
 
-    final corners = [
-      Offset.zero, // Top-Left
-      Offset(size.width, 0), // Top-Right
-      Offset(0, size.height), // Bottom-Left
-      Offset(size.width, size.height), // Bottom-Right
-    ];
-
-    // Diagonal reach to center
-    final maxDistance = math.sqrt(
-      (size.width / 2) * (size.width / 2) +
-          (size.height / 2) * (size.height / 2),
-    ) * 1.5;
+    final defaultCenter = Offset(size.width * 0.5, size.height * 0.46);
+    final maxDistance = math.max(size.width, size.height) * 0.7;
+    final Color baseColor = isDark ? Colors.white : Colors.black;
 
     for (final pulse in pulses) {
       final p = pulse.progress;
       if (p >= 1.0) continue;
 
-      // Smooth deceleration curve
+      final center = pulse.origin ?? defaultCenter;
       final curve = Curves.easeOutCubic.transform(p);
       final radius = curve * maxDistance;
 
-      // Fade out as it reaches the center
+      // Alpha decays smoothly as the shockwave expands
       final alpha = (1.0 - p) * pulse.intensity;
-      final strokeAlpha = (alpha * 0.45).clamp(0.0, 1.0);
-      final fillAlpha = (alpha * 0.08).clamp(0.0, 1.0);
+      final strokeAlpha = (alpha * 0.55).clamp(0.0, 1.0);
+      final glowAlpha = (alpha * 0.12).clamp(0.0, 1.0);
 
-      final Color baseColor = isDark ? Colors.white : Colors.black;
+      // 1. Soft expanding aura glow behind the shockwave
+      if (p < 0.7) {
+        final glowRadius = radius * 0.6;
+        final glowPaint = Paint()
+          ..color = baseColor.withValues(alpha: glowAlpha * (1.0 - p / 0.7))
+          ..style = PaintingStyle.fill
+          ..isAntiAlias = true;
+        canvas.drawCircle(center, glowRadius, glowPaint);
+      }
 
-      final paintStroke = Paint()
+      // 2. Primary sharp shockwave ring (expanding outward from event center)
+      final primaryStroke = Paint()
         ..color = baseColor.withValues(alpha: strokeAlpha)
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5 * (1.0 - p * 0.5)
+        ..strokeWidth = (2.2 * (1.0 - p * 0.65)).clamp(0.5, 2.5)
         ..isAntiAlias = true;
+      canvas.drawCircle(center, radius, primaryStroke);
 
-      final paintFill = Paint()
-        ..color = baseColor.withValues(alpha: fillAlpha)
-        ..style = PaintingStyle.fill
-        ..isAntiAlias = true;
+      // 3. Secondary trailing echo shockwave
+      if (p > 0.12) {
+        final echoP = ((p - 0.12) / 0.88).clamp(0.0, 1.0);
+        final echoCurve = Curves.easeOutCubic.transform(echoP);
+        final echoRadius = echoCurve * maxDistance * 0.82;
+        final echoAlpha = (alpha * 0.32).clamp(0.0, 1.0);
 
-      // Draw inward concentric arcs from each of the 4 corners
-      for (final corner in corners) {
-        canvas.drawCircle(corner, radius, paintFill);
-        canvas.drawCircle(corner, radius, paintStroke);
+        final echoStroke = Paint()
+          ..color = baseColor.withValues(alpha: echoAlpha)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = (1.4 * (1.0 - echoP * 0.5)).clamp(0.4, 1.5)
+          ..isAntiAlias = true;
+        canvas.drawCircle(center, echoRadius, echoStroke);
+      }
 
-        // Secondary subtle trailing echo wave
-        if (p > 0.15) {
-          final echoCurve = Curves.easeOutCubic.transform(
-            ((p - 0.15) / 0.85).clamp(0.0, 1.0),
-          );
-          final echoRadius = echoCurve * maxDistance * 0.75;
-          final echoAlpha = (alpha * 0.2).clamp(0.0, 1.0);
+      // 4. Tertiary faint outer shockwave ripple for dramatic impact (milestones/transfer)
+      if (pulse.intensity >= 0.8 && p > 0.22) {
+        final tertP = ((p - 0.22) / 0.78).clamp(0.0, 1.0);
+        final tertCurve = Curves.easeOutQuad.transform(tertP);
+        final tertRadius = tertCurve * maxDistance * 0.62;
+        final tertAlpha = (alpha * 0.18).clamp(0.0, 1.0);
 
-          final echoStroke = Paint()
-            ..color = baseColor.withValues(alpha: echoAlpha)
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 1.0
-            ..isAntiAlias = true;
-
-          canvas.drawCircle(corner, echoRadius, echoStroke);
-        }
+        final tertStroke = Paint()
+          ..color = baseColor.withValues(alpha: tertAlpha)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.0
+          ..isAntiAlias = true;
+        canvas.drawCircle(center, tertRadius, tertStroke);
       }
     }
   }
 
   @override
-  bool shouldRepaint(covariant _FourSidedRipplePainter oldDelegate) => true;
+  bool shouldRepaint(covariant _AuraShockwavePainter oldDelegate) => true;
 }

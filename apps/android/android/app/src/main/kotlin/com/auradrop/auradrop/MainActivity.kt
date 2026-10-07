@@ -1086,6 +1086,7 @@ class MainActivity : FlutterActivity() {
         }
 
         val header = ByteArray(20)
+        var receiverBuffer = ByteArray(512 * 1024)
 
         while (session.socket.isConnected && !session.socket.isClosed && !session.isCancelled.get()) {
             val read = input.read(header, 0, 20)
@@ -1096,17 +1097,18 @@ class MainActivity : FlutterActivity() {
             val payloadLen = header.readUInt32BE(8)
 
             when (frameType) {
-                0x21 -> { // CHUNK_DATA (Direct 8-byte binary header)
-                    val chunkIdx = header.readUInt32BE(12) // using sequence/meta offset
-                    val chunkDataLen = payloadLen - 8
-                    val chunkData = ByteArray(chunkDataLen)
-                    input.readFully(chunkData)
+                0x21 -> { // CHUNK_DATA (Pure binary payload)
+                    val chunkIdx = header.readUInt32BE(12)
+                    if (receiverBuffer.size < payloadLen) {
+                        receiverBuffer = ByteArray(payloadLen)
+                    }
+                    input.readFully(receiverBuffer, 0, payloadLen)
 
-                    // Write chunk directly to disk buffer
-                    currentFileOut.write(chunkData)
-                    currentDigest.update(chunkData)
+                    // Write chunk directly to disk buffer & update SHA-256 in single pass
+                    currentFileOut.write(receiverBuffer, 0, payloadLen)
+                    currentDigest.update(receiverBuffer, 0, payloadLen)
 
-                    overallReceived += chunkDataLen
+                    overallReceived += payloadLen
 
                     // Throttled UI Progress dispatch
                     val now = System.currentTimeMillis()
@@ -1465,14 +1467,10 @@ class MainActivity : FlutterActivity() {
 
                             fileDigest.update(chunkBuffer, 0, bytesRead)
 
-                            // Direct 8-byte binary header payload: [chunkIdx, offset]
-                            val payload = ByteArray(8 + bytesRead)
-                            payload.writeUInt32BE(chunkIdx, 0)
-                            payload.writeUInt32BE(fileSent.toInt(), 4)
-                            System.arraycopy(chunkBuffer, 0, payload, 8, bytesRead)
-
-                            // Send frame (buffer without premature flush to keep TCP window wide)
-                            output.write(buildFrame(0x21, payload))
+                            // Direct 20-byte frame header with pure payload stream (zero copy, zero buffer allocation)
+                            val chunkFrameHeader = buildChunkFrameHeader(chunkIdx, bytesRead)
+                            output.write(chunkFrameHeader)
+                            output.write(chunkBuffer, 0, bytesRead)
 
                             fileSent += bytesRead
                             overallSent += bytesRead
@@ -1738,6 +1736,18 @@ class MainActivity : FlutterActivity() {
         return frame
     }
 
+    private fun buildChunkFrameHeader(chunkIdx: Int, payloadLen: Int): ByteArray {
+        val frame = ByteArray(20)
+        // Magic 'P2PF'
+        frame[0] = 0x50.toByte(); frame[1] = 0x32.toByte(); frame[2] = 0x50.toByte(); frame[3] = 0x46.toByte()
+        frame[4] = 0x01 // Version 1
+        frame[5] = 0x21.toByte() // CHUNK_DATA
+        frame[6] = 0x00; frame[7] = 0x00 // Flags
+        frame.writeUInt32BE(payloadLen, 8)
+        frame.writeUInt32BE(chunkIdx, 12)
+        return frame
+    }
+
     private fun ByteArray.readUInt32BE(offset: Int): Int {
         return ((this[offset].toInt() and 0xFF) shl 24) or
                ((this[offset + 1].toInt() and 0xFF) shl 16) or
@@ -1752,12 +1762,31 @@ class MainActivity : FlutterActivity() {
         this[offset + 3] = (value and 0xFF).toByte()
     }
 
+    private fun ByteArray.readUInt64BE(offset: Int): Long {
+        var res = 0L
+        for (i in 0 until 8) {
+            res = (res shl 8) or (this[offset + i].toLong() and 0xFFL)
+        }
+        return res
+    }
+
+    private fun ByteArray.writeUInt64BE(value: Long, offset: Int) {
+        for (i in 7 downTo 0) {
+            this[offset + (7 - i)] = ((value ushr (i * 8)) and 0xFFL).toByte()
+        }
+    }
+
     private fun InputStream.readFully(b: ByteArray) {
-        var offset = 0
-        while (offset < b.size) {
-            val count = this.read(b, offset, b.size - offset)
+        readFully(b, 0, b.size)
+    }
+
+    private fun InputStream.readFully(b: ByteArray, offset: Int, length: Int) {
+        var currentOffset = offset
+        val target = offset + length
+        while (currentOffset < target) {
+            val count = this.read(b, currentOffset, target - currentOffset)
             if (count < 0) throw EOFException("Unexpected EOF while reading socket frame")
-            offset += count
+            currentOffset += count
         }
     }
 
@@ -2007,17 +2036,19 @@ class MainActivity : FlutterActivity() {
 
             val builder = NotificationCompat.Builder(this, INCOMING_REQUEST_CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.stat_sys_download)
-                .setContentTitle(senderName)
+                .setContentTitle(displayNameHeader)
                 .setContentText(fileSummary)
                 .setSubText("AuraDrop")
                 .setPriority(NotificationCompat.PRIORITY_MAX)
+                .setCategory(NotificationCompat.CATEGORY_CALL)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .setDefaults(NotificationCompat.DEFAULT_ALL)
                 .setAutoCancel(true)
                 .setContentIntent(openPendingIntent)
                 .addAction(android.R.drawable.ic_delete, "Decline", declinePendingIntent)
                 .addAction(android.R.drawable.stat_sys_download, "Accept", acceptPendingIntent)
-                .setStyle(androidx.core.app.NotificationCompat.DecoratedCustomViewStyle())
                 .setCustomContentView(customView)
+                .setCustomBigContentView(customView)
                 .setCustomHeadsUpContentView(customView)
                 .setFullScreenIntent(openPendingIntent, true)
 

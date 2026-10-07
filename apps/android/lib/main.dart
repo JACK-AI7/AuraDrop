@@ -606,55 +606,60 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
               Row(
                 children: [
                   Expanded(
-                    child: OutlinedButton(
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: const Color(0xFFEF4444),
-                        side: const BorderSide(color: Color(0xFFEF4444), width: 0.8),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
+                    child: SizedBox(
+                      height: 48,
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: theme.isDark ? const Color(0xFF3A3A3C) : const Color(0xFFD1D1D6),
+                          foregroundColor: theme.isDark ? Colors.white : Colors.black87,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                        ),
+                        onPressed: () async {
+                          Navigator.pop(ctx);
+                          InAppNotificationController().dismissById('req_$transferId');
+                          setState(() => _transferState = TransferState.idle);
+                          await NativeBridgeService.declineTransfer(transferId);
+                        },
+                        child: const Text('Decline', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
                       ),
-                      onPressed: () async {
-                        Navigator.pop(ctx);
-                        InAppNotificationController().dismissById('req_$transferId');
-                        setState(() => _transferState = TransferState.idle);
-                        await NativeBridgeService.declineTransfer(transferId);
-                      },
-                      child: const Text('Decline', style: TextStyle(fontWeight: FontWeight.w700)),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: theme.actionBackground,
-                        foregroundColor: theme.actionText,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        elevation: 0,
+                    child: SizedBox(
+                      height: 48,
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF0A84FF),
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                        ),
+                        onPressed: () async {
+                          Navigator.pop(ctx);
+                          InAppNotificationController().dismissById('req_$transferId');
+                          _rippleController.triggerTransferStart();
+                          setState(() {
+                            _transferState = TransferState.transferring;
+                            _activeTransferId = transferId;
+                            _isSender = false;
+                            _totalTransferBytes = math.max(1, totalBytes);
+                            _transferredBytes = 0;
+                            _activePeer = PeerDevice(
+                              id: 'sender',
+                              name: senderName,
+                              deviceName: senderName,
+                              platform: 'android',
+                              ip: '127.0.0.1',
+                              port: 48291,
+                              lastSeen: DateTime.now(),
+                            );
+                          });
+                          await NativeBridgeService.acceptTransfer(transferId);
+                        },
+                        child: const Text('Accept', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
                       ),
-                      onPressed: () async {
-                        Navigator.pop(ctx);
-                        InAppNotificationController().dismissById('req_$transferId');
-                        _rippleController.triggerTransferStart();
-                        setState(() {
-                          _transferState = TransferState.transferring;
-                          _activeTransferId = transferId;
-                          _isSender = false;
-                          _totalTransferBytes = math.max(1, totalBytes);
-                          _transferredBytes = 0;
-                          _activePeer = PeerDevice(
-                            id: 'sender',
-                            name: senderName,
-                            deviceName: senderName,
-                            platform: 'android',
-                            ip: '127.0.0.1',
-                            port: 48291,
-                            lastSeen: DateTime.now(),
-                          );
-                        });
-                        await NativeBridgeService.acceptTransfer(transferId);
-                      },
-                      child: const Text('Accept', style: TextStyle(fontWeight: FontWeight.w800)),
                     ),
                   ),
                 ],

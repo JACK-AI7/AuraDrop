@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="44dp"
+    android:height="44dp"
+    android:viewportWidth="44"
+    android:viewportHeight="44">
+    <!-- Dark circular base with subtle border -->
+    <path
+        android:fillColor="#1C1C1E"
+        android:strokeColor="#3A3A3C"
+        android:strokeWidth="1"
+        android:pathData="M22,22m-21,0a21,21 0,1,1 42,0a21,21 0,1,1 -42,0"/>
+
+    <!-- Concentric radiating waves -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#0A84FF"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M14,22 A8,8 0 0,1 30,22"/>
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#0A84FF"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M10,22 A12,12 0 0,1 34,22"/>
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#0A84FF"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M6,22 A16,16 0 0,1 38,22"/>
+
+    <!-- Center node -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M22,22m-3.5,0a3.5,3.5 0,1,1 7,0a3.5,3.5 0,1,1 -7,0"/>
+</vector>

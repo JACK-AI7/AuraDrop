@@ -80,33 +80,46 @@ class _AuraDataStreamVisualizerState extends State<AuraDataStreamVisualizer> wit
         : 0.0;
     final speedMbps = widget.speedBytesPerSec / (1024.0 * 1024.0);
 
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(24),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            Colors.white.withValues(alpha: 0.12),
-            Colors.white.withValues(alpha: 0.04),
+    return AnimatedBuilder(
+      animation: _streamAnim,
+      builder: (context, child) {
+        return CustomPaint(
+          painter: _CardShockwaveAuraPainter(
+            animValue: _streamAnim.value,
+            speedMbps: speedMbps,
+            accentColor: widget.accentColor,
+            isPaused: widget.isPaused,
+          ),
+          child: child,
+        );
+      },
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(24),
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Colors.white.withValues(alpha: 0.12),
+              Colors.white.withValues(alpha: 0.04),
+            ],
+          ),
+          border: Border.all(
+            color: widget.accentColor.withValues(alpha: 0.4),
+            width: 1.2,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: widget.accentColor.withValues(alpha: 0.15),
+              blurRadius: 30,
+              spreadRadius: -5,
+            ),
           ],
         ),
-        border: Border.all(
-          color: widget.accentColor.withValues(alpha: 0.4),
-          width: 1.2,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: widget.accentColor.withValues(alpha: 0.15),
-            blurRadius: 30,
-            spreadRadius: -5,
-          ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
           // Header info
           Row(
             children: [
@@ -273,8 +286,9 @@ class _AuraDataStreamVisualizerState extends State<AuraDataStreamVisualizer> wit
           ),
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 }
 
 class _AuraStreamPainter extends CustomPainter {
@@ -367,3 +381,53 @@ class _AuraStreamPainter extends CustomPainter {
         oldDelegate.isPaused != isPaused;
   }
 }
+
+class _CardShockwaveAuraPainter extends CustomPainter {
+  final double animValue;
+  final double speedMbps;
+  final Color accentColor;
+  final bool isPaused;
+
+  _CardShockwaveAuraPainter({
+    required this.animValue,
+    required this.speedMbps,
+    required this.accentColor,
+    required this.isPaused,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (isPaused || size.width <= 0 || size.height <= 0) return;
+
+    final rect = Offset.zero & size;
+    const waveCount = 3;
+    final maxExpansion = 28.0 + (speedMbps > 20 ? 14.0 : 0.0);
+
+    for (int i = 0; i < waveCount; i++) {
+      final phase = (animValue + (i / waveCount)) % 1.0;
+      final expansion = phase * maxExpansion;
+      final alpha = (1.0 - phase) * 0.45;
+
+      final waveRRect = RRect.fromRectAndRadius(
+        rect.inflate(expansion),
+        Radius.circular(24 + expansion * 0.4),
+      );
+
+      final strokePaint = Paint()
+        ..color = accentColor.withValues(alpha: alpha)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = (2.2 * (1.0 - phase)).clamp(0.8, 2.2)
+        ..isAntiAlias = true;
+
+      canvas.drawRRect(waveRRect, strokePaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _CardShockwaveAuraPainter oldDelegate) {
+    return oldDelegate.animValue != animValue ||
+        oldDelegate.speedMbps != speedMbps ||
+        oldDelegate.isPaused != isPaused;
+  }
+}
+

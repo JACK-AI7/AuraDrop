@@ -4,109 +4,131 @@
     android:layout_height="wrap_content"
     android:orientation="vertical"
     android:padding="16dp"
-    android:background="#000000">
+    android:background="@drawable/bg_notification_card">
 
-    <!-- Header Row -->
+    <!-- Top Info Row: Icon + Texts + Preview Thumbnail -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical">
-        
-        <ImageView
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:src="@android:drawable/stat_sys_download"
-            android:tint="#FFFFFF"
-            android:background="@android:color/transparent"/>
 
+        <!-- AirDrop circular badge -->
+        <ImageView
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:src="@drawable/ic_airdrop_badge"
+            android:contentDescription="AuraDrop Icon" />
+
+        <!-- Sender & File Detail Column -->
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:orientation="vertical"
-            android:layout_marginStart="16dp">
-            
+            android:layout_marginStart="14dp"
+            android:layout_marginEnd="12dp">
+
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="AuraDrop"
                 android:textColor="#FFFFFF"
                 android:textStyle="bold"
-                android:textSize="18sp"/>
-                
+                android:textSize="15sp" />
+
             <TextView
                 android:id="@+id/tv_sender_name"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="Sender Name"
-                android:textColor="#E0E0E0"
-                android:textSize="15sp"
+                android:textColor="#E5E5EA"
+                android:textSize="14sp"
                 android:layout_marginTop="2dp"
-                android:textStyle="bold"
                 android:maxLines="1"
-                android:ellipsize="end"/>
-                
+                android:ellipsize="end" />
+
             <TextView
                 android:id="@+id/tv_file_info"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="wants to share 1 file • 100 MB"
-                android:textColor="#A0A0A0"
-                android:textSize="14sp"
+                android:text="would like to share 1 file • 100 MB"
+                android:textColor="#8E8E93"
+                android:textSize="13sp"
                 android:layout_marginTop="2dp"
                 android:maxLines="2"
-                android:ellipsize="end"/>
-                
+                android:ellipsize="end" />
+
         </LinearLayout>
+
+        <!-- Preview Thumbnail Box -->
+        <FrameLayout
+            android:layout_width="54dp"
+            android:layout_height="54dp"
+            android:background="@drawable/bg_thumbnail_box">
+
+            <ImageView
+                android:id="@+id/iv_file_thumbnail"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:padding="8dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_preview_file"
+                android:contentDescription="File Preview" />
+        </FrameLayout>
+
     </LinearLayout>
 
-    <!-- Actions Row -->
+    <!-- Bottom Actions Row: Pill Decline & Pill Accept Buttons -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center"
-        android:layout_marginTop="20dp">
-        
-        <!-- Decline Button -->
+        android:layout_marginTop="16dp">
+
+        <!-- Decline Button (Dark Gray Pill) -->
         <FrameLayout
             android:id="@+id/btn_decline_container"
             android:layout_width="0dp"
             android:layout_weight="1"
-            android:layout_height="48dp"
-            android:background="#1A1A1A"
-            android:layout_marginEnd="8dp">
-            
+            android:layout_height="44dp"
+            android:background="@drawable/bg_pill_decline"
+            android:layout_marginEnd="6dp"
+            android:clickable="true"
+            android:focusable="true">
+
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_gravity="center"
                 android:text="Decline"
                 android:textColor="#FFFFFF"
-                android:textSize="16sp"
-                android:textStyle="bold"/>
+                android:textSize="15sp"
+                android:textStyle="bold" />
         </FrameLayout>
 
-        <!-- Accept Button -->
+        <!-- Accept Button (Apple Blue Pill) -->
         <FrameLayout
             android:id="@+id/btn_accept_container"
             android:layout_width="0dp"
             android:layout_weight="1"
-            android:layout_height="48dp"
-            android:background="#FFFFFF"
-            android:layout_marginStart="8dp">
-            
+            android:layout_height="44dp"
+            android:background="@drawable/bg_pill_accept"
+            android:layout_marginStart="6dp"
+            android:clickable="true"
+            android:focusable="true">
+
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_gravity="center"
                 android:text="Accept"
-                android:textColor="#000000"
-                android:textSize="16sp"
-                android:textStyle="bold"/>
+                android:textColor="#FFFFFF"
+                android:textSize="15sp"
+                android:textStyle="bold" />
         </FrameLayout>
-            
+
     </LinearLayout>
 
 </LinearLayout>

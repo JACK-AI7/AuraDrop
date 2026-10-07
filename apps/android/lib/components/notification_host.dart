@@ -267,26 +267,29 @@ class _InAppNotificationHostState extends State<InAppNotificationHost>
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 _buildIcon(item.type, theme),
-                const SizedBox(width: 10),
+                const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        item.title,
+                        isRequest ? 'AuraDrop' : item.title,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          fontSize: 13,
+                          fontSize: 14,
                           fontWeight: FontWeight.w700,
                           color: theme.textPrimary,
                         ),
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        item.message,
+                        isRequest && item.subtitle != null
+                            ? '${item.message} • ${item.subtitle}'
+                            : item.message,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -297,7 +300,28 @@ class _InAppNotificationHostState extends State<InAppNotificationHost>
                     ],
                   ),
                 ),
-                if (!isRequest)
+                if (isRequest)
+                  Container(
+                    width: 46,
+                    height: 46,
+                    margin: const EdgeInsets.only(left: 8),
+                    decoration: BoxDecoration(
+                      color: theme.isDark ? const Color(0xFF242426) : const Color(0xFFE5E5EA),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: theme.border,
+                        width: 0.8,
+                      ),
+                    ),
+                    child: Center(
+                      child: Icon(
+                        Icons.insert_drive_file_outlined,
+                        size: 22,
+                        color: theme.textSecondary,
+                      ),
+                    ),
+                  )
+                else
                   IconButton(
                     icon: Icon(Icons.close_rounded, size: 18, color: theme.textSecondary),
                     onPressed: () {
@@ -309,45 +333,51 @@ class _InAppNotificationHostState extends State<InAppNotificationHost>
               ],
             ),
             if (isRequest) ...[
-              const SizedBox(height: 12),
+              const SizedBox(height: 14),
               Row(
-                mainAxisAlignment: MainAxisAlignment.end,
                 children: [
-                  OutlinedButton(
-                    onPressed: () {
-                      HapticFeedback.lightImpact();
-                      _controller.dismissCurrent();
-                      item.onDecline?.call();
-                    },
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: theme.textPrimary,
-                      side: BorderSide(color: theme.border),
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                      minimumSize: Size.zero,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10),
+                  Expanded(
+                    child: SizedBox(
+                      height: 40,
+                      child: ElevatedButton(
+                        onPressed: () {
+                          HapticFeedback.lightImpact();
+                          _controller.dismissCurrent();
+                          item.onDecline?.call();
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: theme.isDark ? const Color(0xFF3A3A3C) : const Color(0xFFD1D1D6),
+                          foregroundColor: theme.isDark ? Colors.white : Colors.black87,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                        ),
+                        child: const Text('Decline', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
                       ),
                     ),
-                    child: const Text('Decline', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                   ),
-                  const SizedBox(width: 8),
-                  ElevatedButton(
-                    onPressed: () {
-                      HapticFeedback.mediumImpact();
-                      _controller.dismissCurrent();
-                      item.onAccept?.call();
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: theme.actionBackground,
-                      foregroundColor: theme.actionText,
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      minimumSize: Size.zero,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: SizedBox(
+                      height: 40,
+                      child: ElevatedButton(
+                        onPressed: () {
+                          HapticFeedback.mediumImpact();
+                          _controller.dismissCurrent();
+                          item.onAccept?.call();
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF0A84FF),
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                        ),
+                        child: const Text('Accept', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
                       ),
                     ),
-                    child: const Text('Accept', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
                   ),
                 ],
               ),
@@ -359,6 +389,18 @@ class _InAppNotificationHostState extends State<InAppNotificationHost>
   }
 
   Widget _buildIcon(InAppNotificationType type, AuraTheme theme) {
+    if (type == InAppNotificationType.transferRequest) {
+      return Container(
+        width: 40,
+        height: 40,
+        decoration: const BoxDecoration(
+          color: Color(0xFF0A84FF),
+          shape: BoxShape.circle,
+        ),
+        child: const Icon(Icons.wifi_tethering_rounded, size: 22, color: Colors.white),
+      );
+    }
+
     IconData icon;
     switch (type) {
       case InAppNotificationType.transferRequest:

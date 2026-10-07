@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AuraDrop — Next-Gen High-Speed P2P Sharing</title>
+  <meta name="description" content="AuraDrop: Production-grade peer-to-peer file transfer platform. Real devices, zero fake transfers, maximum physical throughput.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%230A84FF'><path d='M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14.5v-5H8l4-4 4 4h-3v5h-2z'/></svg>">
+  <style>
+    :root {
+      --bg: #000000;
+      --card-bg: #121214;
+      --card-border: #242428;
+      --primary: #0A84FF;
+      --primary-hover: #0070E0;
+      --text: #FFFFFF;
+      --text-muted: #8E8E93;
+      --pill-decline: #3A3A3C;
+      --radius: 16px;
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: var(--font); }
+    body { background: var(--bg); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; }
+    
+    header {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 16px 32px; border-bottom: 1px solid var(--card-border);
+      background: rgba(0, 0, 0, 0.85); backdrop-filter: blur(20px); position: sticky; top: 0; z-index: 50;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; font-size: 19px; font-weight: 800; letter-spacing: -0.5px; }
+    .brand-badge { background: #1C1C1E; border: 1px solid var(--card-border); font-size: 11px; padding: 3px 8px; border-radius: 8px; color: var(--text-muted); }
+    .header-actions { display: flex; align-items: center; gap: 12px; }
+    .btn {
+      background: var(--card-bg); border: 1px solid var(--card-border); color: var(--text);
+      padding: 8px 18px; border-radius: 20px; font-size: 13px; font-weight: 600; cursor: pointer;
+      text-decoration: none; display: inline-flex; align-items: center; gap: 8px; transition: all 0.2s ease;
+    }
+    .btn:hover { border-color: var(--primary); color: #FFF; }
+    .btn-primary { background: var(--primary); border-color: var(--primary); color: #FFF; }
+    .btn-primary:hover { background: var(--primary-hover); }
+
+    main { max-width: 1100px; margin: 0 auto; width: 100%; padding: 40px 24px; display: grid; grid-template-columns: 1fr 380px; gap: 32px; flex: 1; }
+    @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+
+    .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 24px; padding: 28px; }
+    .card-title { font-size: 16px; font-weight: 700; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }
+    
+    /* Radar Visualizer */
+    .radar-box {
+      height: 300px; display: flex; align-items: center; justify-content: center; position: relative;
+      border: 1px dashed var(--card-border); border-radius: 20px; background: #08080A; overflow: hidden;
+    }
+    .radar-ring { position: absolute; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 50%; }
+    .ring-1 { width: 90px; height: 90px; }
+    .ring-2 { width: 180px; height: 180px; }
+    .ring-3 { width: 270px; height: 270px; }
+    .radar-center { width: 44px; height: 44px; border-radius: 50%; background: var(--primary); display: flex; align-items: center; justify-content: center; z-index: 2; box-shadow: 0 0 20px rgba(10, 132, 255, 0.5); }
+    .radar-status { margin-top: 16px; text-align: center; font-size: 13px; color: var(--text-muted); }
+
+    /* Dropzone */
+    .dropzone {
+      border: 2px dashed var(--card-border); border-radius: 20px; padding: 36px 20px; text-align: center;
+      cursor: pointer; transition: all 0.2s ease; background: #09090C;
+    }
+    .dropzone:hover { border-color: var(--primary); background: rgba(10, 132, 255, 0.03); }
+    .dropzone-icon { font-size: 32px; margin-bottom: 8px; color: var(--primary); }
+    .dropzone-title { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+    .dropzone-sub { font-size: 12px; color: var(--text-muted); }
+
+    /* AirDrop Request Card Demo */
+    .airdrop-card {
+      background: #161618; border: 1px solid #2C2C2E; border-radius: 18px; padding: 18px;
+      margin-top: 24px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
+    }
+    .airdrop-header { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
+    .airdrop-avatar { width: 44px; height: 44px; border-radius: 50%; background: #0A84FF; display: flex; align-items: center; justify-content: center; }
+    .airdrop-info { flex: 1; }
+    .airdrop-app { font-size: 14px; font-weight: 700; color: #FFF; }
+    .airdrop-desc { font-size: 12px; color: #8E8E93; margin-top: 2px; }
+    .airdrop-thumb { width: 50px; height: 50px; border-radius: 12px; background: #252528; border: 1px solid #333336; display: flex; align-items: center; justify-content: center; font-size: 20px; }
+    .airdrop-buttons { display: flex; gap: 10px; }
+    .pill-btn { flex: 1; height: 42px; border-radius: 21px; border: none; font-size: 14px; font-weight: 700; cursor: pointer; color: #FFF; }
+    .pill-decline { background: var(--pill-decline); }
+    .pill-accept { background: var(--primary); }
+
+    footer { padding: 24px 32px; border-top: 1px solid var(--card-border); text-align: center; font-size: 12px; color: var(--text-muted); }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#0A84FF" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="10"/></svg>
+      AuraDrop
+      <span class="brand-badge">v11 Production</span>
+    </div>
+    <div class="header-actions">
+      <a href="https://github.com/JACK-AI7/AuraDrop" target="_blank" class="btn">GitHub</a>
+      <a href="#" class="btn btn-primary" onclick="alert('Download AuraDrop APK from releases')">Download Android APK</a>
+    </div>
+  </header>
+
+  <main>
+    <div style="display: flex; flex-direction: column; gap: 24px;">
+      <div class="card">
+        <div class="card-title">
+          <span>Active Proximity Radar</span>
+          <span style="font-size: 12px; color: #10B981;">● Online</span>
+        </div>
+        <div class="radar-box">
+          <div class="radar-ring ring-1"></div>
+          <div class="radar-ring ring-2"></div>
+          <div class="radar-ring ring-3"></div>
+          <div class="radar-center">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="#FFFFFF"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/></svg>
+          </div>
+        </div>
+        <div class="radar-status">Listening for nearby AuraDrop peers via UDP Multicast and WebRTC...</div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          <span>Stage Files for Transfer</span>
+        </div>
+        <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
+          <div class="dropzone-icon">📁</div>
+          <div class="dropzone-title">Drop files here or click to browse</div>
+          <div class="dropzone-sub">Supports files > 1 GB with chunked streaming and SHA-256 verification</div>
+          <input type="file" id="fileInput" multiple style="display: none;">
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <div class="card-title">System-Level Share Protocol</div>
+        <p style="font-size: 13px; color: var(--text-muted); line-height: 1.5; margin-bottom: 16px;">
+          Incoming share requests display as an authoritative top floating Heads-Up notification card with real sender identity, exact file metadata, and one-tap Decline / Accept actions.
+        </p>
+
+        <!-- Preview Card -->
+        <div class="airdrop-card">
+          <div class="airdrop-header">
+            <div class="airdrop-avatar">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.5"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="10"/></svg>
+            </div>
+            <div class="airdrop-info">
+              <div class="airdrop-app">AuraDrop</div>
+              <div class="airdrop-desc" id="sampleSender">Jaswanth would like to share 2 photos • 28.4 MB</div>
+            </div>
+            <div class="airdrop-thumb">🖼️</div>
+          </div>
+          <div class="airdrop-buttons">
+            <button class="pill-btn pill-decline" onclick="alert('Declined')">Decline</button>
+            <button class="pill-btn pill-accept" onclick="alert('Accepted transfer')">Accept</button>
+          </div>
+        </div>
+
+        <div style="margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--card-border);">
+          <div style="font-size: 13px; font-weight: 700; margin-bottom: 8px;">Physical Architecture</div>
+          <ul style="font-size: 12px; color: var(--text-muted); line-height: 1.8; padding-left: 18px;">
+            <li>Framing: <code>0x41555241</code> (AURA), Version 1</li>
+            <li>Transport: High-throughput TCP with <code>TCP_NODELAY</code></li>
+            <li>Integrity: Incremental SHA-256 verification</li>
+            <li>Persistence: SQLite <code>auradrop.db</code></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    AuraDrop Monorepo • Zero Fake Behavior • Real P2P Transfer Engine
+  </footer>
+</body>
+</html>
