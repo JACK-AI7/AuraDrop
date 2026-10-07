@@ -115,6 +115,16 @@ class NativeBridgeService {
     });
   }
 
+  static Future<bool> checkOverlayPermission() async {
+    final bool? ok = await _channel.invokeMethod<bool>('checkOverlayPermission');
+    return ok ?? false;
+  }
+
+  static Future<bool> requestOverlayPermission() async {
+    final bool? ok = await _channel.invokeMethod<bool>('requestOverlayPermission');
+    return ok ?? false;
+  }
+
   static Future<bool> openFile(String filePath) async {
     final bool? ok = await _channel.invokeMethod<bool>('openFile', {'filePath': filePath});
     return ok ?? false;

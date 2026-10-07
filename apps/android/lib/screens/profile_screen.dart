@@ -5,7 +5,6 @@ import '../models/models.dart';
 import '../services/native_bridge.dart';
 import '../services/profile_repository.dart';
 import '../theme/aura_theme.dart';
-import '../components/minimal_components.dart';
 
 class ProfileScreen extends StatefulWidget {
   final UserProfile profile;
@@ -305,11 +304,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
           SizedBox(
             width: double.infinity,
-            child: MinimalButton(
-              text: 'Save Profile',
+            height: 52,
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF0A84FF),
+                foregroundColor: Colors.white,
+                elevation: 4,
+                shadowColor: const Color(0xFF0A84FF).withValues(alpha: 0.4),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              ),
               onPressed: _saveProfile,
+              icon: const Icon(Icons.check_circle_outline_rounded, size: 20, color: Colors.white),
+              label: const Text(
+                'Save Profile',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white),
+              ),
             ),
           ),
+          const SizedBox(height: 160),
         ],
       ),
     );

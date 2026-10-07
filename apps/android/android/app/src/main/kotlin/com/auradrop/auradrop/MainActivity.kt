@@ -448,6 +448,13 @@ class MainActivity : FlutterActivity() {
                     map["total"] = downloadsDir.totalSpace
                     result.success(map)
                 }
+                "checkOverlayPermission" -> {
+                    result.success(AuraOverlayManager.getInstance(this).canDrawOverlays())
+                }
+                "requestOverlayPermission" -> {
+                    AuraOverlayManager.getInstance(this).requestOverlayPermission(this)
+                    result.success(true)
+                }
                 "showSystemIncomingShareNotification" -> {
                     val transferId = call.argument<String>("transferId") ?: UUID.randomUUID().toString()
                     val senderName = call.argument<String>("senderName") ?: "Nearby Peer"
@@ -2015,95 +2022,33 @@ class MainActivity : FlutterActivity() {
         firstFileName: String,
         sasCode: String
     ) {
-        try {
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-
-            // Intent to open AuraDrop app
-            val openAppIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
-                putExtra("incoming_transfer_id", transferId)
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            }
-            val openPendingIntent = PendingIntent.getActivity(
-                this,
-                transferId.hashCode(),
-                openAppIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-
-            // Decline Intent
-            val declineIntent = Intent(this, AuraNotificationActionReceiver::class.java).apply {
-                action = AuraNotificationActionReceiver.ACTION_NOTIFICATION_DECLINE
-                putExtra(AuraNotificationActionReceiver.EXTRA_TRANSFER_ID, transferId)
-            }
-            val declinePendingIntent = PendingIntent.getBroadcast(
-                this,
-                transferId.hashCode() + 1,
-                declineIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-
-            // Accept Intent
-            val acceptIntent = Intent(this, AuraNotificationActionReceiver::class.java).apply {
-                action = AuraNotificationActionReceiver.ACTION_NOTIFICATION_ACCEPT
-                putExtra(AuraNotificationActionReceiver.EXTRA_TRANSFER_ID, transferId)
-            }
-            val acceptPendingIntent = PendingIntent.getBroadcast(
-                this,
-                transferId.hashCode() + 2,
-                acceptIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-
-            val fileSummary = if (totalFiles > 1) {
-                "wants to share $totalFiles files • ${formatBytes(totalBytes)}"
-            } else if (firstFileName.isNotBlank()) {
-                "wants to share $firstFileName • ${formatBytes(totalBytes)}"
-            } else {
-                "wants to share files • ${formatBytes(totalBytes)}"
-            }
-
-            val displayNameHeader = if (senderDeviceName.isNotBlank() && senderDeviceName != senderName) {
-                "$senderName ($senderDeviceName)"
-            } else {
-                senderName
-            }
-
-            val customView = android.widget.RemoteViews(packageName, R.layout.notification_incoming_share)
-            customView.setTextViewText(R.id.tv_sender_name, displayNameHeader)
-            customView.setTextViewText(R.id.tv_file_info, fileSummary)
-
-            customView.setOnClickPendingIntent(R.id.btn_decline_container, declinePendingIntent)
-            customView.setOnClickPendingIntent(R.id.btn_accept_container, acceptPendingIntent)
-
-            val builder = NotificationCompat.Builder(this, INCOMING_REQUEST_CHANNEL_ID)
-                .setSmallIcon(android.R.drawable.stat_sys_download)
-                .setContentTitle(displayNameHeader)
-                .setContentText(fileSummary)
-                .setSubText("AuraDrop")
-                .setPriority(NotificationCompat.PRIORITY_MAX)
-                .setCategory(NotificationCompat.CATEGORY_CALL)
-                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .setDefaults(NotificationCompat.DEFAULT_ALL)
-                .setAutoCancel(true)
-                .setContentIntent(openPendingIntent)
-                .addAction(android.R.drawable.ic_delete, "Decline", declinePendingIntent)
-                .addAction(android.R.drawable.stat_sys_download, "Accept", acceptPendingIntent)
-                .setCustomContentView(customView)
-                .setCustomBigContentView(customView)
-                .setCustomHeadsUpContentView(customView)
-                .setFullScreenIntent(openPendingIntent, true)
-
-            nm.notify(transferId.hashCode(), builder.build())
-        } catch (e: Exception) {
-            Log.e(TAG, "Error posting system incoming share notification: ${e.message}")
+        val overlayMgr = AuraOverlayManager.getInstance(this)
+        val nameToShow = if (senderDeviceName.isNotBlank() && senderDeviceName != senderName) {
+            "$senderName ($senderDeviceName)"
+        } else {
+            senderName
         }
+        val fileSummary = if (totalFiles > 1) "$firstFileName + ${totalFiles - 1} more" else firstFileName
+
+        // Display directly on mobile screen over other apps & home screen
+        overlayMgr.showTransferRequestOverlay(
+            transferId = transferId,
+            senderName = nameToShow,
+            fileName = fileSummary,
+            totalBytes = totalBytes,
+            onAccept = {
+                acceptIncomingTransfer(transferId)
+                sendEvent("notificationAccept", mapOf("transferId" to transferId))
+            },
+            onDecline = {
+                declineIncomingTransfer(transferId)
+                sendEvent("notificationDecline", mapOf("transferId" to transferId))
+            }
+        )
     }
 
     private fun cancelSystemIncomingShareNotification(transferId: String) {
-        try {
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            nm.cancel(transferId.hashCode())
-        } catch (e: Exception) {}
+        AuraOverlayManager.getInstance(this).dismissCurrentOverlay()
     }
 
     private fun showSystemChatMessageNotification(senderName: String, text: String) {
@@ -2127,35 +2072,8 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun showSystemNameDropProximityNotification(peerName: String) {
-        try {
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            val openAppIntent = packageManager.getLaunchIntentForPackage(packageName)
-            val openPendingIntent = if (openAppIntent != null) {
-                PendingIntent.getActivity(this, 9999, openAppIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-            } else null
-
-            val customView = android.widget.RemoteViews(packageName, R.layout.notification_incoming_share)
-            customView.setTextViewText(R.id.tv_sender_name, peerName)
-            customView.setTextViewText(R.id.tv_file_info, "NameDrop proximity connected • Ready to share")
-            customView.setViewVisibility(R.id.btn_decline_container, android.view.View.GONE)
-
-            val builder = NotificationCompat.Builder(this, INCOMING_REQUEST_CHANNEL_ID)
-                .setSmallIcon(android.R.drawable.stat_sys_download)
-                .setContentTitle("AuraDrop NameDrop")
-                .setContentText("$peerName is nearby • Ready to share")
-                .setSubText("NameDrop")
-                .setPriority(NotificationCompat.PRIORITY_MAX)
-                .setCategory(NotificationCompat.CATEGORY_CALL)
-                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .setAutoCancel(true)
-                .setContentIntent(openPendingIntent)
-                .setCustomHeadsUpContentView(customView)
-                .setFullScreenIntent(openPendingIntent, true)
-
-            nm.notify(9999, builder.build())
-        } catch (e: Exception) {
-            Log.e(TAG, "Error posting NameDrop proximity notification: ${e.message}")
-        }
+        // Display floating window directly on mobile screen over other apps & home screen
+        AuraOverlayManager.getInstance(this).showNameDropOverlay(peerName)
     }
 
     override fun onDestroy() {

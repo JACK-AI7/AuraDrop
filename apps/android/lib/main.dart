@@ -326,6 +326,14 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
         });
         if (changed) setState(() {});
       });
+
+      // Prompt overlay permission so floating NameDrop / Dynamic Island works 1000% over other apps & home screen
+      Future.delayed(const Duration(milliseconds: 1500), () async {
+        final hasOverlay = await NativeBridgeService.checkOverlayPermission();
+        if (!hasOverlay && mounted) {
+          NativeBridgeService.requestOverlayPermission();
+        }
+      });
       
     } catch (e) {
       debugPrint('Initialization error: $e');

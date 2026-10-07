@@ -31,23 +31,23 @@ class MinimalNavigationBar extends StatelessWidget {
         bottom: bottomInset > 0 ? bottomInset + 4 : 12,
       ),
       child: Container(
-        height: 64,
+        height: 68,
         decoration: BoxDecoration(
-          color: theme.isDark ? const Color(0xFF0D0D0D) : const Color(0xFFFFFFFF),
-          borderRadius: BorderRadius.circular(26),
+          color: theme.isDark ? const Color(0xFF1C1C1E) : const Color(0xFFFFFFFF),
+          borderRadius: BorderRadius.circular(28),
           border: Border.all(
-            color: theme.border,
-            width: 1.0,
+            color: theme.isDark ? const Color(0xFF3A3A3C) : const Color(0xFFE5E5EA),
+            width: 1.5,
           ),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: theme.isDark ? 0.45 : 0.08),
-              blurRadius: 18,
-              offset: const Offset(0, 6),
+              color: Colors.black.withValues(alpha: theme.isDark ? 0.70 : 0.12),
+              blurRadius: 24,
+              offset: const Offset(0, 8),
             ),
           ],
         ),
-        padding: const EdgeInsets.symmetric(horizontal: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 8),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceAround,
           children: [
@@ -82,9 +82,12 @@ class MinimalNavigationBar extends StatelessWidget {
     int badgeCount = 0,
   }) {
     final isSelected = currentIndex == index;
-    final itemColor = isSelected
+    final itemIconColor = isSelected
+        ? const Color(0xFF0A84FF)
+        : (theme.isDark ? const Color(0xFFE5E5EA) : const Color(0xFF48484A));
+    final itemTextColor = isSelected
         ? (theme.isDark ? Colors.white : Colors.black)
-        : (theme.isDark ? const Color(0xFFA1A1AA) : const Color(0xFF6B7280));
+        : (theme.isDark ? const Color(0xFFD1D1D6) : const Color(0xFF636366));
 
     return GestureDetector(
       onTap: () {
@@ -99,9 +102,9 @@ class MinimalNavigationBar extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
           color: isSelected
-              ? (theme.isDark ? Colors.white.withValues(alpha: 0.10) : Colors.black.withValues(alpha: 0.06))
+              ? (theme.isDark ? const Color(0xFF2C2C2E) : const Color(0xFFF2F2F7))
               : Colors.transparent,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(18),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -112,8 +115,8 @@ class MinimalNavigationBar extends StatelessWidget {
               children: [
                 Icon(
                   icon,
-                  size: isSelected ? 21 : 20,
-                  color: itemColor,
+                  size: isSelected ? 23 : 21,
+                  color: itemIconColor,
                 ),
                 if (badgeCount > 0)
                   Positioned(
@@ -122,15 +125,15 @@ class MinimalNavigationBar extends StatelessWidget {
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                       decoration: BoxDecoration(
-                        color: theme.actionBackground,
+                        color: const Color(0xFF0A84FF),
                         borderRadius: BorderRadius.circular(8),
                       ),
                       constraints: const BoxConstraints(minWidth: 14, minHeight: 14),
                       child: Text(
                         '$badgeCount',
                         textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: theme.actionText,
+                        style: const TextStyle(
+                          color: Colors.white,
                           fontSize: 9,
                           fontWeight: FontWeight.w800,
                         ),
@@ -143,20 +146,20 @@ class MinimalNavigationBar extends StatelessWidget {
             Text(
               label,
               style: TextStyle(
-                fontSize: 10.5,
-                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                color: itemColor,
+                fontSize: 11,
+                fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                color: itemTextColor,
                 letterSpacing: 0.1,
               ),
             ),
             const SizedBox(height: 2),
             AnimatedContainer(
               duration: const Duration(milliseconds: 180),
-              width: isSelected ? 12 : 0,
-              height: 2,
+              width: isSelected ? 16 : 0,
+              height: 2.5,
               decoration: BoxDecoration(
-                color: isSelected ? (theme.isDark ? Colors.white : Colors.black) : Colors.transparent,
-                borderRadius: BorderRadius.circular(1),
+                color: isSelected ? const Color(0xFF0A84FF) : Colors.transparent,
+                borderRadius: BorderRadius.circular(1.5),
               ),
             ),
           ],
