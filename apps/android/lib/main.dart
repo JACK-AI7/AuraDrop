@@ -11,6 +11,8 @@ import 'components/minimal_navigation.dart';
 import 'components/minimal_components.dart';
 import 'components/aura_data_stream.dart';
 import 'components/aura_completion_burst.dart';
+import 'components/aura_proximity_ripple.dart';
+import 'components/notification_host.dart';
 import 'services/native_bridge.dart';
 import 'screens/transfers_screen.dart';
 import 'screens/chat_screen.dart';
@@ -143,6 +145,9 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
   final Set<String> _trustedPeerIds = {};
   PeerDevice? _selectedPeer;
 
+  // Animation & Ripple Controller
+  final AuraProximityRippleController _rippleController = AuraProximityRippleController();
+
   // Selected Files Tray
   final List<PickedFileMeta> _selectedFiles = [];
 
@@ -172,6 +177,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
     WidgetsBinding.instance.removeObserver(this);
     _temporaryVisibilityTimer?.cancel();
     _eventSubscription?.cancel();
+    _rippleController.dispose();
     super.dispose();
   }
 
@@ -248,9 +254,13 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
           if (_visibilityMode == VisibilityMode.contactsOnly && !isTrusted) return;
 
           final peer = PeerDevice.fromMap(peerData, isTrusted: isTrusted);
+          final isNew = !_peers.containsKey(peer.id);
           setState(() {
             _peers[peer.id] = peer;
           });
+          if (isNew) {
+            _rippleController.triggerPeerDiscovered();
+          }
         }
         break;
 
@@ -258,14 +268,69 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
         final st = event['state']?.toString();
         setState(() {
           if (st == 'DATA_CHANNEL_CONNECTING') _transferState = TransferState.connecting;
-          if (st == 'READY_TO_TRANSFER') _transferState = TransferState.preparing;
+          if (st == 'READY_TO_TRANSFER') {
+            _transferState = TransferState.preparing;
+            _rippleController.triggerConnectionEstablished();
+          }
         });
         break;
 
       case 'transferRequest':
         HapticFeedback.heavyImpact();
         setState(() => _transferState = TransferState.waitingForAccept);
+        final transferId = event['transferId']?.toString() ?? '';
+        final senderName = event['senderName']?.toString() ?? 'Nearby Peer';
+        final totalBytes = (event['totalBytes'] as num?)?.toInt() ?? 0;
+        final totalFiles = (event['totalFiles'] as num?)?.toInt() ?? 1;
+        final fileName = event['fileName']?.toString() ?? (totalFiles == 1 ? 'Incoming File' : '$totalFiles Files');
+
+        InAppNotificationController().showTransferRequest(
+          transferId: transferId,
+          senderName: senderName,
+          fileName: fileName,
+          fileSize: totalBytes,
+          onAccept: () async {
+            _rippleController.triggerTransferStart();
+            setState(() {
+              _transferState = TransferState.transferring;
+              _activeTransferId = transferId;
+              _isSender = false;
+              _totalTransferBytes = math.max(1, totalBytes);
+              _transferredBytes = 0;
+              _activePeer = PeerDevice(
+                id: 'sender',
+                name: senderName,
+                deviceName: senderName,
+                platform: 'android',
+                ip: '127.0.0.1',
+                port: 48291,
+                lastSeen: DateTime.now(),
+              );
+            });
+            await NativeBridgeService.acceptTransfer(transferId);
+          },
+          onDecline: () async {
+            setState(() => _transferState = TransferState.idle);
+            await NativeBridgeService.declineTransfer(transferId);
+          },
+        );
         _showIncomingTransferModal(event);
+        break;
+
+      case 'chatMessageReceived':
+        final pId = event['peerId']?.toString() ?? '';
+        final sName = event['senderName']?.toString() ?? 'Nearby Peer';
+        final text = event['text']?.toString() ?? '';
+        if (_currentTabIndex != 2) {
+          InAppNotificationController().showChatMessage(
+            peerId: pId,
+            senderName: sName,
+            text: text,
+            onTap: () {
+              setState(() => _currentTabIndex = 2);
+            },
+          );
+        }
         break;
 
       case 'transferProgress':
@@ -283,9 +348,9 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
           _etaSeconds = eta;
           if (fName.isNotEmpty) _activeFileName = fName;
 
-          if (st == 'VERIFYING') {
-            _transferState = TransferState.verifying;
-          } else if (st == 'TRANSFERRING') {
+          if (st != null && st.isNotEmpty) {
+            _transferState = TransferState.fromString(st);
+          } else {
             _transferState = TransferState.transferring;
           }
         });
@@ -293,10 +358,20 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
 
       case 'transferCompleted':
         HapticFeedback.mediumImpact();
+        _rippleController.triggerTransferComplete();
         final path = event['savedPath']?.toString() ?? '';
         final finalFileName = event['fileName']?.toString() ?? _activeFileName;
         final finalTotal = (event['totalBytes'] as num?)?.toInt() ?? _totalTransferBytes;
         final sha = event['sha256']?.toString() ?? '';
+
+        InAppNotificationController().showTransferComplete(
+          fileName: finalFileName,
+          onOpen: () async {
+            if (path.isNotEmpty) {
+              await NativeBridgeService.openFile(path);
+            }
+          },
+        );
 
         setState(() {
           _transferState = TransferState.completed;
@@ -392,6 +467,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
       _transferState = TransferState.peerFound;
     });
 
+    _rippleController.triggerTransferStart();
     try {
       await NativeBridgeService.sendFiles(
         targetIp: peer.ip,
@@ -506,6 +582,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                       ),
                       onPressed: () async {
                         Navigator.pop(ctx);
+                        InAppNotificationController().dismissById('req_$transferId');
                         setState(() => _transferState = TransferState.idle);
                         await NativeBridgeService.declineTransfer(transferId);
                       },
@@ -524,6 +601,8 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                       ),
                       onPressed: () async {
                         Navigator.pop(ctx);
+                        InAppNotificationController().dismissById('req_$transferId');
+                        _rippleController.triggerTransferStart();
                         setState(() {
                           _transferState = TransferState.transferring;
                           _activeTransferId = transferId;
@@ -587,72 +666,80 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
   Widget build(BuildContext context) {
     final theme = AuraTheme.of(context);
 
-    return Scaffold(
-      backgroundColor: theme.background,
-      body: SafeArea(
-        child: Stack(
-          children: [
-            Column(
+    return InAppNotificationHost(
+      child: Scaffold(
+        backgroundColor: theme.background,
+        body: AuraProximityRipple(
+          controller: _rippleController,
+          child: SafeArea(
+            child: Stack(
               children: [
-                _buildHeader(theme),
-                Expanded(
-                  child: IndexedStack(
-                    index: _currentTabIndex,
-                    children: [
-                      _buildHomeScreen(theme),
-                      TransfersScreen(
-                        selectedFiles: _selectedFiles,
-                        onPickFiles: _pickFiles,
-                        onRemoveFile: (f) => setState(() => _selectedFiles.remove(f)),
-                        onClearFiles: () => setState(() => _selectedFiles.clear()),
-                        transferState: _transferState,
-                        activeFileName: _activeFileName,
-                        transferredBytes: _transferredBytes,
-                        totalTransferBytes: _totalTransferBytes,
-                        speedBytesPerSec: _speedBytesPerSec,
-                        onCancelTransfer: _cancelTransfer,
+                Column(
+                  children: [
+                    _buildHeader(theme),
+                    Expanded(
+                      child: IndexedStack(
+                        index: _currentTabIndex,
+                        children: [
+                          _buildHomeScreen(theme),
+                          TransfersScreen(
+                            selectedFiles: _selectedFiles,
+                            onPickFiles: _pickFiles,
+                            onRemoveFile: (f) => setState(() => _selectedFiles.remove(f)),
+                            onClearFiles: () => setState(() => _selectedFiles.clear()),
+                            transferState: _transferState,
+                            activeFileName: _activeFileName,
+                            transferredBytes: _transferredBytes,
+                            totalTransferBytes: _totalTransferBytes,
+                            speedBytesPerSec: _speedBytesPerSec,
+                            etaSeconds: _etaSeconds,
+                            onCancelTransfer: _cancelTransfer,
+                            isIncoming: !_isSender,
+                          ),
+                          ChatHubScreen(peers: _peers),
+                          const HistoryScreen(),
+                          ProfileScreen(
+                            profile: _userProfile,
+                            onProfileUpdated: (key, val) {
+                              if (key == 'display_name') setState(() => _deviceName = val);
+                              if (key == 'theme') widget.onThemeModeChanged(val);
+                              if (key == 'avatar_path') {
+                                setState(() {
+                                  _userProfile = UserProfile(
+                                    displayName: _userProfile.displayName,
+                                    deviceName: _userProfile.deviceName,
+                                    avatarIndex: _userProfile.avatarIndex,
+                                    avatarPath: val,
+                                    bio: _userProfile.bio,
+                                    theme: _userProfile.theme,
+                                    accent: _userProfile.accent,
+                                    visibility: _userProfile.visibility,
+                                  );
+                                });
+                              }
+                            },
+                          ),
+                        ],
                       ),
-                      ChatHubScreen(peers: _peers),
-                      const HistoryScreen(),
-                      ProfileScreen(
-                        profile: _userProfile,
-                        onProfileUpdated: (key, val) {
-                          if (key == 'display_name') setState(() => _deviceName = val);
-                          if (key == 'theme') widget.onThemeModeChanged(val);
-                          if (key == 'avatar_path') {
-                            setState(() {
-                              _userProfile = UserProfile(
-                                displayName: _userProfile.displayName,
-                                deviceName: _userProfile.deviceName,
-                                avatarIndex: _userProfile.avatarIndex,
-                                avatarPath: val,
-                                bio: _userProfile.bio,
-                                theme: _userProfile.theme,
-                                accent: _userProfile.accent,
-                                visibility: _userProfile.visibility,
-                              );
-                            });
-                          }
-                        },
-                      ),
-                    ],
-                  ),
+                    ),
+                    MinimalNavigationBar(
+                      currentIndex: _currentTabIndex,
+                      onTabSelected: (index) => setState(() => _currentTabIndex = index),
+                      activeTransfersCount: _selectedFiles.length,
+                      unreadChatCount: 0,
+                    ),
+                  ],
                 ),
-                MinimalNavigationBar(
-                  currentIndex: _currentTabIndex,
-                  onTabSelected: (index) => setState(() => _currentTabIndex = index),
-                  activeTransfersCount: _selectedFiles.length,
-                  unreadChatCount: 0,
-                ),
+
+                // Active Transfer Stream or Completion Burst Modal
+                if (_transferState.isActive &&
+                        _transferState != TransferState.waitingForAccept ||
+                    _transferState == TransferState.completed ||
+                    _transferState == TransferState.failed)
+                  _buildTransferOverlay(theme),
               ],
             ),
-
-            // Active Transfer Stream or Completion Burst Modal
-            if (_transferState != TransferState.idle &&
-                _transferState != TransferState.discovering &&
-                _transferState != TransferState.waitingForAccept)
-              _buildTransferOverlay(theme),
-          ],
+          ),
         ),
       ),
     );
@@ -835,105 +922,104 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
   // ---------------------------------------------------------------------------
   Widget _buildHomeScreen(AuraTheme theme) {
     final peerList = _peers.values.toList();
-    final globeSize = math.min(
-      MediaQuery.of(context).size.width * 0.76,
-      MediaQuery.of(context).size.height * 0.36,
-    );
+    final screenWidth = MediaQuery.of(context).size.width;
+    final screenHeight = MediaQuery.of(context).size.height;
+    final globeSize = math.min(screenWidth * 0.74, screenHeight * 0.35);
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        return Column(
-          children: [
-            // Status bar
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-              child: Row(
+    return Column(
+      children: [
+        // Status bar
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+          child: Row(
+            children: [
+              Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _isDiscovering ? theme.textPrimary : theme.textSecondary,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                _visibilityMode == VisibilityMode.receivingOff
+                    ? 'Visibility is turned off'
+                    : (_peers.isEmpty
+                        ? 'Searching for nearby devices...'
+                        : '${_peers.length} nearby device${_peers.length == 1 ? '' : 's'} discovered'),
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: theme.textSecondary,
+                ),
+              ),
+              const Spacer(),
+              if (_isDiscovering)
+                GestureDetector(
+                  onTap: () => _applyVisibilityMode(_visibilityMode),
+                  child: Icon(Icons.refresh_rounded, size: 16, color: theme.textSecondary),
+                ),
+            ],
+          ),
+        ),
+
+        // Globe Center Visualizer - Vertically and horizontally centered
+        Expanded(
+          child: Center(
+            child: SingleChildScrollView(
+              physics: const BouncingScrollPhysics(),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  Container(
-                    width: 6,
-                    height: 6,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: _isDiscovering ? theme.textPrimary : theme.textSecondary,
-                    ),
+                  HeroGlobe(
+                    peers: _peers,
+                    selectedPeerId: _selectedPeer?.id,
+                    onPeerSelected: (peer) {
+                      HapticFeedback.selectionClick();
+                      _rippleController.triggerPeerSelected();
+                      setState(() {
+                        _selectedPeer = _selectedPeer?.id == peer.id ? null : peer;
+                      });
+                    },
+                    isTransferring: _transferState.isActive,
+                    size: globeSize,
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(height: 8),
                   Text(
-                    _visibilityMode == VisibilityMode.receivingOff
-                        ? 'Visibility is turned off'
-                        : (_peers.isEmpty
-                            ? 'Searching for nearby devices...'
-                            : '${_peers.length} nearby device${_peers.length == 1 ? '' : 's'} discovered'),
+                    'Drag globe to rotate • Tap device node to select',
                     style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: theme.textSecondary,
+                      fontSize: 11,
+                      color: theme.textSecondary.withValues(alpha: 0.7),
                     ),
                   ),
-                  const Spacer(),
-                  if (_isDiscovering)
-                    GestureDetector(
-                      onTap: () => _applyVisibilityMode(_visibilityMode),
-                      child: Icon(Icons.refresh_rounded, size: 16, color: theme.textSecondary),
+                  const SizedBox(height: 14),
+
+                  // Selected Peer Card or Nearby List
+                  if (_selectedPeer != null)
+                    _buildSelectedPeerCard(_selectedPeer!, theme)
+                  else if (peerList.isNotEmpty)
+                    _buildNearbyPeerChips(peerList, theme)
+                  else
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 8),
+                      child: Text(
+                        'No devices found yet. Ensure Wi-Fi is on and nearby devices have AuraDrop open.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 11, color: theme.textSecondary, height: 1.4),
+                      ),
                     ),
+                  const SizedBox(height: 10),
                 ],
               ),
             ),
+          ),
+        ),
 
-            // Globe Center Visualizer
-            Expanded(
-              child: SingleChildScrollView(
-                physics: const BouncingScrollPhysics(),
-                child: Column(
-                  children: [
-                    const SizedBox(height: 6),
-                    HeroGlobe(
-                      peers: _peers,
-                      selectedPeerId: _selectedPeer?.id,
-                      onPeerSelected: (peer) {
-                        setState(() {
-                          _selectedPeer = _selectedPeer?.id == peer.id ? null : peer;
-                        });
-                      },
-                      isTransferring: _transferState == TransferState.transferring ||
-                          _transferState == TransferState.verifying,
-                      size: globeSize,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Drag globe to rotate • Tap device node to select',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: theme.textSecondary.withValues(alpha: 0.7),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-
-                    // Selected Peer Card or Nearby List
-                    if (_selectedPeer != null)
-                      _buildSelectedPeerCard(_selectedPeer!, theme)
-                    else if (peerList.isNotEmpty)
-                      _buildNearbyPeerChips(peerList, theme)
-                    else
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
-                        child: Text(
-                          'No devices found yet. Ensure Wi-Fi is on and nearby devices have AuraDrop open.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 11, color: theme.textSecondary, height: 1.4),
-                        ),
-                      ),
-                    const SizedBox(height: 16),
-                  ],
-                ),
-              ),
-            ),
-
-            // Docked Share Tray
-            _buildDockedShareTray(theme),
-          ],
-        );
-      },
+        // Docked Share Tray
+        _buildDockedShareTray(theme),
+      ],
     );
   }
 

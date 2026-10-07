@@ -16,6 +16,7 @@ class TransfersScreen extends StatefulWidget {
   final int speedBytesPerSec;
   final int etaSeconds;
   final VoidCallback onCancelTransfer;
+  final bool isIncoming;
 
   const TransfersScreen({
     super.key,
@@ -30,6 +31,7 @@ class TransfersScreen extends StatefulWidget {
     required this.speedBytesPerSec,
     this.etaSeconds = 0,
     required this.onCancelTransfer,
+    this.isIncoming = false,
   });
 
   @override
@@ -72,21 +74,47 @@ class _TransfersScreenState extends State<TransfersScreen> {
   }
 
   String _formatEta(int seconds) {
+    if (seconds <= 0) return '--:--';
     final m = seconds ~/ 60;
     final s = seconds % 60;
     return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
   }
 
+  String _getProgressDisplay() {
+    if (widget.transferState == TransferState.completed) {
+      return '100.0%';
+    }
+    if (widget.transferState == TransferState.verifying) {
+      return 'Verifying';
+    }
+    if (widget.transferState == TransferState.flushing) {
+      return 'Flushing';
+    }
+    if (widget.transferState == TransferState.databaseCommit) {
+      return 'Finalizing';
+    }
+    if (widget.totalTransferBytes <= 0) {
+      return '0.0%';
+    }
+
+    // Strict rule: Clamped to 99.9% during transfer until verified and completed
+    final rawPct = (widget.transferredBytes / widget.totalTransferBytes) * 100.0;
+    final safePct = rawPct.clamp(0.0, 99.9);
+    return '${safePct.toStringAsFixed(1)}%';
+  }
+
+  double _getProgressValue() {
+    if (widget.transferState == TransferState.completed) return 1.0;
+    if (widget.totalTransferBytes <= 0) return 0.0;
+    final ratio = widget.transferredBytes / widget.totalTransferBytes;
+    return ratio.clamp(0.0, 0.999);
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = AuraTheme.of(context);
-    final isTransferring = widget.transferState == TransferState.transferring ||
-        widget.transferState == TransferState.resuming ||
-        widget.transferState == TransferState.verifying;
+    final isTransferring = widget.transferState.isActive;
     final totalSelectedSize = widget.selectedFiles.fold(0, (acc, f) => acc + f.size);
-    final progressPct = widget.totalTransferBytes > 0
-        ? ((widget.transferredBytes / widget.totalTransferBytes) * 100).clamp(0, 100).toInt()
-        : 0;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
@@ -122,10 +150,10 @@ class _TransfersScreenState extends State<TransfersScreen> {
           ),
           const SizedBox(height: 20),
 
-          // Active Transfer Stream Card (If Active)
-          if (isTransferring) ...[
+          // Active Transfer Stream Card (If Active or Verifying)
+          if (isTransferring || widget.transferState == TransferState.completed) ...[
             Text(
-              'ACTIVE',
+              'ACTIVE STREAM',
               style: TextStyle(
                 fontSize: 11,
                 fontWeight: FontWeight.w800,
@@ -140,76 +168,117 @@ class _TransfersScreenState extends State<TransfersScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      Expanded(
-                        child: Text(
-                          widget.activeFileName,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontWeight: FontWeight.w700,
-                            fontSize: 16,
+                      // Direction indicator
+                      Container(
+                        width: 32,
+                        height: 32,
+                        decoration: BoxDecoration(
+                          color: theme.subtleHighlight,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: theme.border, width: 1.0),
+                        ),
+                        child: Center(
+                          child: Icon(
+                            widget.isIncoming
+                                ? Icons.arrow_downward_rounded
+                                : Icons.arrow_upward_rounded,
+                            size: 18,
                             color: theme.textPrimary,
                           ),
                         ),
                       ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              widget.activeFileName.isEmpty ? 'File Transfer' : widget.activeFileName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 15,
+                                color: theme.textPrimary,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              widget.transferState.label,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: widget.transferState == TransferState.completed
+                                    ? (theme.isDark ? Colors.white : Colors.black)
+                                    : theme.textSecondary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                       const SizedBox(width: 8),
                       Text(
-                        '$progressPct%',
+                        _getProgressDisplay(),
                         style: TextStyle(
                           fontWeight: FontWeight.w800,
                           fontSize: 16,
                           color: theme.textPrimary,
+                          fontFeatures: const [FontFeature.tabularFigures()],
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 6),
-                  Text(
-                    '${_formatBytes(widget.transferredBytes)} / ${_formatBytes(widget.totalTransferBytes)} • ${_formatSpeed(widget.speedBytesPerSec)}',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: theme.textSecondary,
-                    ),
-                  ),
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 12),
                   ClipRRect(
                     borderRadius: BorderRadius.circular(4),
                     child: LinearProgressIndicator(
-                      value: widget.totalTransferBytes > 0
-                          ? (widget.transferredBytes / widget.totalTransferBytes).clamp(0.0, 1.0)
-                          : 0.0,
+                      value: _getProgressValue(),
                       backgroundColor: theme.border,
                       valueColor: AlwaysStoppedAnimation<Color>(theme.actionBackground),
-                      minHeight: 4,
+                      minHeight: 5,
                     ),
                   ),
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 12),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(
-                        'ETA ${_formatEta(widget.etaSeconds)}',
+                        '${_formatBytes(widget.transferredBytes)} / ${_formatBytes(widget.totalTransferBytes)} • ${_formatSpeed(widget.speedBytesPerSec)}',
                         style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
+                          fontSize: 12,
                           color: theme.textSecondary,
-                          letterSpacing: 0.5,
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
-                      GestureDetector(
-                        onTap: widget.onCancelTransfer,
-                        behavior: HitTestBehavior.opaque,
-                        child: Text(
-                          'Cancel',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            color: theme.error,
-                          ),
+                      if (widget.transferState != TransferState.completed)
+                        Row(
+                          children: [
+                            Text(
+                              'ETA ${_formatEta(widget.etaSeconds)}',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: theme.textSecondary,
+                                letterSpacing: 0.3,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            GestureDetector(
+                              onTap: widget.onCancelTransfer,
+                              behavior: HitTestBehavior.opaque,
+                              child: Text(
+                                'Cancel',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: theme.error,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
-                      ),
                     ],
                   ),
                 ],

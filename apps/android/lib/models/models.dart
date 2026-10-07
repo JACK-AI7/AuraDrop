@@ -3,16 +3,134 @@ enum TransferState {
   discovering,
   peerFound,
   pairing,
-  waitingForAccept,
-  connecting,
+  queued,
   preparing,
+  connecting,
+  waitingForAccept,
   transferring,
-  paused,
-  resuming,
+  transferFinished,
+  flushing,
   verifying,
+  databaseCommit,
   completed,
   failed,
   cancelled,
+  interrupted,
+  paused,
+  resuming;
+
+  static TransferState fromString(String? state) {
+    if (state == null) return TransferState.idle;
+    switch (state.toUpperCase()) {
+      case 'IDLE':
+        return TransferState.idle;
+      case 'DISCOVERING':
+        return TransferState.discovering;
+      case 'PEER_FOUND':
+      case 'PEERFOUND':
+        return TransferState.peerFound;
+      case 'PAIRING':
+        return TransferState.pairing;
+      case 'QUEUED':
+        return TransferState.queued;
+      case 'PREPARING':
+        return TransferState.preparing;
+      case 'CONNECTING':
+        return TransferState.connecting;
+      case 'WAITING_FOR_ACCEPTANCE':
+      case 'WAITINGFORACCEPT':
+      case 'WAITING_FOR_ACCEPT':
+        return TransferState.waitingForAccept;
+      case 'TRANSFERRING':
+        return TransferState.transferring;
+      case 'TRANSFER_FINISHED':
+      case 'TRANSFERFINISHED':
+        return TransferState.transferFinished;
+      case 'FLUSHING':
+        return TransferState.flushing;
+      case 'VERIFYING':
+        return TransferState.verifying;
+      case 'DATABASE_COMMIT':
+      case 'DATABASECOMMIT':
+        return TransferState.databaseCommit;
+      case 'COMPLETED':
+        return TransferState.completed;
+      case 'FAILED':
+        return TransferState.failed;
+      case 'CANCELLED':
+      case 'CANCELED':
+        return TransferState.cancelled;
+      case 'INTERRUPTED':
+        return TransferState.interrupted;
+      case 'PAUSED':
+        return TransferState.paused;
+      case 'RESUMING':
+        return TransferState.resuming;
+      default:
+        return TransferState.idle;
+    }
+  }
+
+  bool get isActive =>
+      this == TransferState.queued ||
+      this == TransferState.preparing ||
+      this == TransferState.connecting ||
+      this == TransferState.waitingForAccept ||
+      this == TransferState.transferring ||
+      this == TransferState.transferFinished ||
+      this == TransferState.flushing ||
+      this == TransferState.verifying ||
+      this == TransferState.databaseCommit ||
+      this == TransferState.resuming;
+
+  bool get isDone =>
+      this == TransferState.completed ||
+      this == TransferState.failed ||
+      this == TransferState.cancelled ||
+      this == TransferState.interrupted;
+
+  String get label {
+    switch (this) {
+      case TransferState.idle:
+        return 'Ready';
+      case TransferState.discovering:
+        return 'Searching nearby...';
+      case TransferState.peerFound:
+        return 'Peer Found';
+      case TransferState.pairing:
+        return 'Pairing...';
+      case TransferState.queued:
+        return 'Queued';
+      case TransferState.preparing:
+        return 'Preparing payload...';
+      case TransferState.connecting:
+        return 'Establishing socket...';
+      case TransferState.waitingForAccept:
+        return 'Waiting for receiver...';
+      case TransferState.transferring:
+        return 'Transferring...';
+      case TransferState.transferFinished:
+        return 'Payload received';
+      case TransferState.flushing:
+        return 'Flushing to storage...';
+      case TransferState.verifying:
+        return 'Verifying SHA-256...';
+      case TransferState.databaseCommit:
+        return 'Finalizing transfer...';
+      case TransferState.completed:
+        return 'Completed';
+      case TransferState.failed:
+        return 'Transfer failed';
+      case TransferState.cancelled:
+        return 'Cancelled';
+      case TransferState.interrupted:
+        return 'Interrupted';
+      case TransferState.paused:
+        return 'Paused';
+      case TransferState.resuming:
+        return 'Resuming...';
+    }
+  }
 }
 
 enum VisibilityMode {
@@ -414,3 +532,34 @@ class UserProfile {
     );
   }
 }
+
+class BlockedPeer {
+  final String peerId;
+  final String peerName;
+  final DateTime blockedSince;
+
+  BlockedPeer({
+    required this.peerId,
+    required this.peerName,
+    required this.blockedSince,
+  });
+
+  factory BlockedPeer.fromMap(Map<dynamic, dynamic> map) {
+    return BlockedPeer(
+      peerId: map['peer_id']?.toString() ?? '',
+      peerName: map['peer_name']?.toString() ?? 'Unknown Peer',
+      blockedSince: DateTime.fromMillisecondsSinceEpoch(
+        (map['blocked_since'] as num?)?.toInt() ?? DateTime.now().millisecondsSinceEpoch,
+      ),
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'peer_id': peerId,
+      'peer_name': peerName,
+      'blocked_since': blockedSince.millisecondsSinceEpoch,
+    };
+  }
+}
+

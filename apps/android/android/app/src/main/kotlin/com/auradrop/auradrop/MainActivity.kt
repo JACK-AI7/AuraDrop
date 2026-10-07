@@ -2,6 +2,9 @@ package com.auradrop.auradrop
 
 import android.Manifest
 import android.app.Activity
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -15,6 +18,7 @@ import android.os.Looper
 import android.provider.OpenableColumns
 import android.util.Log
 import androidx.core.app.ActivityCompat
+import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
@@ -43,11 +47,31 @@ class MainActivity : FlutterActivity() {
         private const val DISCOVERY_PORT = 48290
         private const val SOCKET_BUFFER_SIZE = 2 * 1024 * 1024 // 2 MB buffer for max wire throughput
         private const val PROGRESS_EVENT_INTERVAL_MS = 90L // ~11 UI updates/sec to avoid IPC bottleneck
+        const val INCOMING_REQUEST_CHANNEL_ID = "auradrop_incoming_requests"
+        const val CHAT_NOTIFICATION_CHANNEL_ID = "auradrop_chat_messages"
+
+        @Volatile
+        var activeInstance: MainActivity? = null
+            private set
+
+        fun handleSystemNotificationAction(context: Context, transferId: String, accept: Boolean) {
+            val inst = activeInstance
+            if (inst != null) {
+                if (accept) {
+                    inst.acceptIncomingTransfer(transferId)
+                } else {
+                    inst.declineIncomingTransfer(transferId)
+                }
+            }
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.cancel(transferId.hashCode())
+        }
     }
 
     private var eventSink: EventChannel.EventSink? = null
     private var pendingFilePickResult: MethodChannel.Result? = null
     private var pendingAvatarPickResult: MethodChannel.Result? = null
+    private var isAppInForeground = true
 
     private var multicastLock: WifiManager.MulticastLock? = null
     private var isDiscovering = false
@@ -81,6 +105,8 @@ class MainActivity : FlutterActivity() {
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
+        activeInstance = this
+        createSystemNotificationChannels()
         dbHelper = AuraDropDatabaseHelper(this)
         val profile = dbHelper.getProfile()
         if (profile.containsKey("display_name")) {
@@ -88,6 +114,16 @@ class MainActivity : FlutterActivity() {
             if (!name.isNullOrBlank()) deviceName = name
         }
         handleSendIntent(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        isAppInForeground = true
+    }
+
+    override fun onPause() {
+        super.onPause()
+        isAppInForeground = false
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -262,6 +298,21 @@ class MainActivity : FlutterActivity() {
                     val peerName = call.argument<String>("peerName") ?: "Device"
                     val trusted = call.argument<Boolean>("trusted") ?: false
                     val ok = dbHelper.setPeerTrusted(peerId, peerName, trusted)
+                    result.success(ok)
+                }
+                "getBlockedPeers" -> {
+                    result.success(dbHelper.getBlockedPeers())
+                }
+                "setPeerBlocked" -> {
+                    val peerId = call.argument<String>("peerId") ?: ""
+                    val peerName = call.argument<String>("peerName") ?: "Device"
+                    val blocked = call.argument<Boolean>("blocked") ?: false
+                    val ok = dbHelper.setPeerBlocked(peerId, peerName, blocked)
+                    result.success(ok)
+                }
+                "updateVisibilityMode" -> {
+                    val mode = call.argument<String>("mode") ?: "everyone"
+                    val ok = dbHelper.setProfileValue("visibility", mode)
                     result.success(ok)
                 }
                 "pickAvatarImage" -> {
@@ -602,10 +653,50 @@ class MainActivity : FlutterActivity() {
                         val negJson = JSONObject(String(negBytes, Charsets.UTF_8))
 
                         val senderName = negJson.optString("senderName", "Nearby Peer")
+                        val senderDeviceId = negJson.optString("deviceId", "peer")
                         val totalFiles = negJson.optInt("totalFiles", 1)
                         val totalBytes = negJson.optLong("totalBytes", 0L)
                         val filesArray = negJson.optJSONArray("files") ?: JSONArray()
                         val filesList = mutableListOf<Map<String, Any>>()
+
+                        // Enforce Blocked Peers
+                        if (dbHelper.isPeerBlocked(senderDeviceId)) {
+                            val declineJson = JSONObject().apply {
+                                put("transferId", transferId)
+                                put("accepted", false)
+                                put("reason", "blocked")
+                            }
+                            output.write(buildFrame(0x11, declineJson.toString().toByteArray()))
+                            output.flush()
+                            break
+                        }
+
+                        // Enforce Authoritative Visibility Mode
+                        val prof = dbHelper.getProfile()
+                        val vis = prof["visibility"] ?: "everyone"
+                        if (vis == "receivingOff" || vis == "noOne") {
+                            val declineJson = JSONObject().apply {
+                                put("transferId", transferId)
+                                put("accepted", false)
+                                put("reason", "visibility_off")
+                            }
+                            output.write(buildFrame(0x11, declineJson.toString().toByteArray()))
+                            output.flush()
+                            break
+                        }
+                        if (vis == "contactsOnly") {
+                            val trusted = dbHelper.getTrustedPeers().any { it["peerId"] == senderDeviceId }
+                            if (!trusted) {
+                                val declineJson = JSONObject().apply {
+                                    put("transferId", transferId)
+                                    put("accepted", false)
+                                    put("reason", "not_trusted")
+                                }
+                                output.write(buildFrame(0x11, declineJson.toString().toByteArray()))
+                                output.flush()
+                                break
+                            }
+                        }
 
                         // Check for existing partial files for RESUME support
                         val downloadsDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "AuraDrop")
@@ -633,12 +724,13 @@ class MainActivity : FlutterActivity() {
                             ))
                         }
 
-                        val sasCode = generateSasCode(deviceId, negJson.optString("deviceId", "peer"))
+                        val sasCode = generateSasCode(deviceId, senderDeviceId)
 
                         // Store negotiation response data on session
                         sendEvent("transferRequest", mapOf(
                             "transferId" to transferId,
                             "senderName" to senderName,
+                            "senderDeviceId" to senderDeviceId,
                             "totalFiles" to totalFiles,
                             "totalBytes" to totalBytes,
                             "sas" to sasCode,
@@ -646,6 +738,9 @@ class MainActivity : FlutterActivity() {
                             "resumeOffsets" to resumeOffsets.toString(),
                             "connectionState" to "WAITING_FOR_ACCEPTANCE"
                         ))
+
+                        // System-Level Nearby Sharing Notification (Works in background per V8)
+                        showSystemIncomingShareNotification(transferId, senderName, totalFiles, totalBytes, sasCode)
                     }
 
                     // ---------------------------------------------------------
@@ -673,6 +768,10 @@ class MainActivity : FlutterActivity() {
                         )
                         dbHelper.insertChatMessage(msgMap)
                         sendEvent("chatMessageReceived", msgMap)
+
+                        if (!isAppInForeground) {
+                            showSystemChatMessageNotification(peerName, text)
+                        }
 
                         // Send CHAT_ACK
                         val ackJson = JSONObject().apply {
@@ -839,8 +938,9 @@ class MainActivity : FlutterActivity() {
                         lastEventTime = now
                         val elapsedSec = Math.max(0.1, (now - startTime) / 1000.0)
                         val speedBytesPerSec = (overallReceived / elapsedSec).toLong()
-                        val pct = Math.min(100, ((overallReceived * 100) / Math.max(1, totalExpectedTransferBytes)).toInt())
-                        val eta = Math.max(0, ((totalExpectedTransferBytes - overallReceived) / Math.max(1, speedBytesPerSec)).toInt())
+                        val rawPct = (overallReceived.toDouble() / Math.max(1L, totalExpectedTransferBytes).toDouble()) * 100.0
+                        val safePct = if (overallReceived >= totalExpectedTransferBytes) 99.9 else Math.min(99.9, rawPct)
+                        val eta = Math.max(0, ((totalExpectedTransferBytes - overallReceived) / Math.max(1L, speedBytesPerSec)).toInt())
 
                         sendEvent("transferProgress", mapOf(
                             "transferId" to transferId,
@@ -849,12 +949,12 @@ class MainActivity : FlutterActivity() {
                             "transferredBytes" to overallReceived,
                             "totalBytes" to totalExpectedTransferBytes,
                             "speedBytesPerSec" to speedBytesPerSec,
-                            "percentage" to pct,
+                            "percentage" to safePct,
                             "etaSeconds" to eta,
                             "verificationState" to "STREAMING"
                         ))
 
-                        updateForegroundTransferProgress(pct, formatSpeed(speedBytesPerSec))
+                        updateForegroundTransferProgress(safePct.toInt(), formatSpeed(speedBytesPerSec))
                     }
                 }
 
@@ -870,6 +970,10 @@ class MainActivity : FlutterActivity() {
                     sendEvent("transferProgress", mapOf(
                         "transferId" to transferId,
                         "state" to "VERIFYING",
+                        "fileName" to currentFinalFile.name,
+                        "transferredBytes" to overallReceived,
+                        "totalBytes" to totalExpectedTransferBytes,
+                        "percentage" to 99.9,
                         "verificationState" to "VERIFYING_SHA256"
                     ))
 
@@ -906,6 +1010,17 @@ class MainActivity : FlutterActivity() {
                     val durationMs = System.currentTimeMillis() - startTime
                     val avgSpeed = if (durationMs > 0) (overallReceived * 1000) / durationMs else 0L
 
+                    // Send DATABASE_COMMIT state
+                    sendEvent("transferProgress", mapOf(
+                        "transferId" to transferId,
+                        "state" to "DATABASE_COMMIT",
+                        "fileName" to currentFinalFile.name,
+                        "transferredBytes" to overallReceived,
+                        "totalBytes" to totalExpectedTransferBytes,
+                        "percentage" to 99.9,
+                        "verificationState" to "SAVING_HISTORY"
+                    ))
+
                     // Save to SQLite History
                     dbHelper.insertTransfer(mapOf(
                         "id" to transferId,
@@ -933,6 +1048,8 @@ class MainActivity : FlutterActivity() {
                         "totalBytes" to overallReceived,
                         "avgSpeed" to avgSpeed,
                         "sha256" to actualSha256,
+                        "percentage" to 100.0,
+                        "state" to "COMPLETED",
                         "verificationState" to "VERIFIED"
                     ))
                     break
@@ -1158,8 +1275,9 @@ class MainActivity : FlutterActivity() {
                                 lastEventTime = now
                                 val elapsedSec = Math.max(0.1, (now - startTime) / 1000.0)
                                 val speedBytesPerSec = (overallSent / elapsedSec).toLong()
-                                val pct = Math.min(100, ((overallSent * 100) / Math.max(1, totalBytes)).toInt())
-                                val eta = Math.max(0, ((totalBytes - overallSent) / Math.max(1, speedBytesPerSec)).toInt())
+                                val rawPct = (overallSent.toDouble() / Math.max(1L, totalBytes).toDouble()) * 100.0
+                                val safePct = if (overallSent >= totalBytes) 99.9 else Math.min(99.9, rawPct)
+                                val eta = Math.max(0, ((totalBytes - overallSent) / Math.max(1L, speedBytesPerSec)).toInt())
 
                                 sendEvent("transferProgress", mapOf(
                                     "transferId" to transferId,
@@ -1168,12 +1286,12 @@ class MainActivity : FlutterActivity() {
                                     "transferredBytes" to overallSent,
                                     "totalBytes" to totalBytes,
                                     "speedBytesPerSec" to speedBytesPerSec,
-                                    "percentage" to pct,
+                                    "percentage" to safePct,
                                     "etaSeconds" to eta,
                                     "verificationState" to "STREAMING"
                                 ))
 
-                                updateForegroundTransferProgress(pct, formatSpeed(speedBytesPerSec))
+                                updateForegroundTransferProgress(safePct.toInt(), formatSpeed(speedBytesPerSec))
                             }
                         }
                     }
@@ -1194,6 +1312,7 @@ class MainActivity : FlutterActivity() {
                     sendEvent("transferProgress", mapOf(
                         "transferId" to transferId,
                         "state" to "VERIFYING",
+                        "percentage" to 99.9,
                         "verificationState" to "VERIFYING_SHA256"
                     ))
 
@@ -1241,6 +1360,8 @@ class MainActivity : FlutterActivity() {
                 sendEvent("transferCompleted", mapOf(
                     "transferId" to transferId,
                     "totalBytes" to overallSent,
+                    "percentage" to 100.0,
+                    "state" to "COMPLETED",
                     "verificationState" to "VERIFIED"
                 ))
             } catch (e: Exception) {
@@ -1568,7 +1689,125 @@ class MainActivity : FlutterActivity() {
         return String.format("%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
     }
 
+    private fun createSystemNotificationChannels() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+            val reqChannel = NotificationChannel(
+                INCOMING_REQUEST_CHANNEL_ID,
+                "Incoming Share Requests",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Shows actionable notifications when nearby devices request to share files"
+                enableVibration(true)
+                setShowBadge(true)
+            }
+            nm.createNotificationChannel(reqChannel)
+
+            val chatChannel = NotificationChannel(
+                CHAT_NOTIFICATION_CHANNEL_ID,
+                "Chat Messages",
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = "Notifies when new messages arrive from nearby peers"
+                setShowBadge(true)
+            }
+            nm.createNotificationChannel(chatChannel)
+        }
+    }
+
+    private fun showSystemIncomingShareNotification(
+        transferId: String,
+        senderName: String,
+        totalFiles: Int,
+        totalBytes: Long,
+        sasCode: String
+    ) {
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+            // Intent to open AuraDrop app
+            val openAppIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+                putExtra("incoming_transfer_id", transferId)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            }
+            val openPendingIntent = PendingIntent.getActivity(
+                this,
+                transferId.hashCode(),
+                openAppIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            // Decline Intent
+            val declineIntent = Intent(this, AuraNotificationActionReceiver::class.java).apply {
+                action = AuraNotificationActionReceiver.ACTION_NOTIFICATION_DECLINE
+                putExtra(AuraNotificationActionReceiver.EXTRA_TRANSFER_ID, transferId)
+            }
+            val declinePendingIntent = PendingIntent.getBroadcast(
+                this,
+                transferId.hashCode() + 1,
+                declineIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            // Accept Intent
+            val acceptIntent = Intent(this, AuraNotificationActionReceiver::class.java).apply {
+                action = AuraNotificationActionReceiver.ACTION_NOTIFICATION_ACCEPT
+                putExtra(AuraNotificationActionReceiver.EXTRA_TRANSFER_ID, transferId)
+            }
+            val acceptPendingIntent = PendingIntent.getBroadcast(
+                this,
+                transferId.hashCode() + 2,
+                acceptIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val builder = NotificationCompat.Builder(this, INCOMING_REQUEST_CHANNEL_ID)
+                .setContentTitle("AuraDrop • Incoming Share")
+                .setContentText("$senderName wants to send $totalFiles file(s) • ${formatBytes(totalBytes)}")
+                .setSubText("SAS: $sasCode")
+                .setSmallIcon(android.R.drawable.stat_sys_download)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setContentIntent(openPendingIntent)
+                .addAction(android.R.drawable.ic_delete, "Decline", declinePendingIntent)
+                .addAction(android.R.drawable.stat_sys_download, "Accept", acceptPendingIntent)
+
+            nm.notify(transferId.hashCode(), builder.build())
+        } catch (e: Exception) {
+            Log.e(TAG, "Error posting system incoming share notification: ${e.message}")
+        }
+    }
+
+    private fun cancelSystemIncomingShareNotification(transferId: String) {
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.cancel(transferId.hashCode())
+        } catch (e: Exception) {}
+    }
+
+    private fun showSystemChatMessageNotification(senderName: String, text: String) {
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val openAppIntent = packageManager.getLaunchIntentForPackage(packageName)
+            val openPendingIntent = if (openAppIntent != null) {
+                PendingIntent.getActivity(this, 0, openAppIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            } else null
+
+            val builder = NotificationCompat.Builder(this, CHAT_NOTIFICATION_CHANNEL_ID)
+                .setContentTitle(senderName)
+                .setContentText(text)
+                .setSmallIcon(android.R.drawable.sym_action_chat)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setAutoCancel(true)
+                .setContentIntent(openPendingIntent)
+
+            nm.notify(System.currentTimeMillis().toInt(), builder.build())
+        } catch (e: Exception) {}
+    }
+
     override fun onDestroy() {
+        if (activeInstance == this) activeInstance = null
         stopDiscoveryEngine()
         scope.cancel()
         transferServer?.close()

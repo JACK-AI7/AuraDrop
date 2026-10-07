@@ -48,6 +48,12 @@ class AuraDropDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATAB
         const val COL_TRUST_PEER_ID = "peer_id"
         const val COL_TRUST_PEER_NAME = "peer_name"
         const val COL_TRUST_TIMESTAMP = "trusted_since"
+
+        // Table Blocked Peers
+        const val TABLE_BLOCKED = "blocked_peers"
+        const val COL_BLOCK_PEER_ID = "peer_id"
+        const val COL_BLOCK_PEER_NAME = "peer_name"
+        const val COL_BLOCK_TIMESTAMP = "blocked_since"
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -97,13 +103,25 @@ class AuraDropDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATAB
             )
         """.trimIndent())
 
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS $TABLE_BLOCKED (
+                $COL_BLOCK_PEER_ID TEXT PRIMARY KEY,
+                $COL_BLOCK_PEER_NAME TEXT NOT NULL,
+                $COL_BLOCK_TIMESTAMP INTEGER NOT NULL
+            )
+        """.trimIndent())
+
         // Insert default profile settings
         db.execSQL("INSERT OR IGNORE INTO $TABLE_PROFILE VALUES ('display_name', 'AuraDrop User')")
         db.execSQL("INSERT OR IGNORE INTO $TABLE_PROFILE VALUES ('avatar_index', '0')")
         db.execSQL("INSERT OR IGNORE INTO $TABLE_PROFILE VALUES ('bio', 'Nearby sharing made effortless')")
-        db.execSQL("INSERT OR IGNORE INTO $TABLE_PROFILE VALUES ('theme', 'glass_dark')")
-        db.execSQL("INSERT OR IGNORE INTO $TABLE_PROFILE VALUES ('accent', 'cyan')")
+        db.execSQL("INSERT OR IGNORE INTO $TABLE_PROFILE VALUES ('theme', 'dark')")
+        db.execSQL("INSERT OR IGNORE INTO $TABLE_PROFILE VALUES ('accent', 'white')")
         db.execSQL("INSERT OR IGNORE INTO $TABLE_PROFILE VALUES ('visibility', 'everyone')")
+        db.execSQL("INSERT OR IGNORE INTO $TABLE_PROFILE VALUES ('background_discovery', 'true')")
+        db.execSQL("INSERT OR IGNORE INTO $TABLE_PROFILE VALUES ('allow_nearby_requests', 'true')")
+        db.execSQL("INSERT OR IGNORE INTO $TABLE_PROFILE VALUES ('notification_preview', 'full')")
+        db.execSQL("INSERT OR IGNORE INTO $TABLE_PROFILE VALUES ('reduced_motion', 'false')")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -272,5 +290,44 @@ class AuraDropDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATAB
         } else {
             db.delete(TABLE_TRUSTED, "$COL_TRUST_PEER_ID = ?", arrayOf(peerId)) > 0
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // BLOCKED PEERS
+    // -------------------------------------------------------------------------
+    fun isPeerBlocked(peerId: String): Boolean {
+        val db = readableDatabase
+        val cursor = db.rawQuery("SELECT 1 FROM $TABLE_BLOCKED WHERE $COL_BLOCK_PEER_ID = ?", arrayOf(peerId))
+        cursor.use { return it.moveToFirst() }
+    }
+
+    fun setPeerBlocked(peerId: String, peerName: String, blocked: Boolean): Boolean {
+        val db = writableDatabase
+        return if (blocked) {
+            val cv = ContentValues().apply {
+                put(COL_BLOCK_PEER_ID, peerId)
+                put(COL_BLOCK_PEER_NAME, peerName)
+                put(COL_BLOCK_TIMESTAMP, System.currentTimeMillis())
+            }
+            db.insertWithOnConflict(TABLE_BLOCKED, null, cv, SQLiteDatabase.CONFLICT_REPLACE) != -1L
+        } else {
+            db.delete(TABLE_BLOCKED, "$COL_BLOCK_PEER_ID = ?", arrayOf(peerId)) > 0
+        }
+    }
+
+    fun getBlockedPeers(): List<Map<String, Any>> {
+        val list = mutableListOf<Map<String, Any>>()
+        val db = readableDatabase
+        val cursor = db.rawQuery("SELECT * FROM $TABLE_BLOCKED", null)
+        cursor.use { c ->
+            while (c.moveToNext()) {
+                list.add(mapOf(
+                    "peerId" to c.getString(c.getColumnIndexOrThrow(COL_BLOCK_PEER_ID)),
+                    "peerName" to c.getString(c.getColumnIndexOrThrow(COL_BLOCK_PEER_NAME)),
+                    "blockedSince" to c.getLong(c.getColumnIndexOrThrow(COL_BLOCK_TIMESTAMP))
+                ))
+            }
+        }
+        return list
     }
 }

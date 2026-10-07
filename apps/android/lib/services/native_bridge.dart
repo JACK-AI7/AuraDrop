@@ -185,6 +185,30 @@ class NativeBridgeService {
     });
   }
 
+  static Future<List<BlockedPeer>> getBlockedPeers() async {
+    final dynamic res = await _channel.invokeMethod('getBlockedPeers');
+    if (res is List) {
+      return res.whereType<Map>().map((m) => BlockedPeer.fromMap(m)).toList();
+    }
+    return [];
+  }
+
+  static Future<bool> setPeerBlocked(String peerId, String peerName, bool blocked) async {
+    final bool? ok = await _channel.invokeMethod<bool>('setPeerBlocked', {
+      'peerId': peerId,
+      'peerName': peerName,
+      'blocked': blocked,
+    });
+    return ok ?? false;
+  }
+
+  static Future<bool> updateVisibilityMode(String mode) async {
+    final bool? ok = await _channel.invokeMethod<bool>('updateVisibilityMode', {
+      'mode': mode,
+    });
+    return ok ?? false;
+  }
+
   static Future<String?> pickAvatarImage() async {
     return await _channel.invokeMethod<String>('pickAvatarImage');
   }

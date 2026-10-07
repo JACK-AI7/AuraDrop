@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/models.dart';
 import '../services/native_bridge.dart';
+import '../services/profile_repository.dart';
 import '../theme/aura_theme.dart';
 import '../components/minimal_components.dart';
 
@@ -137,19 +138,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final finalName = name.isNotEmpty ? name : 'AuraDrop User';
     final finalDevName = devName.isNotEmpty ? devName : 'My Device';
 
-    await NativeBridgeService.saveUserProfile('display_name', finalName);
-    await NativeBridgeService.saveUserProfile('device_name', finalDevName);
-    await NativeBridgeService.saveUserProfile('bio', bio);
-    await NativeBridgeService.saveUserProfile('theme', _selectedTheme);
+    final repo = ProfileRepository();
+    final ok1 = await repo.updateDisplayName(finalName);
+    final ok2 = await repo.updateDeviceName(finalDevName);
+    final ok3 = await repo.updateBio(bio);
+    final ok4 = await repo.updateTheme(_selectedTheme);
 
     widget.onProfileUpdated('display_name', finalName);
     widget.onProfileUpdated('device_name', finalDevName);
     widget.onProfileUpdated('theme', _selectedTheme);
 
+    final success = ok1 && ok2 && ok3 && ok4;
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: const Text('Profile saved successfully'),
+          content: Text(success ? 'Profile saved and verified' : 'Saved with warnings'),
           backgroundColor: Colors.black87,
           behavior: SnackBarBehavior.floating,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),

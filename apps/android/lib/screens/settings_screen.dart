@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/models.dart';
 import '../services/native_bridge.dart';
+import '../services/profile_repository.dart';
 import '../theme/aura_theme.dart';
 import '../components/minimal_components.dart';
 
@@ -33,20 +34,29 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   List<Map<String, dynamic>> _trustedPeers = [];
-  bool _isLoadingTrusted = true;
+  List<BlockedPeer> _blockedPeers = [];
+  bool _isLoadingPeers = true;
+  bool _backgroundDiscovery = true;
+  bool _allowNearbyRequests = true;
+  Map<String, dynamic> _deviceInfo = {};
 
   @override
   void initState() {
     super.initState();
-    _loadTrusted();
+    _loadAllData();
   }
 
-  Future<void> _loadTrusted() async {
-    final list = await NativeBridgeService.getTrustedPeers();
+  Future<void> _loadAllData() async {
+    final trusted = await NativeBridgeService.getTrustedPeers();
+    final blocked = await NativeBridgeService.getBlockedPeers();
+    final info = await NativeBridgeService.getDeviceInfo();
+
     if (mounted) {
       setState(() {
-        _trustedPeers = list;
-        _isLoadingTrusted = false;
+        _trustedPeers = trusted;
+        _blockedPeers = blocked;
+        _deviceInfo = info;
+        _isLoadingPeers = false;
       });
     }
   }
@@ -54,7 +64,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _removeTrust(String peerId, String name) async {
     HapticFeedback.lightImpact();
     await NativeBridgeService.setPeerTrusted(peerId, name, false);
-    _loadTrusted();
+    _loadAllData();
+  }
+
+  Future<void> _unblockPeer(String peerId, String name) async {
+    HapticFeedback.lightImpact();
+    await NativeBridgeService.setPeerBlocked(peerId, name, false);
+    _loadAllData();
   }
 
   Future<void> _clearAllHistory(AuraTheme theme) async {
@@ -104,6 +120,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   void _updateSettings(AnimationSettings newSettings) {
     widget.onAnimationSettingsChanged(newSettings);
+    NativeBridgeService.saveUserProfile(
+      'reduced_motion',
+      newSettings.reducedMotion ? '1' : '0',
+    );
   }
 
   @override
@@ -143,7 +163,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 4),
             Text(
-              'Manage network visibility, appearance, and local storage.',
+              'Manage network visibility, background discovery, and storage.',
               style: TextStyle(fontSize: 12, color: theme.textSecondary),
             ),
             const SizedBox(height: 24),
@@ -216,6 +236,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 24),
 
+            // Background & System Services
+            _buildSectionHeader('System & Background Sharing', theme),
+            const SizedBox(height: 8),
+            MinimalCard(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                children: [
+                  _buildSwitchRow(
+                    'Background Discovery',
+                    'Keep Wi-Fi Direct and LAN beacon active when app is minimized',
+                    _backgroundDiscovery,
+                    (v) {
+                      setState(() => _backgroundDiscovery = v);
+                      NativeBridgeService.saveUserProfile('background_discovery', v ? '1' : '0');
+                    },
+                    theme,
+                  ),
+                  Divider(color: theme.border, height: 20),
+                  _buildSwitchRow(
+                    'Allow Nearby Requests',
+                    'Show system notification with Accept/Decline outside of app',
+                    _allowNearbyRequests,
+                    (v) {
+                      setState(() => _allowNearbyRequests = v);
+                      NativeBridgeService.saveUserProfile('allow_nearby_requests', v ? '1' : '0');
+                    },
+                    theme,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+
             // Motion & Performance
             _buildSectionHeader('Motion & Performance', theme),
             const SizedBox(height: 8),
@@ -243,7 +296,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const SizedBox(height: 8),
                   _buildSwitchRow(
                     'Reduced Motion',
-                    'Disable 3D sphere spin momentum and transitions',
+                    'Disable 3D sphere spin momentum and edge wave animations',
                     anim.reducedMotion,
                     (v) => _updateSettings(anim.copyWith(reducedMotion: v)),
                     theme,
@@ -253,13 +306,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 24),
 
-            // Trusted Devices Section
-            _buildSectionHeader('Trusted Devices', theme),
+            // Blocked Peers Section
+            _buildSectionHeader('Blocked Peers', theme),
             const SizedBox(height: 8),
-            if (_isLoadingTrusted)
+            if (_isLoadingPeers)
               Center(
                 child: Padding(
-                  padding: const EdgeInsets.all(20),
+                  padding: const EdgeInsets.all(16),
                   child: SizedBox(
                     width: 20,
                     height: 20,
@@ -267,7 +320,59 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
               )
-            else if (_trustedPeers.isEmpty)
+            else if (_blockedPeers.isEmpty)
+              MinimalCard(
+                padding: const EdgeInsets.all(16),
+                child: Center(
+                  child: Text(
+                    'No blocked peers',
+                    style: TextStyle(fontSize: 12, color: theme.textSecondary),
+                  ),
+                ),
+              )
+            else
+              Column(
+                children: _blockedPeers.map((b) {
+                  return MinimalCard(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    child: Row(
+                      children: [
+                        Icon(Icons.block_rounded, color: theme.error, size: 18),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                b.peerName,
+                                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: theme.textPrimary),
+                              ),
+                              Text(
+                                'Blocked since ${b.blockedSince.toLocal().toString().split(' ')[0]}',
+                                style: TextStyle(fontSize: 10, color: theme.textSecondary),
+                              ),
+                            ],
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: () => _unblockPeer(b.peerId, b.peerName),
+                          child: Text(
+                            'Unblock',
+                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: theme.textPrimary),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }).toList(),
+              ),
+            const SizedBox(height: 24),
+
+            // Trusted Devices Section
+            _buildSectionHeader('Trusted Devices', theme),
+            const SizedBox(height: 8),
+            if (_trustedPeers.isEmpty)
               MinimalCard(
                 padding: const EdgeInsets.all(16),
                 child: Center(
@@ -347,20 +452,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 24),
 
-            // About Section
-            _buildSectionHeader('About', theme),
+            // Diagnostics & About Section
+            _buildSectionHeader('Diagnostics & Network', theme),
             const SizedBox(height: 8),
             MinimalCard(
               padding: const EdgeInsets.all(14),
               child: Column(
                 children: [
-                  _buildAboutRow('Version', '6.0.0 (Pure Minimal)', theme),
+                  _buildAboutRow('Local IP', _deviceInfo['ip']?.toString() ?? '127.0.0.1', theme),
                   Divider(color: theme.border, height: 16),
-                  _buildAboutRow('Protocol', 'P2PFS/1 over Direct TCP', theme),
+                  _buildAboutRow('Transport Port', '${_deviceInfo['port'] ?? 48291}', theme),
                   Divider(color: theme.border, height: 16),
-                  _buildAboutRow('Encryption', 'AES-256-GCM / X25519', theme),
+                  _buildAboutRow('Protocol Version', 'P2PFS/1 (AuraDrop V8)', theme),
                   Divider(color: theme.border, height: 16),
-                  _buildAboutRow('Architecture', 'Local-First Zero Cloud', theme),
+                  _buildAboutRow('Cryptography', 'AES-256-GCM / X25519', theme),
+                  Divider(color: theme.border, height: 16),
+                  _buildAboutRow('Architecture', 'Local-First Pure P2P', theme),
                 ],
               ),
             ),
@@ -390,6 +497,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         onTap: () {
           HapticFeedback.selectionClick();
           widget.onThemeModeChanged?.call(value);
+          ProfileRepository().updateTheme(value);
         },
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 10),
@@ -430,6 +538,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       onTap: () {
         HapticFeedback.selectionClick();
         widget.onVisibilityChanged(mode);
+        final modeString = mode.name;
+        ProfileRepository().updateVisibility(modeString);
       },
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),

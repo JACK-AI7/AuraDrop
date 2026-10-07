@@ -11,6 +11,13 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
+    <!-- Bluetooth Permissions for Nearby Device Discovery -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
     <!-- Scoped Storage & Media Permissions -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
@@ -77,6 +84,11 @@
             android:name=".TransferForegroundService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice|dataSync" />
+
+        <!-- Broadcast Receiver for System-Level Share Notifications (Accept / Decline) -->
+        <receiver
+            android:name=".AuraNotificationActionReceiver"
+            android:exported="false" />
 
         <meta-data
             android:name="flutterEmbedding"
