@@ -1,5 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { PresenceService } from '../services';
+import { RedisRealtimeService, PresencePayload } from '../redis/redis.service';
+import { NeonDatabaseClient } from '@auradrop/database';
 
 export interface DevicePeerInfo {
   deviceId: string;
@@ -44,6 +46,7 @@ export interface SignalingMessage {
   signal?: any;
   peers?: DevicePeerInfo[];
   peer?: DevicePeerInfo;
+  _originInstance?: string;
 }
 
 export class WebSocketGateway {
@@ -51,9 +54,57 @@ export class WebSocketGateway {
 
   constructor(
     private wss: WebSocketServer,
-    private presenceService: PresenceService
+    private presenceService: PresenceService,
+    private redisService?: RedisRealtimeService,
+    private db?: NeonDatabaseClient
   ) {
     this.init();
+    this.setupRedisClusterRelay();
+  }
+
+  private safeSend(ws: WebSocket, data: string): boolean {
+    if (ws.readyState === WebSocket.OPEN && ws.bufferedAmount < 2 * 1024 * 1024) {
+      try {
+        ws.send(data);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
+
+  private setupRedisClusterRelay(): void {
+    if (!this.redisService) return;
+
+    this.redisService.subscribeSignaling('auradrop:signaling', (msg: SignalingMessage) => {
+      const target = msg.targetDeviceId || msg.targetId;
+      if (target && this.clients.has(target)) {
+        const client = this.clients.get(target);
+        if (client) {
+          this.safeSend(client.ws, JSON.stringify(msg));
+        }
+      } else if (msg.type === 'PEER_ONLINE' && msg.peer) {
+        // Broadcast remote peer online to local clients (limit burst)
+        const notice = JSON.stringify({ type: 'PEER_ONLINE', peer: msg.peer });
+        let count = 0;
+        for (const [id, c] of this.clients.entries()) {
+          if (id !== msg.peer.deviceId) {
+            this.safeSend(c.ws, notice);
+            if (++count > 100) break; // Cap broadcast fanout
+          }
+        }
+      } else if (msg.type === 'PEER_OFFLINE' && msg.deviceId) {
+        const notice = JSON.stringify({ type: 'PEER_OFFLINE', deviceId: msg.deviceId });
+        let count = 0;
+        for (const [id, c] of this.clients.entries()) {
+          if (id !== msg.deviceId) {
+            this.safeSend(c.ws, notice);
+            if (++count > 100) break;
+          }
+        }
+      }
+    });
   }
 
   private init(): void {
@@ -61,9 +112,7 @@ export class WebSocketGateway {
       let registeredDeviceId: string | null = null;
       const remoteIp = req.socket.remoteAddress || 'unknown';
 
-      console.log(`[WS CONNECT] Incoming connection from ${remoteIp}`);
-
-      ws.on('message', (data: Buffer | string) => {
+      ws.on('message', async (data: Buffer | string) => {
         try {
           const msg: SignalingMessage = JSON.parse(data.toString());
 
@@ -87,30 +136,59 @@ export class WebSocketGateway {
               this.clients.set(devId, { ws, info });
               this.presenceService.recordHeartbeat(devId, devId);
 
-              console.log(
-                `[WS REGISTER] Device "${info.displayName}" (${devId}) [${info.platform}] from ${remoteIp} - visibility: ${info.visibility}`
-              );
+              // Update Redis presence
+              if (this.redisService) {
+                await this.redisService.setPresence({
+                  ...info,
+                  instanceId: this.redisService.getInstanceId(),
+                }, 15);
+              }
 
-              // 1. Gather all other active, discoverable peers
-              const otherPeers: DevicePeerInfo[] = [];
-              for (const [id, client] of this.clients.entries()) {
-                if (id !== devId && client.ws.readyState === WebSocket.OPEN && client.info.visibility !== 'off') {
-                  otherPeers.push(client.info);
+              // Update Database
+              if (this.db) {
+                this.db.devices.register({
+                  id: devId,
+                  deviceName: info.displayName,
+                  platform: info.platform,
+                  devicePublicKey: payload.publicKey || devId,
+                  capabilitiesJson: info.capabilities,
+                }).catch(() => {});
+              }
+
+              // Gather active discoverable peers (capped at 50 to avoid megabyte JSON overhead)
+              let peerList: DevicePeerInfo[] = [];
+              if (this.redisService) {
+                const redisPeers = await this.redisService.getActivePeers(devId);
+                peerList = redisPeers.slice(0, 50).map((p) => ({
+                  deviceId: p.deviceId,
+                  displayName: p.displayName,
+                  deviceName: p.deviceName,
+                  platform: p.platform,
+                  visibility: p.visibility,
+                  capabilities: p.capabilities,
+                  remoteIp: p.remoteIp,
+                  lastSeen: p.lastSeen,
+                }));
+              } else {
+                for (const [id, client] of this.clients.entries()) {
+                  if (id !== devId && client.ws.readyState === WebSocket.OPEN && client.info.visibility !== 'off') {
+                    peerList.push(client.info);
+                    if (peerList.length >= 50) break;
+                  }
                 }
               }
 
-              // 2. Send acknowledgment and current peer list to the registering device
-              ws.send(
+              // Send acknowledgment & current peer list
+              this.safeSend(
+                ws,
                 JSON.stringify({
                   type: 'REGISTERED',
                   deviceId: devId,
-                  peers: otherPeers,
+                  peers: peerList,
                 })
               );
 
-              console.log(`[WS REGISTERED] Sent ${otherPeers.length} active peers to ${devId}`);
-
-              // 3. If this device is visible, announce to all other active connected devices
+              // Broadcast online announcement to connected devices (capped at 50 peers)
               if (info.visibility !== 'off') {
                 const onlineNotice = JSON.stringify({
                   type: 'PEER_ONLINE',
@@ -119,12 +197,21 @@ export class WebSocketGateway {
 
                 let notifyCount = 0;
                 for (const [id, client] of this.clients.entries()) {
-                  if (id !== devId && client.ws.readyState === WebSocket.OPEN) {
-                    client.ws.send(onlineNotice);
-                    notifyCount++;
+                  if (id !== devId) {
+                    if (this.safeSend(client.ws, onlineNotice)) {
+                      notifyCount++;
+                      if (notifyCount >= 50) break;
+                    }
                   }
                 }
-                console.log(`[WS PEER_ONLINE] Broadcasted online notice for ${devId} to ${notifyCount} peers`);
+
+                // Publish to cluster
+                if (this.redisService) {
+                  await this.redisService.publishSignaling('auradrop:signaling', {
+                    type: 'PEER_ONLINE',
+                    peer: info,
+                  });
+                }
               }
               break;
             }
@@ -136,8 +223,11 @@ export class WebSocketGateway {
                   client.info.lastSeen = Date.now();
                 }
                 this.presenceService.recordHeartbeat(registeredDeviceId, registeredDeviceId);
+                if (this.redisService) {
+                  this.redisService.refreshPresence(registeredDeviceId, 15).catch(() => {});
+                }
               }
-              ws.send(JSON.stringify({ type: 'PONG', timestamp: Date.now() }));
+              this.safeSend(ws, JSON.stringify({ type: 'PONG', timestamp: Date.now() }));
               break;
             }
 
@@ -145,23 +235,33 @@ export class WebSocketGateway {
               const target = msg.targetDeviceId || msg.targetId;
               const sender = msg.senderId || msg.deviceId;
 
-              if (!target || !this.clients.has(target)) {
-                console.warn(`[WS SIGNAL] Target device ${target} offline or not found for signal from ${sender}`);
-                ws.send(
-                  JSON.stringify({
-                    type: 'SIGNAL_TARGET_OFFLINE',
-                    targetDeviceId: target,
-                    senderId: sender,
-                  })
-                );
-                break;
+              // Check if target is local
+              if (target && this.clients.has(target)) {
+                const targetClient = this.clients.get(target);
+                if (targetClient && this.safeSend(targetClient.ws, JSON.stringify(msg))) {
+                  const signalType = msg.signal?.type || (msg.signal?.candidate ? 'candidate' : 'unknown');
+                  const ackType =
+                    signalType === 'offer'
+                      ? 'OFFER_FORWARDED'
+                      : signalType === 'answer'
+                      ? 'ANSWER_FORWARDED'
+                      : 'ICE_FORWARDED';
+
+                  this.safeSend(
+                    ws,
+                    JSON.stringify({
+                      type: ackType,
+                      targetDeviceId: target,
+                      timestamp: Date.now(),
+                    })
+                  );
+                  break;
+                }
               }
 
-              const targetClient = this.clients.get(target);
-              if (targetClient && targetClient.ws.readyState === WebSocket.OPEN) {
-                targetClient.ws.send(JSON.stringify(msg));
-
-                // Send signaling acknowledgment to sender (Section 21)
+              // If not local, relay via Redis cluster
+              if (this.redisService && target) {
+                await this.redisService.publishSignaling('auradrop:signaling', msg);
                 const signalType = msg.signal?.type || (msg.signal?.candidate ? 'candidate' : 'unknown');
                 const ackType =
                   signalType === 'offer'
@@ -170,24 +270,26 @@ export class WebSocketGateway {
                     ? 'ANSWER_FORWARDED'
                     : 'ICE_FORWARDED';
 
-                ws.send(
+                this.safeSend(
+                  ws,
                   JSON.stringify({
                     type: ackType,
                     targetDeviceId: target,
                     timestamp: Date.now(),
                   })
                 );
-
-                console.log(`[WS SIGNAL] Relayed ${signalType} from ${sender} -> ${target}`);
-              } else {
-                ws.send(
-                  JSON.stringify({
-                    type: 'SIGNAL_TARGET_OFFLINE',
-                    targetDeviceId: target,
-                    senderId: sender,
-                  })
-                );
+                break;
               }
+
+              // Target offline
+              this.safeSend(
+                ws,
+                JSON.stringify({
+                  type: 'SIGNAL_TARGET_OFFLINE',
+                  targetDeviceId: target,
+                  senderId: sender,
+                })
+              );
               break;
             }
 
@@ -201,17 +303,40 @@ export class WebSocketGateway {
               const target = msg.targetDeviceId || msg.targetId;
               const sender = msg.senderId || msg.deviceId;
 
+              // Database audit tracking
+              if (this.db) {
+                if (msg.type === 'TRANSFER_REQUEST' && msg.payload) {
+                  this.db.transfers.createSession({
+                    id: msg.payload.transferId || `tx_${Date.now()}`,
+                    senderDeviceId: sender,
+                    receiverDeviceId: target || 'unknown',
+                    direction: 'outgoing',
+                    fileCount: msg.payload.totalFiles || 1,
+                    totalBytes: msg.payload.totalBytes || 0,
+                  }).catch(() => {});
+                } else if (msg.type === 'TRANSFER_ACCEPT' && msg.payload?.transferId) {
+                  this.db.transfers.updateStatus(msg.payload.transferId, 'ACCEPTED').catch(() => {});
+                } else if (msg.type === 'TRANSFER_COMPLETE' && msg.payload?.transferId) {
+                  this.db.transfers.updateStatus(msg.payload.transferId, 'COMPLETED', msg.payload.transferredBytes).catch(() => {});
+                }
+              }
+
+              // Check if target is local
               if (target && this.clients.has(target)) {
                 const targetClient = this.clients.get(target);
-                if (targetClient && targetClient.ws.readyState === WebSocket.OPEN) {
-                  targetClient.ws.send(JSON.stringify(msg));
-                  console.log(`[WS ${msg.type}] Relayed from ${sender} -> ${target}`);
+                if (targetClient && this.safeSend(targetClient.ws, JSON.stringify(msg))) {
                   break;
                 }
               }
 
-              console.warn(`[WS ${msg.type}] Target ${target} unavailable`);
-              ws.send(
+              // If not local, publish to Redis cluster
+              if (this.redisService && target) {
+                await this.redisService.publishSignaling('auradrop:signaling', msg);
+                break;
+              }
+
+              this.safeSend(
+                ws,
                 JSON.stringify({
                   type: 'SIGNAL_TARGET_OFFLINE',
                   targetDeviceId: target,
@@ -226,30 +351,36 @@ export class WebSocketGateway {
         }
       });
 
-      ws.on('close', (code, reason) => {
+      ws.on('close', async (code, reason) => {
         if (registeredDeviceId) {
-          console.log(`[WS CLOSE] Device disconnected: ${registeredDeviceId} (code: ${code})`);
           this.clients.delete(registeredDeviceId);
           this.presenceService.removeDevice(registeredDeviceId);
 
-          // Broadcast peer offline to all remaining clients
+          if (this.redisService) {
+            await this.redisService.removePresence(registeredDeviceId);
+            await this.redisService.publishSignaling('auradrop:signaling', {
+              type: 'PEER_OFFLINE',
+              deviceId: registeredDeviceId,
+            });
+          }
+
           const offlineNotice = JSON.stringify({
             type: 'PEER_OFFLINE',
             deviceId: registeredDeviceId,
           });
 
+          let count = 0;
           for (const client of this.clients.values()) {
-            if (client.ws.readyState === WebSocket.OPEN) {
-              client.ws.send(offlineNotice);
+            if (this.safeSend(client.ws, offlineNotice)) {
+              count++;
+              if (count >= 50) break;
             }
           }
-        } else {
-          console.log(`[WS CLOSE] Unregistered socket closed from ${remoteIp}`);
         }
       });
 
-      ws.on('error', (err) => {
-        console.error(`[WS SOCKET ERROR] Socket error for ${registeredDeviceId || remoteIp}:`, err);
+      ws.on('error', () => {
+        // Suppress socket reset spam during client termination
       });
     });
   }
@@ -260,9 +391,8 @@ export class WebSocketGateway {
 
   sendToDevice(targetDeviceId: string, message: any): boolean {
     const client = this.clients.get(targetDeviceId);
-    if (client && client.ws.readyState === WebSocket.OPEN) {
-      client.ws.send(JSON.stringify(message));
-      return true;
+    if (client) {
+      return this.safeSend(client.ws, JSON.stringify(message));
     }
     return false;
   }
