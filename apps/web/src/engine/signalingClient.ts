@@ -243,17 +243,22 @@ export class SignalingClient {
       const host = window.location.hostname || 'localhost';
       const port = window.location.port;
 
-      // 3. If loaded via Vite dev server proxy (port 5173/5174)
+      // 3. If on Vercel without custom env, point to AuraDrop production signaling
+      if (host.includes('vercel.app')) {
+        return 'wss://api.auradrop.network/ws';
+      }
+
+      // 4. If loaded via Vite dev server proxy (port 5173/5174)
       if (port === '5173' || port === '5174') {
         return `${wsProto}//${window.location.host}/ws`;
       }
 
-      // 4. If loaded on a direct LAN IP (e.g. mobile opening http://192.168.0.21:48280)
-      if (host !== 'localhost' && host !== '127.0.0.1' && !host.includes('vercel.app')) {
+      // 5. If loaded on a direct LAN IP
+      if (host !== 'localhost' && host !== '127.0.0.1') {
         return `${wsProto}//${host}:48280`;
       }
 
-      // 5. Default backend port 48280 on local machine
+      // 6. Default backend port 48280 on local machine
       return `${wsProto}//${host}:48280`;
     }
 

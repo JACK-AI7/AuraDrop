@@ -19,6 +19,8 @@ import 'screens/chat_screen.dart';
 import 'screens/history_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/settings_screen.dart';
+import 'services/aura_signaling_service.dart';
+import 'services/aura_webrtc_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -217,6 +219,87 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
       _eventSubscription = NativeBridgeService.events.listen(_onNativeEvent);
       _applyVisibilityMode(_visibilityMode);
       _checkSystemShare();
+
+      // Initialize AuraDrop Production Signaling & WebRTC P2P (Section 1, 10, 16)
+      AuraSignalingService().configureIdentity(
+        deviceId: _deviceId,
+        displayName: _deviceName,
+        deviceName: _deviceName,
+        visibility: _userProfile.visibility,
+        avatarIndex: _userProfile.avatarIndex,
+      );
+      AuraWebRtcService().init();
+      AuraSignalingService().connect();
+
+      // Hook reactive WebRTC & Signaling events
+      AuraSignalingService().onPeerList.listen((peers) {
+        if (!mounted) return;
+        setState(() {
+          for (final p in peers) {
+            _peers[p.id] = p;
+          }
+        });
+      });
+
+      AuraSignalingService().onPeerOnline.listen((peer) {
+        if (!mounted) return;
+        final isNew = !_peers.containsKey(peer.id);
+        setState(() {
+          _peers[peer.id] = peer;
+        });
+        if (isNew) {
+          _rippleController.triggerPeerDiscovered();
+        }
+      });
+
+      AuraSignalingService().onPeerOffline.listen((peerId) {
+        if (!mounted) return;
+        setState(() {
+          _peers.remove(peerId);
+          if (_selectedPeer?.id == peerId) _selectedPeer = null;
+        });
+      });
+
+      AuraSignalingService().onTransferRequest.listen((req) {
+        if (!mounted) return;
+        _handleSignalingTransferRequest(req);
+      });
+
+      AuraSignalingService().onTransferAccept.listen((acc) {
+        if (!mounted) return;
+        _handleSignalingTransferAccept(acc);
+      });
+
+      AuraWebRtcService().onProgress.listen((p) {
+        if (!mounted) return;
+        setState(() {
+          _transferredBytes = p.transferredBytes;
+          _totalTransferBytes = math.max(1, p.totalBytes);
+          _speedBytesPerSec = (p.speedMBps * 1024 * 1024).toInt();
+          _etaSeconds = p.etaSeconds;
+          _activeFileName = p.fileName;
+        });
+      });
+
+      AuraWebRtcService().onTransferComplete.listen((data) {
+        if (!mounted) return;
+        HapticFeedback.heavyImpact();
+        _rippleController.triggerTransferComplete();
+        setState(() {
+          _transferState = TransferState.completed;
+          _lastSavedPath = data['filePath']?.toString() ?? '';
+          _lastSha256 = data['sha256']?.toString() ?? '';
+        });
+      });
+
+      AuraWebRtcService().onConnectionState.listen((st) {
+        if (!mounted) return;
+        if (st == 'READY_TO_TRANSFER') {
+          _rippleController.triggerConnectionEstablished();
+        } else if (st == 'FAILED') {
+          setState(() => _transferState = TransferState.failed);
+        }
+      });
       
       _peerCleanupTimer = Timer.periodic(const Duration(seconds: 2), (_) {
         if (!mounted) return;
@@ -497,10 +580,33 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
       _totalTransferBytes = math.max(1, totalSize);
       _speedBytesPerSec = 0;
       _etaSeconds = 0;
-      _transferState = TransferState.peerFound;
+      _transferState = TransferState.waitingForAccept;
     });
 
     _rippleController.triggerTransferStart();
+
+    // 1. WebRTC Direct Route (Vercel Desktop <-> Android APK per Section 1)
+    if (peer.transport.contains('WebRTC') || peer.ip == 'WebRTC P2P') {
+      try {
+        debugPrint('[AuraDrop] Initiating WebRTC P2P transfer to ${peer.name} (${peer.id})');
+        await AuraWebRtcService().connectToPeer(peer.id);
+
+        AuraSignalingService().sendTransferRequest(
+          targetDeviceId: peer.id,
+          transferId: _activeTransferId,
+          fileName: _activeFileName,
+          totalBytes: totalSize,
+          totalFiles: _selectedFiles.length,
+          files: _selectedFiles.map((f) => f.toMap()).toList(),
+        );
+      } catch (e) {
+        setState(() => _transferState = TransferState.failed);
+        _showSnackBar('WebRTC transfer failed: $e', isSuccess: false);
+      }
+      return;
+    }
+
+    // 2. LAN TCP Route (Android <-> Android LAN fallback)
     try {
       await NativeBridgeService.sendFiles(
         targetIp: peer.ip,
@@ -513,9 +619,95 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
     }
   }
 
+  void _handleSignalingTransferRequest(Map<String, dynamic> event) {
+    HapticFeedback.heavyImpact();
+    setState(() => _transferState = TransferState.waitingForAccept);
+
+    final transferId = event['transferId']?.toString() ?? '';
+    final senderName = event['senderName']?.toString() ?? event['senderDeviceName']?.toString() ?? 'Nearby Peer';
+    final senderId = event['senderId']?.toString() ?? '';
+    final totalBytes = (event['totalBytes'] as num?)?.toInt() ?? 0;
+    final totalFiles = (event['totalFiles'] as num?)?.toInt() ?? 1;
+    final fileName = event['fileName']?.toString() ?? (totalFiles == 1 ? 'Incoming File' : '$totalFiles Files');
+
+    InAppNotificationController().showTransferRequest(
+      transferId: transferId,
+      senderName: senderName,
+      fileName: fileName,
+      fileSize: totalBytes,
+      onAccept: () async {
+        _rippleController.triggerTransferStart();
+        setState(() {
+          _transferState = TransferState.transferring;
+          _activeTransferId = transferId;
+          _isSender = false;
+          _totalTransferBytes = math.max(1, totalBytes);
+          _transferredBytes = 0;
+          _activePeer = PeerDevice(
+            id: senderId,
+            name: senderName,
+            deviceName: senderName,
+            platform: 'web',
+            ip: 'WebRTC P2P',
+            port: 0,
+            lastSeen: DateTime.now(),
+            transport: 'WebRTC Direct',
+          );
+        });
+
+        AuraSignalingService().sendTransferAccept(
+          targetDeviceId: senderId,
+          transferId: transferId,
+        );
+      },
+      onDecline: () async {
+        setState(() => _transferState = TransferState.idle);
+        AuraSignalingService().sendTransferDecline(
+          targetDeviceId: senderId,
+          transferId: transferId,
+        );
+      },
+    );
+  }
+
+  Future<void> _handleSignalingTransferAccept(Map<String, dynamic> event) async {
+    final transferId = event['transferId']?.toString() ?? '';
+    if (transferId != _activeTransferId) return;
+
+    setState(() {
+      _transferState = TransferState.transferring;
+    });
+
+    for (final f in _selectedFiles) {
+      try {
+        File? fileToStream;
+        if (f.uri.startsWith('content://')) {
+          final cachedPath = await NativeBridgeService.copyUriToCache(f.uri, f.name);
+          if (cachedPath != null) {
+            fileToStream = File(cachedPath);
+          }
+        } else {
+          fileToStream = File(f.uri);
+        }
+
+        if (fileToStream != null && await fileToStream.exists()) {
+          await AuraWebRtcService().sendFile(
+            file: fileToStream,
+            transferId: transferId,
+          );
+        }
+      } catch (e) {
+        debugPrint('Error streaming WebRTC file: $e');
+      }
+    }
+  }
+
   Future<void> _cancelTransfer() async {
     HapticFeedback.selectionClick();
-    await NativeBridgeService.cancelTransfer(_activeTransferId);
+    AuraWebRtcService().cancelTransfer();
+    if (_activeTransferId.isNotEmpty) {
+      await NativeBridgeService.cancelTransfer(_activeTransferId);
+    }
     setState(() => _transferState = TransferState.idle);
   }
 

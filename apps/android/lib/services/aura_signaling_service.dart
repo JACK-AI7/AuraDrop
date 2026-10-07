@@ -1,0 +1,364 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'package:flutter/foundation.dart';
+import '../models/models.dart';
+
+class AuraSignalingService {
+  static final AuraSignalingService _instance = AuraSignalingService._internal();
+  factory AuraSignalingService() => _instance;
+  AuraSignalingService._internal();
+
+  // Default production signaling endpoint (Prompt Section 24)
+  static const String defaultProductionSignalingUrl = 'wss://api.auradrop.network/ws';
+
+  WebSocket? _socket;
+  Timer? _heartbeatTimer;
+  Timer? _reconnectTimer;
+  bool _isConnecting = false;
+  bool _shouldReconnect = true;
+  int _reconnectAttempts = 0;
+
+  String _signalingUrl = defaultProductionSignalingUrl;
+  String _deviceId = '';
+  String _displayName = '';
+  String _deviceName = '';
+  String _visibility = 'everyone';
+  int _avatarIndex = 0;
+
+  // Streams for reactive UI updates
+  final _connectionStateController = StreamController<bool>.broadcast();
+  final _peerListController = StreamController<List<PeerDevice>>.broadcast();
+  final _peerOnlineController = StreamController<PeerDevice>.broadcast();
+  final _peerOfflineController = StreamController<String>.broadcast();
+  final _transferRequestController = StreamController<Map<String, dynamic>>.broadcast();
+  final _transferAcceptController = StreamController<Map<String, dynamic>>.broadcast();
+  final _transferDeclineController = StreamController<Map<String, dynamic>>.broadcast();
+  final _signalController = StreamController<Map<String, dynamic>>.broadcast();
+
+  Stream<bool> get onConnectionChanged => _connectionStateController.stream;
+  Stream<List<PeerDevice>> get onPeerList => _peerListController.stream;
+  Stream<PeerDevice> get onPeerOnline => _peerOnlineController.stream;
+  Stream<String> get onPeerOffline => _peerOfflineController.stream;
+  Stream<Map<String, dynamic>> get onTransferRequest => _transferRequestController.stream;
+  Stream<Map<String, dynamic>> get onTransferAccept => _transferAcceptController.stream;
+  Stream<Map<String, dynamic>> get onTransferDecline => _transferDeclineController.stream;
+  Stream<Map<String, dynamic>> get onSignal => _signalController.stream;
+
+  bool get isConnected => _socket != null && _socket!.readyState == WebSocket.open;
+  String get currentUrl => _signalingUrl;
+
+  void configureIdentity({
+    required String deviceId,
+    required String displayName,
+    required String deviceName,
+    String visibility = 'everyone',
+    int avatarIndex = 0,
+    String? customSignalingUrl,
+  }) {
+    _deviceId = deviceId;
+    _displayName = displayName;
+    _deviceName = deviceName;
+    _visibility = visibility;
+    _avatarIndex = avatarIndex;
+    if (customSignalingUrl != null && customSignalingUrl.isNotEmpty) {
+      _signalingUrl = customSignalingUrl;
+    }
+  }
+
+  void setSignalingUrl(String url) {
+    if (url.trim().isEmpty) return;
+    _signalingUrl = url.trim();
+    disconnect();
+    _shouldReconnect = true;
+    _reconnectAttempts = 0;
+    connect();
+  }
+
+  Future<void> connect() async {
+    if (_isConnecting || isConnected) return;
+    _isConnecting = true;
+
+    try {
+      debugPrint('[AuraSignaling] Connecting to $_signalingUrl as $_deviceId...');
+      final uri = Uri.parse(_signalingUrl);
+      _socket = await WebSocket.connect(uri.toString()).timeout(const Duration(seconds: 8));
+
+      _isConnecting = false;
+      _reconnectAttempts = 0;
+      _connectionStateController.add(true);
+      debugPrint('[AuraSignaling] Connected to $_signalingUrl');
+
+      // Send DEVICE_REGISTER
+      _sendRegister();
+
+      // Start ping heartbeat (7.5s interval per prompt Section 10/14)
+      _startHeartbeat();
+
+      _socket!.listen(
+        _onMessage,
+        onError: (err) {
+          debugPrint('[AuraSignaling] Socket error: $err');
+          _handleDisconnect();
+        },
+        onDone: () {
+          debugPrint('[AuraSignaling] Socket closed (code: ${_socket?.closeCode})');
+          _handleDisconnect();
+        },
+        cancelOnError: true,
+      );
+    } catch (e) {
+      debugPrint('[AuraSignaling] Failed to connect: $e');
+      _isConnecting = false;
+      _handleDisconnect();
+    }
+  }
+
+  void _sendRegister() {
+    _send({
+      'type': 'REGISTER',
+      'deviceId': _deviceId,
+      'displayName': _displayName,
+      'deviceName': _deviceName,
+      'platform': 'android',
+      'visibility': _visibility,
+      'avatarIndex': _avatarIndex,
+      'protocolVersion': '15.0.0',
+      'capabilities': ['webrtc_direct', 'chunk_stream', 'sha256'],
+    });
+  }
+
+  void _startHeartbeat() {
+    _stopHeartbeat();
+    _heartbeatTimer = Timer.periodic(const Duration(milliseconds: 7500), (_) {
+      if (isConnected) {
+        _send({
+          'type': 'PING',
+          'deviceId': _deviceId,
+          'timestamp': DateTime.now().millisecondsSinceEpoch,
+        });
+      }
+    });
+  }
+
+  void _stopHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+  }
+
+  void _handleDisconnect() {
+    _stopHeartbeat();
+    _socket = null;
+    _connectionStateController.add(false);
+
+    if (_shouldReconnect) {
+      _reconnectAttempts++;
+      final delaySeconds = (_reconnectAttempts < 5) ? _reconnectAttempts * 2 : 10;
+      _reconnectTimer?.cancel();
+      _reconnectTimer = Timer(Duration(seconds: delaySeconds), () {
+        if (_shouldReconnect && !isConnected) {
+          connect();
+        }
+      });
+    }
+  }
+
+  void _onMessage(dynamic raw) {
+    try {
+      final String text = raw is String ? raw : utf8.decode(raw as List<int>);
+      final Map<String, dynamic> data = jsonDecode(text);
+      final String type = data['type']?.toString() ?? '';
+
+      switch (type) {
+        case 'REGISTERED':
+          final peersRaw = data['peers'];
+          if (peersRaw is List) {
+            final peers = peersRaw
+                .whereType<Map>()
+                .map((m) => _mapToPeerDevice(Map<String, dynamic>.from(m)))
+                .where((p) => p.id != _deviceId)
+                .toList();
+            _peerListController.add(peers);
+          }
+          break;
+
+        case 'PEER_ONLINE':
+          final peerRaw = data['peer'];
+          if (peerRaw is Map) {
+            final peer = _mapToPeerDevice(Map<String, dynamic>.from(peerRaw));
+            if (peer.id != _deviceId) {
+              _peerOnlineController.add(peer);
+            }
+          }
+          break;
+
+        case 'PEER_OFFLINE':
+          final devId = data['deviceId']?.toString() ?? '';
+          if (devId.isNotEmpty) {
+            _peerOfflineController.add(devId);
+          }
+          break;
+
+        case 'SIGNAL':
+          final senderId = data['senderId']?.toString() ?? '';
+          final signal = data['signal'];
+          if (senderId.isNotEmpty && signal is Map) {
+            _signalController.add({
+              'senderId': senderId,
+              'signal': Map<String, dynamic>.from(signal),
+            });
+          }
+          break;
+
+        case 'TRANSFER_REQUEST':
+          _transferRequestController.add(data);
+          break;
+
+        case 'TRANSFER_ACCEPT':
+          _transferAcceptController.add(data);
+          break;
+
+        case 'TRANSFER_DECLINE':
+          _transferDeclineController.add(data);
+          break;
+
+        case 'PONG':
+          // Heartbeat acknowledged
+          break;
+      }
+    } catch (e) {
+      debugPrint('[AuraSignaling] Error parsing message: $e');
+    }
+  }
+
+  PeerDevice _mapToPeerDevice(Map<String, dynamic> p) {
+    final name = p['displayName']?.toString() ?? p['name']?.toString() ?? 'Device';
+    final devName = p['deviceName']?.toString() ?? name;
+    final platform = p['platform']?.toString() ?? 'android';
+    final id = p['deviceId']?.toString() ?? p['id']?.toString() ?? '';
+
+    return PeerDevice(
+      id: id,
+      name: name,
+      deviceName: devName,
+      platform: platform,
+      ip: p['ip']?.toString() ?? 'WebRTC P2P',
+      port: 0,
+      lastSeen: DateTime.now(),
+      avatarIndex: (p['avatarIndex'] as num?)?.toInt() ?? 0,
+      transport: 'WebRTC Direct',
+      connectionState: 'DISCOVERED',
+    );
+  }
+
+  void _send(Map<String, dynamic> data) {
+    if (!isConnected) return;
+    try {
+      _socket!.add(jsonEncode(data));
+    } catch (e) {
+      debugPrint('[AuraSignaling] Send error: $e');
+    }
+  }
+
+  // -------------------------------------------------------------
+  // Public Signaling Actions
+  // -------------------------------------------------------------
+  void sendSignal({
+    required String targetDeviceId,
+    required Map<String, dynamic> signal,
+  }) {
+    _send({
+      'type': 'SIGNAL',
+      'senderId': _deviceId,
+      'targetDeviceId': targetDeviceId,
+      'signal': signal,
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+    });
+  }
+
+  void sendTransferRequest({
+    required String targetDeviceId,
+    required String transferId,
+    required String fileName,
+    required int totalBytes,
+    required int totalFiles,
+    required List<Map<String, dynamic>> files,
+  }) {
+    _send({
+      'type': 'TRANSFER_REQUEST',
+      'senderId': _deviceId,
+      'senderName': _displayName,
+      'senderDeviceName': _deviceName,
+      'targetDeviceId': targetDeviceId,
+      'transferId': transferId,
+      'fileName': fileName,
+      'totalBytes': totalBytes,
+      'totalFiles': totalFiles,
+      'files': files,
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+    });
+  }
+
+  void sendTransferAccept({
+    required String targetDeviceId,
+    required String transferId,
+  }) {
+    _send({
+      'type': 'TRANSFER_ACCEPT',
+      'senderId': _deviceId,
+      'targetDeviceId': targetDeviceId,
+      'transferId': transferId,
+      'accepted': true,
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+    });
+  }
+
+  void sendTransferDecline({
+    required String targetDeviceId,
+    required String transferId,
+    String reason = 'declined_by_user',
+  }) {
+    _send({
+      'type': 'TRANSFER_DECLINE',
+      'senderId': _deviceId,
+      'targetDeviceId': targetDeviceId,
+      'transferId': transferId,
+      'accepted': false,
+      'reason': reason,
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+    });
+  }
+
+  void sendTransferComplete({
+    required String targetDeviceId,
+    required String transferId,
+    required String sha256,
+  }) {
+    _send({
+      'type': 'TRANSFER_COMPLETE',
+      'senderId': _deviceId,
+      'targetDeviceId': targetDeviceId,
+      'transferId': transferId,
+      'sha256': sha256,
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+    });
+  }
+
+  void updateVisibility(String visibility) {
+    _visibility = visibility;
+    _send({
+      'type': 'VISIBILITY_CHANGE',
+      'deviceId': _deviceId,
+      'visibility': visibility,
+    });
+  }
+
+  void disconnect() {
+    _shouldReconnect = false;
+    _stopHeartbeat();
+    _reconnectTimer?.cancel();
+    _socket?.close();
+    _socket = null;
+    _connectionStateController.add(false);
+  }
+}

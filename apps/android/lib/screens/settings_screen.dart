@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import '../models/models.dart';
 import '../services/native_bridge.dart';
 import '../services/profile_repository.dart';
+import '../services/aura_signaling_service.dart';
 import '../theme/aura_theme.dart';
 import '../components/minimal_components.dart';
 
@@ -452,22 +453,86 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 24),
 
-            // Diagnostics & About Section
+            // Diagnostics & Network Section
             _buildSectionHeader('Diagnostics & Network', theme),
             const SizedBox(height: 8),
             MinimalCard(
               padding: const EdgeInsets.all(14),
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          color: AuraSignalingService().isConnected ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Signaling Infrastructure',
+                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: theme.textPrimary),
+                      ),
+                      const Spacer(),
+                      Text(
+                        AuraSignalingService().isConnected ? 'CONNECTED' : 'DISCONNECTED',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: AuraSignalingService().isConnected ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Active Endpoint: ${AuraSignalingService().currentUrl}',
+                    style: TextStyle(fontSize: 11, color: theme.textSecondary, fontFamily: 'monospace'),
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: [
+                      ActionChip(
+                        label: const Text('⚡ Cloud Prod', style: TextStyle(fontSize: 10)),
+                        onPressed: () {
+                          HapticFeedback.lightImpact();
+                          AuraSignalingService().setSignalingUrl(AuraSignalingService.defaultProductionSignalingUrl);
+                          setState(() {});
+                        },
+                      ),
+                      ActionChip(
+                        label: const Text('🏠 Wi-Fi LAN', style: TextStyle(fontSize: 10)),
+                        onPressed: () {
+                          HapticFeedback.lightImpact();
+                          AuraSignalingService().setSignalingUrl('ws://192.168.0.21:48280');
+                          setState(() {});
+                        },
+                      ),
+                      ActionChip(
+                        label: const Text('📱 Emulator', style: TextStyle(fontSize: 10)),
+                        onPressed: () {
+                          HapticFeedback.lightImpact();
+                          AuraSignalingService().setSignalingUrl('ws://10.0.2.2:48280');
+                          setState(() {});
+                        },
+                      ),
+                    ],
+                  ),
+                  Divider(color: theme.border, height: 20),
                   _buildAboutRow('Local IP', _deviceInfo['ip']?.toString() ?? '127.0.0.1', theme),
                   Divider(color: theme.border, height: 16),
                   _buildAboutRow('Transport Port', '${_deviceInfo['port'] ?? 48291}', theme),
                   Divider(color: theme.border, height: 16),
-                  _buildAboutRow('Protocol Version', 'P2PFS/1 (AuraDrop V8)', theme),
+                  _buildAboutRow('Data Protocol', 'AuraDrop P2PFS/1 (Binary Frame)', theme),
                   Divider(color: theme.border, height: 16),
-                  _buildAboutRow('Cryptography', 'AES-256-GCM / X25519', theme),
+                  _buildAboutRow('WebRTC Transport', 'RTCDataChannel (Direct P2P)', theme),
                   Divider(color: theme.border, height: 16),
-                  _buildAboutRow('Architecture', 'Local-First Pure P2P', theme),
+                  _buildAboutRow('Integrity Check', 'SHA-256 Stream Finalize', theme),
                 ],
               ),
             ),

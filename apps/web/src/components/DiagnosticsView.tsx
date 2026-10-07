@@ -226,6 +226,25 @@ export const DiagnosticsView: React.FC = () => {
             <span style={{ fontSize: '11px', color: '#636366' }}>Detected LAN Presets:</span>
             <button
               onClick={() => {
+                const url = 'wss://api.auradrop.network/ws';
+                setCustomUrlInput(url);
+                handleSaveSignalingUrl(url);
+              }}
+              style={{
+                background: '#1A2433',
+                border: '1px solid #34C759',
+                borderRadius: '8px',
+                color: '#34C759',
+                fontSize: '10px',
+                fontWeight: 700,
+                padding: '3px 8px',
+                cursor: 'pointer',
+              }}
+            >
+              ☁️ Cloud: wss://api.auradrop.network/ws
+            </button>
+            <button
+              onClick={() => {
                 const url = 'ws://192.168.0.21:48280';
                 setCustomUrlInput(url);
                 handleSaveSignalingUrl(url);

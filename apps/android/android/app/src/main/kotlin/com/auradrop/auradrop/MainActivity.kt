@@ -334,6 +334,21 @@ class MainActivity : FlutterActivity() {
                     val opened = openFileWithSystemViewer(filePath)
                     result.success(opened)
                 }
+                "copyUriToCache" -> {
+                    val uriStr = call.argument<String>("uri") ?: ""
+                    val name = call.argument<String>("name") ?: "temp_file"
+                    val cacheFile = File(cacheDir, name)
+                    try {
+                        contentResolver.openInputStream(Uri.parse(uriStr))?.use { input ->
+                            FileOutputStream(cacheFile).use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                        result.success(cacheFile.absolutePath)
+                    } catch (e: Exception) {
+                        result.error("CACHE_ERROR", e.message, null)
+                    }
+                }
                 // Database & History handlers
                 "getTransferHistory" -> {
                     val history = dbHelper.getAllTransfers()

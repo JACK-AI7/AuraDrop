@@ -31,6 +31,9 @@ export interface SignalingMessage {
     | 'PONG'
     | 'TRANSFER_REQUEST'
     | 'TRANSFER_RESPONSE'
+    | 'TRANSFER_ACCEPT'
+    | 'TRANSFER_DECLINE'
+    | 'TRANSFER_COMPLETE'
     | 'TRANSFER_ACK_COMPLETE'
     | 'TRANSFER_ALERT';
   deviceId: string;
@@ -190,6 +193,9 @@ export class WebSocketGateway {
 
             case 'TRANSFER_REQUEST':
             case 'TRANSFER_RESPONSE':
+            case 'TRANSFER_ACCEPT':
+            case 'TRANSFER_DECLINE':
+            case 'TRANSFER_COMPLETE':
             case 'TRANSFER_ACK_COMPLETE':
             case 'TRANSFER_ALERT': {
               const target = msg.targetDeviceId || msg.targetId;

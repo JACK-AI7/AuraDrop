@@ -92,6 +92,14 @@ class NativeBridgeService {
     return ok ?? false;
   }
 
+  static Future<String?> copyUriToCache(String uri, String name) async {
+    final String? path = await _channel.invokeMethod<String>('copyUriToCache', {
+      'uri': uri,
+      'name': name,
+    });
+    return path;
+  }
+
   // Database / History
   static Future<List<TransferHistoryItem>> getTransferHistory() async {
     final dynamic res = await _channel.invokeMethod('getTransferHistory');
