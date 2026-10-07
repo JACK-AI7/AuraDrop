@@ -11,6 +11,7 @@ export interface DevicePeerInfo {
     webrtc: boolean;
     directLan: boolean;
   };
+  remoteIp?: string;
   lastSeen: number;
 }
 
@@ -22,6 +23,10 @@ export interface SignalingMessage {
     | 'PEER_OFFLINE'
     | 'PEER_LIST'
     | 'SIGNAL'
+    | 'SIGNAL_TARGET_OFFLINE'
+    | 'OFFER_FORWARDED'
+    | 'ANSWER_FORWARDED'
+    | 'ICE_FORWARDED'
     | 'PING'
     | 'PONG'
     | 'TRANSFER_REQUEST'
@@ -49,8 +54,11 @@ export class WebSocketGateway {
   }
 
   private init(): void {
-    this.wss.on('connection', (ws: WebSocket) => {
+    this.wss.on('connection', (ws: WebSocket, req) => {
       let registeredDeviceId: string | null = null;
+      const remoteIp = req.socket.remoteAddress || 'unknown';
+
+      console.log(`[WS CONNECT] Incoming connection from ${remoteIp}`);
 
       ws.on('message', (data: Buffer | string) => {
         try {
@@ -69,11 +77,16 @@ export class WebSocketGateway {
                 platform: payload.platform || 'web',
                 visibility: payload.visibility || 'everyone',
                 capabilities: payload.capabilities || { webrtc: true, directLan: true },
+                remoteIp,
                 lastSeen: Date.now(),
               };
 
               this.clients.set(devId, { ws, info });
               this.presenceService.recordHeartbeat(devId, devId);
+
+              console.log(
+                `[WS REGISTER] Device "${info.displayName}" (${devId}) [${info.platform}] from ${remoteIp} - visibility: ${info.visibility}`
+              );
 
               // 1. Gather all other active, discoverable peers
               const otherPeers: DevicePeerInfo[] = [];
@@ -92,6 +105,8 @@ export class WebSocketGateway {
                 })
               );
 
+              console.log(`[WS REGISTERED] Sent ${otherPeers.length} active peers to ${devId}`);
+
               // 3. If this device is visible, announce to all other active connected devices
               if (info.visibility !== 'off') {
                 const onlineNotice = JSON.stringify({
@@ -99,11 +114,14 @@ export class WebSocketGateway {
                   peer: info,
                 });
 
+                let notifyCount = 0;
                 for (const [id, client] of this.clients.entries()) {
                   if (id !== devId && client.ws.readyState === WebSocket.OPEN) {
                     client.ws.send(onlineNotice);
+                    notifyCount++;
                   }
                 }
+                console.log(`[WS PEER_ONLINE] Broadcasted online notice for ${devId} to ${notifyCount} peers`);
               }
               break;
             }
@@ -122,11 +140,50 @@ export class WebSocketGateway {
 
             case 'SIGNAL': {
               const target = msg.targetDeviceId || msg.targetId;
-              if (target && this.clients.has(target)) {
-                const targetClient = this.clients.get(target);
-                if (targetClient && targetClient.ws.readyState === WebSocket.OPEN) {
-                  targetClient.ws.send(JSON.stringify(msg));
-                }
+              const sender = msg.senderId || msg.deviceId;
+
+              if (!target || !this.clients.has(target)) {
+                console.warn(`[WS SIGNAL] Target device ${target} offline or not found for signal from ${sender}`);
+                ws.send(
+                  JSON.stringify({
+                    type: 'SIGNAL_TARGET_OFFLINE',
+                    targetDeviceId: target,
+                    senderId: sender,
+                  })
+                );
+                break;
+              }
+
+              const targetClient = this.clients.get(target);
+              if (targetClient && targetClient.ws.readyState === WebSocket.OPEN) {
+                targetClient.ws.send(JSON.stringify(msg));
+
+                // Send signaling acknowledgment to sender (Section 21)
+                const signalType = msg.signal?.type || (msg.signal?.candidate ? 'candidate' : 'unknown');
+                const ackType =
+                  signalType === 'offer'
+                    ? 'OFFER_FORWARDED'
+                    : signalType === 'answer'
+                    ? 'ANSWER_FORWARDED'
+                    : 'ICE_FORWARDED';
+
+                ws.send(
+                  JSON.stringify({
+                    type: ackType,
+                    targetDeviceId: target,
+                    timestamp: Date.now(),
+                  })
+                );
+
+                console.log(`[WS SIGNAL] Relayed ${signalType} from ${sender} -> ${target}`);
+              } else {
+                ws.send(
+                  JSON.stringify({
+                    type: 'SIGNAL_TARGET_OFFLINE',
+                    targetDeviceId: target,
+                    senderId: sender,
+                  })
+                );
               }
               break;
             }
@@ -136,22 +193,36 @@ export class WebSocketGateway {
             case 'TRANSFER_ACK_COMPLETE':
             case 'TRANSFER_ALERT': {
               const target = msg.targetDeviceId || msg.targetId;
+              const sender = msg.senderId || msg.deviceId;
+
               if (target && this.clients.has(target)) {
                 const targetClient = this.clients.get(target);
                 if (targetClient && targetClient.ws.readyState === WebSocket.OPEN) {
                   targetClient.ws.send(JSON.stringify(msg));
+                  console.log(`[WS ${msg.type}] Relayed from ${sender} -> ${target}`);
+                  break;
                 }
               }
+
+              console.warn(`[WS ${msg.type}] Target ${target} unavailable`);
+              ws.send(
+                JSON.stringify({
+                  type: 'SIGNAL_TARGET_OFFLINE',
+                  targetDeviceId: target,
+                  senderId: sender,
+                })
+              );
               break;
             }
           }
-        } catch {
-          // Ignore malformed JSON
+        } catch (err) {
+          console.error(`[WS ERROR] Error processing message from ${remoteIp}:`, err);
         }
       });
 
-      ws.on('close', () => {
+      ws.on('close', (code, reason) => {
         if (registeredDeviceId) {
+          console.log(`[WS CLOSE] Device disconnected: ${registeredDeviceId} (code: ${code})`);
           this.clients.delete(registeredDeviceId);
           this.presenceService.removeDevice(registeredDeviceId);
 
@@ -166,9 +237,19 @@ export class WebSocketGateway {
               client.ws.send(offlineNotice);
             }
           }
+        } else {
+          console.log(`[WS CLOSE] Unregistered socket closed from ${remoteIp}`);
         }
       });
+
+      ws.on('error', (err) => {
+        console.error(`[WS SOCKET ERROR] Socket error for ${registeredDeviceId || remoteIp}:`, err);
+      });
     });
+  }
+
+  getConnectedPeers(): DevicePeerInfo[] {
+    return Array.from(this.clients.values()).map((c) => c.info);
   }
 
   sendToDevice(targetDeviceId: string, message: any): boolean {
@@ -180,4 +261,3 @@ export class WebSocketGateway {
     return false;
   }
 }
-

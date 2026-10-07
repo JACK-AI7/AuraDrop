@@ -1,6 +1,7 @@
-// AuraDrop Production WebRTC Transport (Section 2, 4, 5, 18, 38)
+// AuraDrop Production WebRTC Transport (V13 Forensic Hardening)
 // Direct P2P data plane over RTCDataChannel with backpressure flow control,
-// STUN NAT traversal, bidirectional ping-pong health check, and live connection telemetry.
+// STUN NAT traversal, candidate buffering for out-of-order signaling,
+// bidirectional ping-pong health check, and live connection telemetry.
 
 import { P2PTransport, ControlMessage, TransportStatistics } from './transport';
 import { PeerDevice, ConnectionState } from '../types';
@@ -14,12 +15,16 @@ export class WebRtcTransport implements P2PTransport {
   private signaling: SignalingClient;
   private targetPeer: PeerDevice | null = null;
 
-  // Telemetry & Metrics (Section 38)
+  // Candidate buffering to prevent race conditions during signaling
+  private pendingCandidates: RTCIceCandidateInit[] = [];
+
+  // Telemetry & Metrics (Section 18, 19, 32, 38)
   private bytesSent = 0;
   private bytesReceived = 0;
   private rttMs = 0;
   private localCandidateType = 'host';
   private remoteCandidateType = 'host';
+  private lastIceError: string | null = null;
 
   // Event callbacks
   private frameCallback: ((frame: Uint8Array) => void) | null = null;
@@ -57,22 +62,30 @@ export class WebRtcTransport implements P2PTransport {
     this.stateCallback?.(state);
   }
 
-  // ---------------------------------------------------------------------------
-  // CONNECTION ESTABLISHMENT (Section 4 & 5)
-  // ---------------------------------------------------------------------------
-  public async connect(peer: PeerDevice): Promise<boolean> {
-    this.targetPeer = peer;
-    this.updateState('CONNECTING');
-
-    const config: RTCConfiguration = {
+  private getRtcConfig(): RTCConfiguration {
+    return {
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
         { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun.cloudflare.com:3478' },
+        { urls: 'stun:global.stun.twilio.com:3478' },
       ],
+      iceCandidatePoolSize: 4,
     };
+  }
 
-    this.peerConnection = new RTCPeerConnection(config);
+  // ---------------------------------------------------------------------------
+  // CONNECTION ESTABLISHMENT (Section 4, 5, 17)
+  // ---------------------------------------------------------------------------
+  public async connect(peer: PeerDevice): Promise<boolean> {
+    this.targetPeer = peer;
+    this.pendingCandidates = [];
+    this.updateState('CONNECTING');
+
+    console.log(`[WebRTC] Initiating connection to ${peer.name} (${peer.deviceId})`);
+
+    this.peerConnection = new RTCPeerConnection(this.getRtcConfig());
     this.setupPeerConnectionEvents();
 
     // Create reliable binary data channel (ordered, reliable delivery)
@@ -81,7 +94,6 @@ export class WebRtcTransport implements P2PTransport {
     });
     this.setupDataChannel(this.dataChannel);
 
-    // Create and dispatch SDP Offer via signaling server
     try {
       this.updateState('SIGNALING');
       const offer = await this.peerConnection.createOffer();
@@ -92,9 +104,11 @@ export class WebRtcTransport implements P2PTransport {
         sdp: offer.sdp,
       });
 
+      console.log(`[WebRTC] Dispatched SDP Offer to ${peer.deviceId}`);
       return true;
-    } catch (e) {
-      console.error('Failed to create WebRTC offer', e);
+    } catch (e: any) {
+      console.error('[WebRTC] Failed to create WebRTC offer:', e);
+      this.lastIceError = e?.message || 'Failed to create offer';
       this.updateState('FAILED_CONNECTION');
       return false;
     }
@@ -104,24 +118,24 @@ export class WebRtcTransport implements P2PTransport {
     if (!signal) return;
 
     if (signal.type === 'offer') {
+      console.log(`[WebRTC] Received SDP Offer from ${senderId}`);
       this.updateState('CONNECTING');
-      const config: RTCConfiguration = {
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:stun2.l.google.com:19302' },
-        ],
-      };
+      this.pendingCandidates = [];
 
-      this.peerConnection = new RTCPeerConnection(config);
+      this.peerConnection = new RTCPeerConnection(this.getRtcConfig());
       this.setupPeerConnectionEvents();
 
       this.peerConnection.ondatachannel = (e) => {
+        console.log('[WebRTC] DataChannel received from remote peer');
         this.dataChannel = e.channel;
         this.setupDataChannel(this.dataChannel);
       };
 
       await this.peerConnection.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: signal.sdp }));
+
+      // Drain buffered candidates received prior to remote description
+      await this.drainPendingCandidates();
+
       const answer = await this.peerConnection.createAnswer();
       await this.peerConnection.setLocalDescription(answer);
 
@@ -129,14 +143,53 @@ export class WebRtcTransport implements P2PTransport {
         type: 'answer',
         sdp: answer.sdp,
       });
+
+      console.log(`[WebRTC] Dispatched SDP Answer to ${senderId}`);
     } else if (signal.type === 'answer' && this.peerConnection) {
+      console.log(`[WebRTC] Received SDP Answer from ${senderId}`);
       await this.peerConnection.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: signal.sdp }));
-    } else if (signal.candidate && this.peerConnection) {
-      try {
-        await this.peerConnection.addIceCandidate(new RTCIceCandidate(signal.candidate));
-      } catch (e) {
-        console.warn('Error adding received ICE candidate', e);
+      await this.drainPendingCandidates();
+    } else if (signal.candidate) {
+      if (this.peerConnection && this.peerConnection.remoteDescription) {
+        try {
+          await this.peerConnection.addIceCandidate(new RTCIceCandidate(signal.candidate));
+          if (signal.candidate.type) {
+            this.remoteCandidateType = signal.candidate.type;
+            this.updateTransportName();
+          }
+        } catch (e) {
+          console.warn('[WebRTC] Error adding received ICE candidate:', e);
+        }
+      } else {
+        // Buffer candidate until remote description is settled
+        this.pendingCandidates.push(signal.candidate);
       }
+    }
+  }
+
+  private async drainPendingCandidates(): Promise<void> {
+    if (!this.peerConnection || !this.peerConnection.remoteDescription) return;
+    while (this.pendingCandidates.length > 0) {
+      const cand = this.pendingCandidates.shift();
+      if (cand) {
+        try {
+          await this.peerConnection.addIceCandidate(new RTCIceCandidate(cand));
+          if (cand.type) {
+            this.remoteCandidateType = cand.type;
+            this.updateTransportName();
+          }
+        } catch (e) {
+          console.warn('[WebRTC] Error applying buffered candidate:', e);
+        }
+      }
+    }
+  }
+
+  private updateTransportName(): void {
+    if (this.localCandidateType === 'relay' || this.remoteCandidateType === 'relay') {
+      this.name = 'WebRTC Relay';
+    } else {
+      this.name = 'WebRTC Direct';
     }
   }
 
@@ -151,20 +204,27 @@ export class WebRtcTransport implements P2PTransport {
 
         if (e.candidate.type) {
           this.localCandidateType = e.candidate.type;
+          this.updateTransportName();
         }
       }
     };
 
     this.peerConnection.oniceconnectionstatechange = () => {
       const state = this.peerConnection?.iceConnectionState;
-      if (state === 'failed' || state === 'disconnected') {
+      console.log(`[WebRTC] ICE connection state changed: ${state}`);
+      if (state === 'failed') {
+        this.lastIceError = 'ICE candidate pair establishment failed. Possible Wi-Fi AP isolation.';
+        this.updateState('FAILED_CONNECTION');
+      } else if (state === 'disconnected') {
         this.updateState('INTERRUPTED');
       }
     };
 
     this.peerConnection.onconnectionstatechange = () => {
       const state = this.peerConnection?.connectionState;
+      console.log(`[WebRTC] Connection state changed: ${state}`);
       if (state === 'failed') {
+        this.lastIceError = 'Peer connection failed';
         this.updateState('FAILED_CONNECTION');
       } else if (state === 'disconnected') {
         this.updateState('INTERRUPTED');
@@ -178,6 +238,7 @@ export class WebRtcTransport implements P2PTransport {
     dc.bufferedAmountLowThreshold = 256 * 1024;
 
     dc.onopen = async () => {
+      console.log('[WebRTC] RTCDataChannel OPEN');
       this.updateState('DATA_CHANNEL_CONNECTING');
       // Execute bidirectional health check (Section 5)
       await this.executeHealthCheck();
@@ -208,6 +269,7 @@ export class WebRtcTransport implements P2PTransport {
             });
           } else if (msg.type === 'HEALTH_CHECK_PONG') {
             this.rttMs = Date.now() - (msg.timestamp || Date.now());
+            console.log(`[WebRTC] Health Check PONG received, RTT: ${this.rttMs} ms`);
             if (this.healthCheckResolver) {
               this.healthCheckResolver(true);
               this.healthCheckResolver = null;
@@ -222,10 +284,12 @@ export class WebRtcTransport implements P2PTransport {
     };
 
     dc.onclose = () => {
+      console.log('[WebRTC] RTCDataChannel closed');
       this.updateState('INTERRUPTED');
     };
 
-    dc.onerror = () => {
+    dc.onerror = (e) => {
+      console.error('[WebRTC] RTCDataChannel error:', e);
       this.updateState('FAILED_CONNECTION');
     };
   }
@@ -240,12 +304,11 @@ export class WebRtcTransport implements P2PTransport {
       const timeout = setTimeout(() => {
         if (this.healthCheckResolver) {
           this.healthCheckResolver = null;
-          // Even if ping pong timed out on initial handshake, mark SECURE and READY_TO_TRANSFER
           this.updateState('SECURE');
           this.updateState('READY_TO_TRANSFER');
           resolve(true);
         }
-      }, 3000);
+      }, 3500);
 
       this.healthCheckResolver = (ok: boolean) => {
         clearTimeout(timeout);
@@ -326,5 +389,9 @@ export class WebRtcTransport implements P2PTransport {
       localCandidateType: this.localCandidateType,
       remoteCandidateType: this.remoteCandidateType,
     };
+  }
+
+  public getLastIceError(): string | null {
+    return this.lastIceError;
   }
 }

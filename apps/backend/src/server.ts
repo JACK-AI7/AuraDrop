@@ -1,4 +1,5 @@
 import * as http from 'node:http';
+import * as os from 'node:os';
 import { WebSocketServer } from 'ws';
 import { AuthService } from './auth/auth.service';
 import {
@@ -36,9 +37,9 @@ export class BackendServer {
     this.wsGateway = new WebSocketGateway(this.wss, this.presenceService);
   }
 
-  listen(port: number): Promise<void> {
+  listen(port: number, host: string = '0.0.0.0'): Promise<void> {
     return new Promise((resolve) => {
-      this.server.listen(port, () => {
+      this.server.listen(port, host, () => {
         resolve();
       });
     });
@@ -78,10 +79,11 @@ export class BackendServer {
         this.sendJson(res, 200, {
           service: 'AuraDrop Backend API Gateway',
           status: 'online',
-          version: '11.0.0',
+          version: '13.0.0',
           timestamp: Date.now(),
           endpoints: [
             '/health',
+            '/ws-health',
             '/presence/active',
             '/auth/register',
             '/auth/login',
@@ -93,9 +95,37 @@ export class BackendServer {
         return;
       }
 
-      // Health / Status
+      // Health / Status (Section 11 & 12)
       if (pathname === '/health' && req.method === 'GET') {
-        this.sendJson(res, 200, { status: 'healthy', timestamp: Date.now(), service: 'AuraDrop-Backend' });
+        const networkInterfaces = os.networkInterfaces();
+        const lanIps: string[] = [];
+        for (const iface of Object.values(networkInterfaces)) {
+          if (iface) {
+            for (const addr of iface) {
+              if (addr.family === 'IPv4' && !addr.internal) {
+                lanIps.push(addr.address);
+              }
+            }
+          }
+        }
+
+        this.sendJson(res, 200, {
+          status: 'healthy',
+          service: 'AuraDrop-Backend',
+          websocket: true,
+          timestamp: Date.now(),
+          lanIps,
+          connectedPeers: this.wsGateway.getConnectedPeers(),
+        });
+        return;
+      }
+
+      if (pathname === '/ws-health' && req.method === 'GET') {
+        this.sendJson(res, 200, {
+          websocketReady: true,
+          activeClients: this.wsGateway.getConnectedPeers().length,
+          timestamp: Date.now(),
+        });
         return;
       }
 

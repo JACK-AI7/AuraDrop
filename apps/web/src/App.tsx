@@ -517,12 +517,14 @@ export const App: React.FC = () => {
             }}
           >
             ● {selectedPeer?.connectionState === 'READY_TO_TRANSFER'
-                ? 'READY TO TRANSFER'
+                ? `${selectedPeer.name.toUpperCase()} • READY TO TRANSFER`
                 : selectedPeer?.connectionState === 'CONNECTING'
-                ? 'CONNECTING...'
-                : peers.length > 0
-                ? `${peers.length} NEARBY`
-                : 'SCANNING...'}
+                ? `CONNECTING TO ${selectedPeer.name.toUpperCase()}...`
+                : selectedPeer?.connectionState === 'DATA_CHANNEL_HEALTH_CHECK'
+                ? 'VERIFYING CHANNEL...'
+                : visibility === 'off'
+                ? 'RECEIVING OFF'
+                : 'RECEIVING ENABLED'}
           </button>
         </div>
       </div>

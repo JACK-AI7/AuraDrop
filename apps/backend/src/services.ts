@@ -87,7 +87,7 @@ export class PresenceService {
   isOnline(deviceId: string): boolean {
     const item = this.activeDevices.get(deviceId);
     if (!item) return false;
-    return Date.now() - item.lastPing < 15000;
+    return Date.now() - item.lastPing < 30000; // 30s timeout for mobile lifecycle tolerance
   }
 
   getActiveDeviceIds(): string[] {

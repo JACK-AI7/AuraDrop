@@ -810,4 +810,13 @@ export class TransferEngine {
   public getDiagnostics(): TransportStatistics {
     return this.webRtcTransport.getStatistics();
   }
+
+  public getSignalingDiagnostics() {
+    return this.signaling.getDiagnostics();
+  }
+
+  public getSignalingClient(): SignalingClient {
+    return this.signaling;
+  }
 }
+
