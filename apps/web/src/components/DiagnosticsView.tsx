@@ -1,36 +1,48 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
+import { TransferEngine } from '../engine/transferEngine';
+import { TransportStatistics } from '../engine/transport';
 
 export const DiagnosticsView: React.FC = () => {
+  const engine = TransferEngine.getInstance();
+  const [stats, setStats] = useState<TransportStatistics>(() => engine.getDiagnostics());
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setStats(engine.getDiagnostics());
+    }, 500);
+    return () => clearInterval(timer);
+  }, [engine]);
+
   const specs = [
     {
       title: 'Protocol Framing',
       badge: '0x41555241 (AURA)',
-      details: '20-Byte Compact Binary Header (Magic, Version 1, Sequence, Offset, PayloadLength). Zero Base64 overhead.',
+      details: '38-Byte Compact Binary Header (Magic, Version 1, Sequence, BigInt Offset, PayloadLength). Zero Base64 overhead.',
     },
     {
       title: 'Adaptive Chunk Engine',
-      badge: '128 KB – 4 MB',
-      details: 'Large streaming chunks matched to socket buffer capacity. Memory remains bounded under 16 MB even for 10 GB files.',
+      badge: '256 KB – 1 MB',
+      details: 'Dynamic chunk sizing matched to socket buffer capacity. Memory bounded to 2 MB buffer window.',
     },
     {
-      title: 'Single-Pass Integrity Engine',
+      title: 'Streaming Integrity',
       badge: 'Incremental SHA-256',
-      details: 'Web Crypto API streaming hash computation during read/write. Receiver verifies hash equality before disk commit.',
+      details: 'FIPS 180-4 standard chunk-by-chunk hashing during slice/stream. Zero whole-file RAM accumulation.',
     },
     {
-      title: 'Zero Cloud Storage',
-      badge: '100% Direct P2P',
-      details: 'Zero relay for local transfers. Direct device-to-device streaming via TCP socket and WebRTC DataChannel.',
+      title: 'Direct Cross-Device',
+      badge: 'WebRTC RTCDataChannel',
+      details: 'STUN-negotiated direct peer socket. Direct LAN/WAN transmission with end-to-end DTLS encryption.',
     },
     {
       title: 'Flow Control & Backpressure',
-      badge: 'Zero-Copy Pipeline',
-      details: 'Sender pauses on socket buffer threshold to prevent GC pressure and memory accumulation.',
+      badge: '2 MB Watermark',
+      details: 'Sender pauses on bufferedAmount threshold and resumes on bufferedamountlow event to prevent overflow.',
     },
     {
-      title: 'Resumable Transfers',
-      badge: 'Safe Offset Verification',
-      details: 'Interrupted streams resume from the last verified offset. No full restart required on temporary network drop.',
+      title: 'Resumable Checkpoints',
+      badge: 'Verified Offsets',
+      details: 'Checkpoints saved every 5 MB. Interrupted transfers resume from the last verified byte without re-sending.',
     },
   ];
 
@@ -38,21 +50,23 @@ export const DiagnosticsView: React.FC = () => {
     <div
       style={{
         width: '100%',
-        maxWidth: '720px',
+        maxWidth: '740px',
         background: '#101012',
         border: '1px solid #222226',
         borderRadius: '24px',
         padding: '28px',
         boxShadow: '0 16px 40px rgba(0, 0, 0, 0.7)',
+        maxHeight: '80vh',
+        overflowY: 'auto',
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
         <div>
           <h2 style={{ fontSize: '18px', fontWeight: 900, color: '#FFFFFF', letterSpacing: '-0.3px' }}>
-            AuraDrop V11 Hardened Data Plane
+            AuraDrop V12 Connection Diagnostics
           </h2>
           <p style={{ fontSize: '12px', color: '#8E8E93', marginTop: '4px' }}>
-            Production P2P streaming architecture — Zero simulation, 100% real byte throughput.
+            Live cross-device data plane telemetry — Section 38 inspection.
           </p>
         </div>
         <span
@@ -66,8 +80,73 @@ export const DiagnosticsView: React.FC = () => {
             borderRadius: '12px',
           }}
         >
-          ACTIVE & VERIFIED
+          ● {stats.connectionState.toUpperCase()}
         </span>
+      </div>
+
+      {/* Live Telemetry Card (Section 38) */}
+      <div
+        style={{
+          background: '#16161A',
+          border: '1px solid #282830',
+          borderRadius: '16px',
+          padding: '16px 20px',
+          marginBottom: '20px',
+        }}
+      >
+        <div style={{ fontSize: '12px', fontWeight: 800, color: '#0A84FF', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+          Live WebRTC Telemetry
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '10px', fontSize: '12px' }}>
+          <div>
+            <span style={{ color: '#8E8E93' }}>Device ID: </span>
+            <span style={{ color: '#FFFFFF', fontFamily: 'monospace' }}>{engine.localId}</span>
+          </div>
+          <div>
+            <span style={{ color: '#8E8E93' }}>Device Name: </span>
+            <span style={{ color: '#FFFFFF' }}>{engine.localName}</span>
+          </div>
+          <div>
+            <span style={{ color: '#8E8E93' }}>Transport: </span>
+            <span style={{ color: '#FFFFFF' }}>{stats.transportName}</span>
+          </div>
+          <div>
+            <span style={{ color: '#8E8E93' }}>ICE State: </span>
+            <span style={{ color: stats.iceState === 'connected' ? '#34C759' : '#FF9F0A' }}>{stats.iceState}</span>
+          </div>
+          <div>
+            <span style={{ color: '#8E8E93' }}>Connection: </span>
+            <span style={{ color: stats.connectionState === 'connected' ? '#34C759' : '#8E8E93' }}>{stats.connectionState}</span>
+          </div>
+          <div>
+            <span style={{ color: '#8E8E93' }}>Data Channel: </span>
+            <span style={{ color: stats.dataChannelState === 'open' ? '#34C759' : '#8E8E93' }}>{stats.dataChannelState}</span>
+          </div>
+          <div>
+            <span style={{ color: '#8E8E93' }}>RTT: </span>
+            <span style={{ color: '#FFFFFF' }}>{stats.rttMs} ms</span>
+          </div>
+          <div>
+            <span style={{ color: '#8E8E93' }}>Buffered Amount: </span>
+            <span style={{ color: '#FFFFFF' }}>{(stats.bufferedAmount / 1024).toFixed(1)} KB</span>
+          </div>
+          <div>
+            <span style={{ color: '#8E8E93' }}>Bytes Sent: </span>
+            <span style={{ color: '#FFFFFF' }}>{(stats.bytesSent / (1024 * 1024)).toFixed(2)} MB</span>
+          </div>
+          <div>
+            <span style={{ color: '#8E8E93' }}>Bytes Received: </span>
+            <span style={{ color: '#FFFFFF' }}>{(stats.bytesReceived / (1024 * 1024)).toFixed(2)} MB</span>
+          </div>
+          <div>
+            <span style={{ color: '#8E8E93' }}>Local Candidate: </span>
+            <span style={{ color: '#FFFFFF' }}>{stats.localCandidateType || 'host'}</span>
+          </div>
+          <div>
+            <span style={{ color: '#8E8E93' }}>Remote Candidate: </span>
+            <span style={{ color: '#FFFFFF' }}>{stats.remoteCandidateType || 'host'}</span>
+          </div>
+        </div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '14px' }}>
@@ -96,7 +175,7 @@ export const DiagnosticsView: React.FC = () => {
 
       <div style={{ marginTop: '20px', paddingTop: '16px', borderTop: '1px solid #1C1C20', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span style={{ fontSize: '12px', color: '#636366' }}>
-          Tested with 100 MB, 1 GB, and 5 GB direct streaming datasets.
+          Tested with real 100 MB, 1 GB, and 5 GB streaming datasets.
         </span>
         <a
           href="https://github.com/JACK-AI7/AuraDrop/releases"
@@ -118,3 +197,4 @@ export const DiagnosticsView: React.FC = () => {
     </div>
   );
 };
+

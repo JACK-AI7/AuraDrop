@@ -435,7 +435,7 @@ export const App: React.FC = () => {
         </div>
       </header>
 
-      {/* 7. DISCOVERY STATUS BAR */}
+      {/* 7. DISCOVERY STATUS BAR (Section 31 & 32: Truth in Status) */}
       <div
         style={{
           display: 'flex',
@@ -455,24 +455,75 @@ export const App: React.FC = () => {
               width: '6px',
               height: '6px',
               borderRadius: '50%',
-              background: peers.length > 0 ? '#34C759' : '#8E8E93',
-              boxShadow: peers.length > 0 ? '0 0 6px #34C759' : 'none',
+              background:
+                visibility === 'off'
+                  ? '#8E8E93'
+                  : selectedPeer?.connectionState === 'READY_TO_TRANSFER'
+                  ? '#34C759'
+                  : selectedPeer?.connectionState === 'CONNECTING'
+                  ? '#FF9F0A'
+                  : peers.length > 0
+                  ? '#34C759'
+                  : '#0A84FF',
+              boxShadow:
+                peers.length > 0
+                  ? '0 0 6px #34C759'
+                  : visibility !== 'off'
+                  ? '0 0 6px #0A84FF'
+                  : 'none',
             }}
           />
           <span>
             {visibility === 'off'
               ? 'Receiving is turned off'
+              : selectedPeer
+              ? selectedPeer.connectionState === 'READY_TO_TRANSFER'
+                ? `Connected to ${selectedPeer.name} — secure channel verified`
+                : selectedPeer.connectionState === 'CONNECTING' || selectedPeer.connectionState === 'SIGNALING'
+                ? `Connecting to ${selectedPeer.name}...`
+                : selectedPeer.connectionState === 'DATA_CHANNEL_HEALTH_CHECK'
+                ? `Verifying secure connection with ${selectedPeer.name}...`
+                : `Device discovered: ${selectedPeer.name}`
               : peers.length === 0
-              ? 'Scanning for local AuraDrop peers... (Open Receiver Window to test real transfer)'
+              ? 'Scanning for AuraDrop devices across network...'
               : peers.length === 1
-              ? '1 nearby device discovered'
-              : `${peers.length} nearby devices discovered`}
+              ? '1 device nearby'
+              : `${peers.length} devices nearby`}
           </span>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
           <span style={{ fontSize: '11px', color: '#636366' }}>{engine.localName}</span>
-          <span style={{ fontSize: '11px', color: '#34C759', fontWeight: 700 }}>● READY_TO_TRANSFER</span>
+          <button
+            onClick={() => setCurrentTab('specs')}
+            title="Inspect Live WebRTC Diagnostics"
+            style={{
+              background: 'transparent',
+              border: 'none',
+              fontSize: '11px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              color:
+                selectedPeer?.connectionState === 'READY_TO_TRANSFER'
+                  ? '#34C759'
+                  : selectedPeer?.connectionState === 'CONNECTING'
+                  ? '#FF9F0A'
+                  : peers.length > 0
+                  ? '#34C759'
+                  : '#8E8E93',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+            }}
+          >
+            ● {selectedPeer?.connectionState === 'READY_TO_TRANSFER'
+                ? 'READY TO TRANSFER'
+                : selectedPeer?.connectionState === 'CONNECTING'
+                ? 'CONNECTING...'
+                : peers.length > 0
+                ? `${peers.length} NEARBY`
+                : 'SCANNING...'}
+          </button>
         </div>
       </div>
 
@@ -567,7 +618,13 @@ export const App: React.FC = () => {
               peers={peers}
               selectedPeerId={selectedPeer?.id}
               onSelectPeer={(p) => {
-                setSelectedPeer((prev) => (prev?.id === p.id ? null : p));
+                setSelectedPeer((prev) => {
+                  const next = prev?.id === p.id ? null : p;
+                  if (next) {
+                    engine.connectToPeer(next);
+                  }
+                  return next;
+                });
                 setRippleKey((prev) => prev + 1);
               }}
               isTransferring={transferProgress?.state === 'TRANSFERRING'}
@@ -662,22 +719,22 @@ export const App: React.FC = () => {
                 <div style={{ textAlign: 'center', fontSize: '12px', color: '#636366', padding: '12px' }}>
                   {peers.length === 0 ? (
                     <div>
-                      No nearby peers discovered yet.
-                      <div style={{ marginTop: '6px' }}>
+                      <div style={{ color: '#8E8E93', fontWeight: 600 }}>No nearby AuraDrop devices found on this network.</div>
+                      <div style={{ marginTop: '8px' }}>
                         <button
                           onClick={handleOpenReceiverWindow}
                           style={{
-                            background: '#0A84FF',
-                            border: 'none',
+                            background: '#16161A',
+                            border: '1px solid #24242A',
                             borderRadius: '12px',
-                            color: '#FFFFFF',
+                            color: '#0A84FF',
                             fontSize: '11px',
                             fontWeight: 700,
                             padding: '6px 14px',
                             cursor: 'pointer',
                           }}
                         >
-                          ⚡ Open Receiver Window to Test Real P2P Transfer
+                          ⚡ Local testing? Open companion receiver window
                         </button>
                       </div>
                     </div>

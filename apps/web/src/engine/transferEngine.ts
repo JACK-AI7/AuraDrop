@@ -1,14 +1,20 @@
-// AuraDrop Production Transfer Engine (P2PFS/1 Specification)
-// Fully Functional Real P2P Data Plane with Binary Framing, Adaptive Chunking,
-// Progressive SHA-256, Flow Control Backpressure, Resume Checkpoints & Persistent Storage.
+// AuraDrop Production Transfer Engine (P2PFS/1 Specification & V12 Cross-Device Fix)
+// Zero-Simulation Data Plane: WebRTC RTCDataChannel, Real Signaling Server Discovery,
+// Incremental Chunk-by-Chunk SHA-256 (FIPS 180-4), Bounded Memory OPFS Disk Writing,
+// Backpressure Flow Control, Two-Way ACK_COMPLETE Handshake, and Resumable Checkpoints.
 
 import {
   encodeBinaryFrame,
   decodeBinaryFrame,
   BinaryFrameType,
-  AURA_MAGIC,
 } from './binaryProtocol';
 import { TransferStorage, CheckpointRecord } from './transferStorage';
+import { IdentityManager, DeviceIdentity } from './identity';
+import { SignalingClient } from './signalingClient';
+import { WebRtcTransport } from './webRtcTransport';
+import { TransportManager } from './transportManager';
+import { IncrementalSha256 } from './incrementalSha256';
+import { ProgressiveDiskWriter } from './diskWriter';
 import {
   PeerDevice,
   PickedFile,
@@ -16,9 +22,18 @@ import {
   TransferRecord,
   ConnectionState,
 } from '../types';
+import { TransportStatistics, ControlMessage } from './transport';
 
 export interface TransferEngineEvent {
-  type: 'peer_discovered' | 'peer_lost' | 'request' | 'progress' | 'completed' | 'error' | 'state_change';
+  type:
+    | 'peer_discovered'
+    | 'peer_lost'
+    | 'request'
+    | 'progress'
+    | 'completed'
+    | 'error'
+    | 'state_change'
+    | 'diagnostics';
   transferId: string;
   senderName: string;
   fileName: string;
@@ -40,19 +55,19 @@ export type PeersUpdateListener = (peers: PeerDevice[]) => void;
 export class TransferEngine {
   private static instance: TransferEngine;
 
+  public identity: DeviceIdentity;
   public localId: string;
   public localName: string;
   public platform: string;
+
   private storage = TransferStorage.getInstance();
+  private signaling: SignalingClient;
+  private transportManager: TransportManager;
+  private webRtcTransport: WebRtcTransport;
 
   private peersMap = new Map<string, PeerDevice>();
   private peerListeners: PeersUpdateListener[] = [];
   private eventListeners: EngineEventListener[] = [];
-
-  // Discovery / Transport Layer
-  private broadcastChannel: BroadcastChannel | null = null;
-  private peerConnections = new Map<string, RTCPeerConnection>();
-  private dataChannels = new Map<string, RTCDataChannel>();
 
   // Active Receiving State
   private activeIncomingTransfer: {
@@ -64,7 +79,8 @@ export class TransferEngine {
     expectedSha256: string;
     receivedBytes: number;
     verifiedOffset: number;
-    chunks: Uint8Array[];
+    hasher: IncrementalSha256;
+    diskWriter: ProgressiveDiskWriter;
     startTime: number;
     lastCalcTime: number;
     lastCalcBytes: number;
@@ -76,7 +92,10 @@ export class TransferEngine {
   private activeOutgoingTransfer: {
     transferId: string;
     targetPeerId: string;
+    targetPeerName: string;
     file: File;
+    expectedSha256: string;
+    hasher: IncrementalSha256;
     sentBytes: number;
     verifiedOffset: number;
     chunkSize: number;
@@ -93,29 +112,18 @@ export class TransferEngine {
   private lastUiNotifyTime = 0;
 
   private constructor() {
-    // Generate session-unique ID per window to enable instant side-by-side local testing
-    const storedSession = sessionStorage.getItem('auradrop_session_device_id');
-    if (storedSession) {
-      this.localId = storedSession;
-    } else {
-      this.localId = `aura_${Math.random().toString(36).substring(2, 9)}`;
-      sessionStorage.setItem('auradrop_session_device_id', this.localId);
-    }
+    this.identity = IdentityManager.getInstance().getIdentity();
+    this.localId = this.identity.deviceId;
+    this.localName = this.identity.displayName;
+    this.platform = this.identity.platform;
 
-    const isMac = navigator.userAgent.includes('Mac');
-    const isWin = navigator.userAgent.includes('Windows');
-    this.platform = isMac ? 'macos' : isWin ? 'windows' : 'linux';
+    this.signaling = SignalingClient.getInstance(this.identity);
+    this.transportManager = TransportManager.getInstance(this.signaling);
+    this.webRtcTransport = this.transportManager.getWebRtcTransport();
 
-    const urlParams = new URLSearchParams(window.location.search);
-    const roleParam = urlParams.get('role');
-    if (roleParam === 'receiver') {
-      this.localName = `Pixel 8 Pro (${this.localId.substring(5, 9)})`;
-    } else {
-      const devType = isMac ? 'MacBook Pro' : isWin ? 'Windows PC' : 'Desktop Client';
-      this.localName = `${devType} (${this.localId.substring(5, 9)})`;
-    }
-
-    this.initTransport();
+    this.setupSignalingEvents();
+    this.setupTransportEvents();
+    this.signaling.connect();
   }
 
   public static getInstance(): TransferEngine {
@@ -143,179 +151,187 @@ export class TransferEngine {
     };
   }
 
-  private notifyPeers() {
+  private notifyPeers(): void {
     const list = Array.from(this.peersMap.values());
     this.peerListeners.forEach((l) => l(list));
   }
 
-  private notifyEvent(evt: TransferEngineEvent, forceImmediate = false) {
+  private notifyEvent(evt: TransferEngineEvent, forceImmediate = false): void {
     const now = performance.now();
     if (!forceImmediate && now - this.lastUiNotifyTime < 50) {
-      return; // Throttle UI snapshots to ~20 fps
+      return; // Throttle UI rendering to ~20 fps
     }
     this.lastUiNotifyTime = now;
     this.eventListeners.forEach((l) => l(evt));
   }
 
   // ---------------------------------------------------------------------------
-  // TRANSPORT & DISCOVERY LAYER
+  // SIGNALING & PEER DISCOVERY (Section 3 & 7)
   // ---------------------------------------------------------------------------
-  private initTransport() {
-    try {
-      this.broadcastChannel = new BroadcastChannel('auradrop_p2p_channel');
-      this.broadcastChannel.onmessage = (e) => this.handleMessage(e.data);
-
-      // Send initial announcement & periodic heartbeats (2.5s)
-      this.broadcastPresence();
-      setInterval(() => this.broadcastPresence(), 2500);
-
-      // Stale peer reaper (removes peers if no heartbeat for 6.5s)
-      setInterval(() => {
-        const now = Date.now();
-        let changed = false;
-        this.peersMap.forEach((peer, id) => {
-          if (now - peer.lastSeen.getTime() > 6500) {
-            this.peersMap.delete(id);
-            changed = true;
+  private setupSignalingEvents(): void {
+    this.signaling.setCallbacks({
+      onPeerList: (peers) => {
+        this.peersMap.clear();
+        for (const p of peers) {
+          if (p.deviceId !== this.localId) {
+            this.peersMap.set(p.deviceId, p);
           }
-        });
-        if (changed) this.notifyPeers();
-      }, 3000);
-    } catch (e) {
-      console.warn('BroadcastChannel transport unavailable', e);
-    }
-  }
+        }
+        this.notifyPeers();
+      },
 
-  private broadcastPresence() {
-    if (!this.broadcastChannel) return;
-    this.broadcastChannel.postMessage({
-      type: 'PRESENCE_ANNOUNCE',
-      senderId: this.localId,
-      senderName: this.localName,
-      platform: this.platform,
-      transport: 'BroadcastChannel Direct',
-      timestamp: Date.now(),
+      onPeerOnline: (peer) => {
+        if (peer.deviceId !== this.localId) {
+          this.peersMap.set(peer.deviceId, peer);
+          this.notifyPeers();
+        }
+      },
+
+      onPeerOffline: (deviceId) => {
+        if (this.peersMap.delete(deviceId)) {
+          this.notifyPeers();
+        }
+      },
+
+      onSignal: (senderId, signal) => {
+        this.webRtcTransport.handleRemoteSignal(senderId, signal);
+      },
+
+      onTransferRequest: (msg) => {
+        this.handleTransferRequestMessage(msg);
+      },
+
+      onTransferResponse: (msg) => {
+        this.handleTransferResponseMessage(msg);
+      },
+
+      onTransferAck: (msg) => {
+        this.handleTransferAckMessage(msg);
+      },
     });
   }
 
-  private async handleMessage(data: any) {
-    // Check if message is binary frame (ArrayBuffer)
-    if (data instanceof ArrayBuffer) {
-      const frame = decodeBinaryFrame(data);
+  private setupTransportEvents(): void {
+    this.webRtcTransport.onFrameReceived((frameBytes) => {
+      const frame = decodeBinaryFrame(frameBytes.buffer);
       if (frame) {
         this.handleBinaryFrame(frame);
       }
-      return;
-    }
+    });
 
-    if (!data || typeof data !== 'object') return;
-    if (data.senderId === this.localId) return; // Ignore own messages
-
-    switch (data.type) {
-      case 'PRESENCE_ANNOUNCE': {
-        const peer: PeerDevice = {
-          id: data.senderId,
-          deviceId: data.senderId,
-          name: data.senderName,
-          deviceName: `${data.platform.toUpperCase()} • Direct P2PFS/1`,
-          platform: data.platform || 'web',
-          ip: '127.0.0.1 (Local Channel)',
-          port: 48291,
-          lastSeen: new Date(),
-          isTrusted: true,
-          connectionState: 'READY_TO_TRANSFER',
-          transport: 'BroadcastChannel',
-        };
-        const isNew = !this.peersMap.has(peer.id);
-        this.peersMap.set(peer.id, peer);
-        if (isNew) this.notifyPeers();
-        break;
+    this.webRtcTransport.onControlReceived((msg) => {
+      if (msg.type === 'ACK_COMPLETE' && this.activeOutgoingTransfer) {
+        this.finalizeOutgoingTransfer(msg.transferId || this.activeOutgoingTransfer.transferId);
+      } else if (msg.type === 'PAUSE' && this.activeIncomingTransfer) {
+        this.activeIncomingTransfer.state = 'PAUSED';
+      } else if (msg.type === 'CANCEL') {
+        this.cancelActiveTransfer();
       }
+    });
 
-      case 'TRANSFER_REQUEST_CONTROL': {
-        if (data.targetId === this.localId) {
-          const safeName = this.storage.sanitizeFilename(data.fileName);
-          const checkpoint = this.storage.getCheckpoint(data.transferId);
-          const resumeOffset = checkpoint ? checkpoint.verifiedOffset : 0;
-
-          this.activeIncomingTransfer = {
-            transferId: data.transferId,
-            senderId: data.senderId,
-            senderName: data.senderName,
-            fileName: safeName,
-            fileSize: data.fileSize,
-            expectedSha256: data.sha256,
-            receivedBytes: resumeOffset,
-            verifiedOffset: resumeOffset,
-            chunks: [],
-            startTime: Date.now(),
-            lastCalcTime: performance.now(),
-            lastCalcBytes: resumeOffset,
-            smoothedSpeed: 0,
-            state: 'WAITING_FOR_ACCEPTANCE',
-          };
-
-          this.notifyEvent(
-            {
-              type: 'request',
-              transferId: data.transferId,
-              senderName: data.senderName,
-              fileName: safeName,
-              fileSize: data.fileSize,
-              state: 'WAITING_FOR_ACCEPTANCE',
-            },
-            true
-          );
-        }
-        break;
+    this.webRtcTransport.onStateChanged((state) => {
+      if (this.activeOutgoingTransfer) {
+        this.activeOutgoingTransfer.state = state;
+        this.notifyEvent({
+          type: 'state_change',
+          transferId: this.activeOutgoingTransfer.transferId,
+          senderName: this.localName,
+          fileName: this.activeOutgoingTransfer.file.name,
+          fileSize: this.activeOutgoingTransfer.file.size,
+          state,
+        });
       }
-
-      case 'TRANSFER_RESPONSE_CONTROL': {
-        if (data.targetId === this.localId && this.activeOutgoingTransfer) {
-          if (data.accepted) {
-            const startOffset = data.verifiedOffset || 0;
-            this.executeOutgoingStream(startOffset);
-          } else {
-            this.notifyEvent(
-              {
-                type: 'error',
-                transferId: this.activeOutgoingTransfer.transferId,
-                senderName: this.localName,
-                fileName: this.activeOutgoingTransfer.file.name,
-                fileSize: this.activeOutgoingTransfer.file.size,
-                error: 'Recipient declined the transfer.',
-                state: 'CANCELLED',
-              },
-              true
-            );
-            this.activeOutgoingTransfer = null;
-          }
-        }
-        break;
-      }
-    }
+    });
   }
 
   // ---------------------------------------------------------------------------
-  // RECEIVER PIPELINE (Real Binary Frame Processing)
+  // PEER CONNECTION INITIATION (Section 4 & 5)
   // ---------------------------------------------------------------------------
-  private async handleBinaryFrame(frame: any) {
+  public async connectToPeer(peer: PeerDevice): Promise<boolean> {
+    const existing = this.peersMap.get(peer.deviceId);
+    if (existing) {
+      existing.connectionState = 'CONNECTING';
+      this.notifyPeers();
+    }
+
+    const connected = await this.webRtcTransport.connect(peer);
+    if (connected && existing) {
+      existing.connectionState = 'READY_TO_TRANSFER';
+      this.notifyPeers();
+    }
+    return connected;
+  }
+
+  // ---------------------------------------------------------------------------
+  // RECEIVER PIPELINE (Section 11, 14, 15, 22)
+  // ---------------------------------------------------------------------------
+  private async handleTransferRequestMessage(msg: any): Promise<void> {
+    const payload = msg.payload || msg;
+    const safeName = this.storage.sanitizeFilename(payload.fileName);
+    const checkpoint = this.storage.getCheckpoint(payload.transferId);
+    const resumeOffset = checkpoint ? checkpoint.verifiedOffset : 0;
+
+    const diskWriter = new ProgressiveDiskWriter(payload.transferId, safeName);
+    await diskWriter.init();
+
+    this.activeIncomingTransfer = {
+      transferId: payload.transferId,
+      senderId: msg.senderId || payload.senderId,
+      senderName: payload.senderName || 'Remote Peer',
+      fileName: safeName,
+      fileSize: payload.fileSize,
+      expectedSha256: payload.sha256,
+      receivedBytes: resumeOffset,
+      verifiedOffset: resumeOffset,
+      hasher: new IncrementalSha256(),
+      diskWriter,
+      startTime: Date.now(),
+      lastCalcTime: performance.now(),
+      lastCalcBytes: resumeOffset,
+      smoothedSpeed: 0,
+      state: 'WAITING_FOR_ACCEPTANCE',
+    };
+
+    this.notifyEvent(
+      {
+        type: 'request',
+        transferId: payload.transferId,
+        senderName: this.activeIncomingTransfer.senderName,
+        fileName: safeName,
+        fileSize: payload.fileSize,
+        state: 'WAITING_FOR_ACCEPTANCE',
+        sha256: payload.sha256,
+        transport: 'WebRTC Direct',
+      },
+      true
+    );
+  }
+
+  private async handleBinaryFrame(frame: any): Promise<void> {
     const xfer = this.activeIncomingTransfer;
     if (!xfer || xfer.transferId !== frame.transferId) return;
 
     if (frame.frameType === BinaryFrameType.DATA_CHUNK) {
       xfer.state = 'TRANSFERRING';
-      xfer.chunks.push(frame.payload);
-      xfer.receivedBytes += frame.payload.byteLength;
+      const chunkBytes: Uint8Array = frame.payload;
+
+      // 1. Incremental streaming SHA-256 (no whole-file RAM loading)
+      xfer.hasher.update(chunkBytes);
+
+      // 2. Progressive bounded disk write
+      await xfer.diskWriter.writeChunk(chunkBytes);
+
+      xfer.receivedBytes += chunkBytes.byteLength;
       xfer.verifiedOffset = xfer.receivedBytes;
 
-      // Real Throughput Calculation with Moving Average
+      // 3. Real Throughput Calculation with Exponential Smoothing
       const now = performance.now();
       const timeDeltaMs = now - xfer.lastCalcTime;
-      if (timeDeltaMs >= 120) {
+      if (timeDeltaMs >= 100) {
         const bytesDelta = xfer.receivedBytes - xfer.lastCalcBytes;
         const instantSpeed = (bytesDelta / timeDeltaMs) * 1000;
-        xfer.smoothedSpeed = xfer.smoothedSpeed === 0 ? instantSpeed : xfer.smoothedSpeed * 0.7 + instantSpeed * 0.3;
+        xfer.smoothedSpeed =
+          xfer.smoothedSpeed === 0 ? instantSpeed : xfer.smoothedSpeed * 0.7 + instantSpeed * 0.3;
         xfer.lastCalcTime = now;
         xfer.lastCalcBytes = xfer.receivedBytes;
       }
@@ -323,8 +339,8 @@ export class TransferEngine {
       const remainingBytes = Math.max(0, xfer.fileSize - xfer.receivedBytes);
       const etaSeconds = xfer.smoothedSpeed > 0 ? Math.ceil(remainingBytes / xfer.smoothedSpeed) : 0;
 
-      // Save periodic checkpoint for resume support (every 5 MB)
-      if (xfer.receivedBytes % (5 * 1024 * 1024) < frame.payload.byteLength) {
+      // 4. Periodic Resume Checkpoint (every 5 MB)
+      if (xfer.receivedBytes % (5 * 1024 * 1024) < chunkBytes.byteLength) {
         this.storage.saveCheckpoint({
           transferId: xfer.transferId,
           fileId: xfer.fileName,
@@ -347,13 +363,14 @@ export class TransferEngine {
         speedBytesPerSec: xfer.smoothedSpeed,
         etaSeconds,
         state: 'TRANSFERRING',
+        transport: 'WebRTC Direct',
       });
     } else if (frame.frameType === BinaryFrameType.FILE_FIN) {
       await this.finalizeIncomingTransfer();
     }
   }
 
-  private async finalizeIncomingTransfer() {
+  private async finalizeIncomingTransfer(): Promise<void> {
     const xfer = this.activeIncomingTransfer;
     if (!xfer) return;
 
@@ -368,22 +385,18 @@ export class TransferEngine {
         transferredBytes: xfer.fileSize,
         verifiedBytes: xfer.fileSize,
         state: 'VERIFYING',
+        transport: 'WebRTC Direct',
       },
       true
     );
 
-    // Assemble file Blob from received chunks
-    const fileBlob = new Blob(xfer.chunks, { type: 'application/octet-stream' });
-    const arrayBuffer = await fileBlob.arrayBuffer();
+    // 1. Finalize incremental streaming SHA-256
+    const receiverSha256 = xfer.hasher.finalize();
 
-    // Native Web Crypto API SHA-256
-    const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const receiverSha256 = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
-
-    // Checksum Equality Verification
+    // 2. Exact Checksum Equality Verification (Section 22)
     if (xfer.expectedSha256 && receiverSha256 !== xfer.expectedSha256) {
       xfer.state = 'FAILED_INTEGRITY';
+      await xfer.diskWriter.cleanup();
       this.notifyEvent(
         {
           type: 'error',
@@ -391,7 +404,7 @@ export class TransferEngine {
           senderName: xfer.senderName,
           fileName: xfer.fileName,
           fileSize: xfer.fileSize,
-          error: `Integrity Verification Failed! Expected: ${xfer.expectedSha256}, Computed: ${receiverSha256}`,
+          error: `SHA-256 Mismatch! Expected: ${xfer.expectedSha256}, Computed: ${receiverSha256}`,
           state: 'FAILED_INTEGRITY',
         },
         true
@@ -400,9 +413,11 @@ export class TransferEngine {
       return;
     }
 
-    // Atomic Completion: Save to disk via browser object URL
+    // 3. Commit file to disk & create download handle
     xfer.state = 'DATABASE_COMMIT';
-    const blobUrl = URL.createObjectURL(fileBlob);
+    const { blobUrl } = await xfer.diskWriter.finalize();
+
+    // Trigger browser file download
     const a = document.createElement('a');
     a.href = blobUrl;
     a.download = xfer.fileName;
@@ -410,7 +425,21 @@ export class TransferEngine {
     a.click();
     document.body.removeChild(a);
 
-    // Clear resume checkpoint & persist to database history
+    // 4. Send Verified ACK_COMPLETE to sender over DataChannel and Signaling
+    this.webRtcTransport.sendControl({
+      type: 'ACK_COMPLETE',
+      transferId: xfer.transferId,
+      senderId: this.localId,
+      targetId: xfer.senderId,
+      payload: { sha256: receiverSha256, verified: true },
+    });
+    this.signaling.sendTransferAck(xfer.senderId, {
+      transferId: xfer.transferId,
+      sha256: receiverSha256,
+      verified: true,
+    });
+
+    // 5. Persist record to storage history
     this.storage.removeCheckpoint(xfer.transferId);
     const record: TransferRecord = {
       id: xfer.transferId,
@@ -422,7 +451,7 @@ export class TransferEngine {
       sha256: receiverSha256,
       timestamp: new Date().toISOString(),
       speedBytesPerSec: xfer.smoothedSpeed,
-      transport: 'P2PFS/1 Binary Stream',
+      transport: 'WebRTC Direct P2P',
       verifiedOffset: xfer.fileSize,
       blobUrl,
     };
@@ -442,6 +471,7 @@ export class TransferEngine {
         sha256: receiverSha256,
         blobUrl,
         state: 'COMPLETED',
+        transport: 'WebRTC Direct',
       },
       true
     );
@@ -450,34 +480,36 @@ export class TransferEngine {
   }
 
   // ---------------------------------------------------------------------------
-  // SENDER PIPELINE (Real Binary Frame Streaming)
+  // SENDER PIPELINE (Section 11, 12, 13, 17, 18, 22)
   // ---------------------------------------------------------------------------
   public async startOutgoingTransfer(targetPeer: PeerDevice, file: File): Promise<string> {
-    if (!this.broadcastChannel) {
-      throw new Error('Local transport unavailable');
-    }
-
     const transferId = `xfer_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const safeName = this.storage.sanitizeFilename(file.name);
 
-    // Progressive SHA-256 computation on real File buffer
-    const arrayBuffer = await file.arrayBuffer();
-    const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
-    const senderSha256 = Array.from(new Uint8Array(hashBuffer))
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('');
+    // Compute expected SHA-256 incrementally across bounded slices (never loading whole file into RAM)
+    const previewHasher = new IncrementalSha256();
+    const hashSliceSize = 1024 * 1024; // 1 MB slice
+    for (let offset = 0; offset < file.size; offset += hashSliceSize) {
+      const sliceBlob = file.slice(offset, offset + hashSliceSize);
+      const sliceBuffer = await sliceBlob.arrayBuffer();
+      previewHasher.update(new Uint8Array(sliceBuffer));
+    }
+    const senderSha256 = previewHasher.finalize();
 
-    // Check if there is an existing resume checkpoint
+    // Check for existing resume checkpoint
     const checkpoint = this.storage.getCheckpoint(transferId);
     const resumeOffset = checkpoint ? checkpoint.verifiedOffset : 0;
 
     this.activeOutgoingTransfer = {
       transferId,
-      targetPeerId: targetPeer.id,
+      targetPeerId: targetPeer.deviceId,
+      targetPeerName: targetPeer.name,
       file,
+      expectedSha256: senderSha256,
+      hasher: new IncrementalSha256(),
       sentBytes: resumeOffset,
       verifiedOffset: resumeOffset,
-      chunkSize: 256 * 1024, // 256 KB starting chunk size (Section 11)
+      chunkSize: 256 * 1024, // 256 KB starting chunk size
       startTime: Date.now(),
       lastCalcTime: performance.now(),
       lastCalcBytes: resumeOffset,
@@ -487,13 +519,11 @@ export class TransferEngine {
       isPaused: false,
     };
 
-    // Emit Real Transfer Request to recipient
-    this.broadcastChannel.postMessage({
-      type: 'TRANSFER_REQUEST_CONTROL',
+    // Dispatch Transfer Request to recipient via signaling server
+    this.signaling.sendTransferRequest(targetPeer.deviceId, {
+      transferId,
       senderId: this.localId,
       senderName: this.localName,
-      targetId: targetPeer.id,
-      transferId,
       fileName: safeName,
       fileSize: file.size,
       sha256: senderSha256,
@@ -512,6 +542,7 @@ export class TransferEngine {
         speedBytesPerSec: 0,
         etaSeconds: 0,
         state: 'WAITING_FOR_ACCEPTANCE',
+        transport: 'WebRTC Direct',
       },
       true
     );
@@ -519,15 +550,53 @@ export class TransferEngine {
     return transferId;
   }
 
-  private async executeOutgoingStream(startOffset = 0) {
+  private handleTransferResponseMessage(msg: any): void {
+    const payload = msg.payload || msg;
     const xfer = this.activeOutgoingTransfer;
-    if (!xfer || !this.broadcastChannel) return;
+    if (!xfer || xfer.transferId !== payload.transferId) return;
+
+    if (payload.accepted) {
+      const startOffset = payload.verifiedOffset || 0;
+      this.executeOutgoingStream(startOffset);
+    } else {
+      this.notifyEvent(
+        {
+          type: 'error',
+          transferId: xfer.transferId,
+          senderName: this.localName,
+          fileName: xfer.file.name,
+          fileSize: xfer.file.size,
+          error: 'Recipient declined the transfer.',
+          state: 'CANCELLED',
+        },
+        true
+      );
+      this.activeOutgoingTransfer = null;
+    }
+  }
+
+  private handleTransferAckMessage(msg: any): void {
+    const payload = msg.payload || msg;
+    if (this.activeOutgoingTransfer && this.activeOutgoingTransfer.transferId === payload.transferId) {
+      this.finalizeOutgoingTransfer(payload.transferId);
+    }
+  }
+
+  private async executeOutgoingStream(startOffset = 0): Promise<void> {
+    const xfer = this.activeOutgoingTransfer;
+    if (!xfer) return;
 
     xfer.state = 'TRANSFERRING';
     const file = xfer.file;
     const totalBytes = file.size;
     let offset = startOffset;
     let sequence = Math.floor(startOffset / xfer.chunkSize);
+
+    // Make sure WebRTC is connected
+    const targetPeer = this.peersMap.get(xfer.targetPeerId);
+    if (targetPeer && targetPeer.connectionState !== 'READY_TO_TRANSFER') {
+      await this.connectToPeer(targetPeer);
+    }
 
     const sendLoop = async () => {
       if (xfer.isCancelled) return;
@@ -538,7 +607,7 @@ export class TransferEngine {
           fileId: xfer.file.name,
           fileName: xfer.file.name,
           fileSize: totalBytes,
-          expectedSha256: '',
+          expectedSha256: xfer.expectedSha256,
           verifiedOffset: offset,
           updatedAt: new Date().toISOString(),
         });
@@ -554,45 +623,42 @@ export class TransferEngine {
           BigInt(totalBytes),
           new Uint8Array(0)
         );
-        this.broadcastChannel?.postMessage(finFrame);
+        await this.webRtcTransport.sendFrame(finFrame);
 
-        xfer.state = 'COMPLETED';
-        this.storage.removeCheckpoint(xfer.transferId);
-
+        xfer.state = 'VERIFYING';
         this.notifyEvent(
           {
-            type: 'completed',
+            type: 'progress',
             transferId: xfer.transferId,
             senderName: this.localName,
             fileName: file.name,
             fileSize: totalBytes,
             transferredBytes: totalBytes,
             verifiedBytes: totalBytes,
-            speedBytesPerSec: xfer.smoothedSpeed,
-            state: 'COMPLETED',
+            state: 'VERIFYING',
+            transport: 'WebRTC Direct',
           },
           true
         );
-
-        this.activeOutgoingTransfer = null;
+        // Sender waits for receiver's ACK_COMPLETE before marking COMPLETED (Section 22)
         return;
       }
 
-      // Adaptive chunk sizing (256 KB up to 1 MB based on throughput)
+      // Adaptive chunk sizing (256 KB up to 1 MB) based on measured speed
       if (xfer.smoothedSpeed > 40 * 1024 * 1024) {
-        xfer.chunkSize = 1024 * 1024; // 1 MB
+        xfer.chunkSize = 1024 * 1024;
       } else if (xfer.smoothedSpeed > 20 * 1024 * 1024) {
-        xfer.chunkSize = 512 * 1024; // 512 KB
+        xfer.chunkSize = 512 * 1024;
       } else {
-        xfer.chunkSize = 256 * 1024; // 256 KB
+        xfer.chunkSize = 256 * 1024;
       }
 
-      // Read real chunk via slice without copying whole file into memory
+      // Read chunk incrementally via file.slice (bounded RAM consumption)
       const chunkBlob = file.slice(offset, offset + xfer.chunkSize);
       const chunkBuffer = await chunkBlob.arrayBuffer();
       const chunkBytes = new Uint8Array(chunkBuffer);
 
-      // Encode into compact 38-byte binary frame
+      // Frame with binary header
       const frameBuffer = encodeBinaryFrame(
         BinaryFrameType.DATA_CHUNK,
         xfer.transferId,
@@ -601,7 +667,12 @@ export class TransferEngine {
         chunkBytes
       );
 
-      this.broadcastChannel?.postMessage(frameBuffer);
+      // Send via WebRTC DataChannel (with automatic backpressure)
+      try {
+        await this.webRtcTransport.sendFrame(frameBuffer);
+      } catch (e) {
+        console.warn('Transport frame send error', e);
+      }
 
       offset += chunkBytes.byteLength;
       sequence++;
@@ -611,10 +682,11 @@ export class TransferEngine {
       // Real Throughput Calculation with Exponential Smoothing
       const now = performance.now();
       const timeDeltaMs = now - xfer.lastCalcTime;
-      if (timeDeltaMs >= 120) {
+      if (timeDeltaMs >= 100) {
         const bytesDelta = xfer.sentBytes - xfer.lastCalcBytes;
         const instantSpeed = (bytesDelta / timeDeltaMs) * 1000;
-        xfer.smoothedSpeed = xfer.smoothedSpeed === 0 ? instantSpeed : xfer.smoothedSpeed * 0.7 + instantSpeed * 0.3;
+        xfer.smoothedSpeed =
+          xfer.smoothedSpeed === 0 ? instantSpeed : xfer.smoothedSpeed * 0.7 + instantSpeed * 0.3;
         xfer.lastCalcTime = now;
         xfer.lastCalcBytes = xfer.sentBytes;
       }
@@ -633,64 +705,109 @@ export class TransferEngine {
         speedBytesPerSec: xfer.smoothedSpeed,
         etaSeconds,
         state: 'TRANSFERRING',
+        transport: 'WebRTC Direct',
       });
 
-      // Cooperative yield to browser event loop (16 ms)
-      setTimeout(sendLoop, 16);
+      // Cooperative yield
+      setTimeout(sendLoop, 12);
     };
 
     sendLoop();
   }
 
+  private finalizeOutgoingTransfer(transferId: string): void {
+    const xfer = this.activeOutgoingTransfer;
+    if (!xfer || xfer.transferId !== transferId) return;
+
+    xfer.state = 'COMPLETED';
+    this.storage.removeCheckpoint(xfer.transferId);
+
+    const record: TransferRecord = {
+      id: xfer.transferId,
+      fileName: xfer.file.name,
+      fileSize: xfer.file.size,
+      senderName: this.localName,
+      receiverName: xfer.targetPeerName,
+      status: 'COMPLETED',
+      sha256: xfer.expectedSha256,
+      timestamp: new Date().toISOString(),
+      speedBytesPerSec: xfer.smoothedSpeed,
+      transport: 'WebRTC Direct P2P',
+      verifiedOffset: xfer.file.size,
+    };
+    this.storage.saveRecord(record);
+
+    this.notifyEvent(
+      {
+        type: 'completed',
+        transferId: xfer.transferId,
+        senderName: this.localName,
+        fileName: xfer.file.name,
+        fileSize: xfer.file.size,
+        transferredBytes: xfer.file.size,
+        verifiedBytes: xfer.file.size,
+        speedBytesPerSec: xfer.smoothedSpeed,
+        sha256: xfer.expectedSha256,
+        state: 'COMPLETED',
+        transport: 'WebRTC Direct',
+      },
+      true
+    );
+
+    this.activeOutgoingTransfer = null;
+  }
+
   // ---------------------------------------------------------------------------
   // PUBLIC CONTROLS: ACCEPT, DECLINE, PAUSE, RESUME, CANCEL
   // ---------------------------------------------------------------------------
-  public acceptIncomingTransfer() {
-    if (!this.activeIncomingTransfer || !this.broadcastChannel) return;
-    this.broadcastChannel.postMessage({
-      type: 'TRANSFER_RESPONSE_CONTROL',
-      senderId: this.localId,
-      targetId: this.activeIncomingTransfer.senderId,
+  public acceptIncomingTransfer(): void {
+    if (!this.activeIncomingTransfer) return;
+    this.signaling.sendTransferResponse(this.activeIncomingTransfer.senderId, {
       transferId: this.activeIncomingTransfer.transferId,
       accepted: true,
       verifiedOffset: this.activeIncomingTransfer.verifiedOffset,
     });
   }
 
-  public declineIncomingTransfer() {
-    if (!this.activeIncomingTransfer || !this.broadcastChannel) return;
-    this.broadcastChannel.postMessage({
-      type: 'TRANSFER_RESPONSE_CONTROL',
-      senderId: this.localId,
-      targetId: this.activeIncomingTransfer.senderId,
+  public declineIncomingTransfer(): void {
+    if (!this.activeIncomingTransfer) return;
+    this.signaling.sendTransferResponse(this.activeIncomingTransfer.senderId, {
       transferId: this.activeIncomingTransfer.transferId,
       accepted: false,
     });
     this.activeIncomingTransfer = null;
   }
 
-  public pauseActiveTransfer() {
+  public pauseActiveTransfer(): void {
     if (this.activeOutgoingTransfer) {
       this.activeOutgoingTransfer.isPaused = true;
+      this.webRtcTransport.pause();
     }
   }
 
-  public resumeActiveTransfer() {
+  public resumeActiveTransfer(): void {
     if (this.activeOutgoingTransfer && this.activeOutgoingTransfer.isPaused) {
       this.activeOutgoingTransfer.isPaused = false;
+      this.webRtcTransport.resume();
       this.executeOutgoingStream(this.activeOutgoingTransfer.verifiedOffset);
     }
   }
 
-  public cancelActiveTransfer() {
+  public cancelActiveTransfer(): void {
     if (this.activeOutgoingTransfer) {
       this.activeOutgoingTransfer.isCancelled = true;
       this.storage.removeCheckpoint(this.activeOutgoingTransfer.transferId);
+      this.webRtcTransport.cancel();
       this.activeOutgoingTransfer = null;
     }
     if (this.activeIncomingTransfer) {
+      this.activeIncomingTransfer.diskWriter.cleanup();
       this.storage.removeCheckpoint(this.activeIncomingTransfer.transferId);
       this.activeIncomingTransfer = null;
     }
+  }
+
+  public getDiagnostics(): TransportStatistics {
+    return this.webRtcTransport.getStatistics();
   }
 }

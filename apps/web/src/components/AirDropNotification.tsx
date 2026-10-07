@@ -40,8 +40,9 @@ export const AirDropNotification: React.FC<AirDropNotificationProps> = ({
 
   if (!isRendered) return null;
 
-  const isTransferring = transferProgress && transferProgress.state === 'transferring';
-  const isCompleted = transferProgress && transferProgress.state === 'completed';
+  const currentState = (transferProgress?.state || '').toUpperCase();
+  const isTransferring = currentState === 'TRANSFERRING' || currentState === 'VERIFYING';
+  const isCompleted = currentState === 'COMPLETED';
 
   const progressPct = transferProgress && transferProgress.fileSize > 0
     ? Math.min(100, Math.round((transferProgress.transferredBytes / transferProgress.fileSize) * 100))
@@ -137,7 +138,7 @@ export const AirDropNotification: React.FC<AirDropNotificationProps> = ({
               }}
             >
               {isTransferring
-                ? `Receiving from ${senderName} • ${(transferProgress?.speedBytesPerSec / (1024 * 1024)).toFixed(1)} MB/s`
+                ? `Receiving from ${senderName} • ${(((transferProgress?.speedBytesPerSec || 0) / (1024 * 1024)).toFixed(1))} MB/s`
                 : isCompleted
                 ? `Received ${filesCount} file(s) from ${senderName}`
                 : `${senderName} would like to share ${filesCount} photo${filesCount > 1 ? 's' : ''} • ${totalSizeText}`}
@@ -172,7 +173,7 @@ export const AirDropNotification: React.FC<AirDropNotificationProps> = ({
           <div style={{ marginTop: '16px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#8E8E93', marginBottom: '8px', fontWeight: 600 }}>
               <span style={{ color: '#FFFFFF' }}>{progressPct}%</span>
-              <span>{((transferProgress.transferredBytes) / (1024 * 1024)).toFixed(1)} / {((transferProgress.fileSize) / (1024 * 1024)).toFixed(1)} MB</span>
+              <span>{(((transferProgress?.transferredBytes || 0)) / (1024 * 1024)).toFixed(1)} / {(((transferProgress?.fileSize || 0)) / (1024 * 1024)).toFixed(1)} MB</span>
             </div>
             <div style={{ width: '100%', height: '6px', background: '#2C2C2E', borderRadius: '3px', overflow: 'hidden' }}>
               <div
@@ -187,8 +188,8 @@ export const AirDropNotification: React.FC<AirDropNotificationProps> = ({
               />
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#636366', marginTop: '6px' }}>
-              <span>Single-Pass SHA-256 Verified</span>
-              <span>Direct TCP Framing</span>
+              <span>Streaming SHA-256 Verified</span>
+              <span>WebRTC RTCDataChannel</span>
             </div>
           </div>
         )}

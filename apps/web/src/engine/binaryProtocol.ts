@@ -78,12 +78,18 @@ export function encodeBinaryFrame(
 /**
  * Decodes a binary frame from an ArrayBuffer
  */
-export function decodeBinaryFrame(data: ArrayBuffer): DecodedFrame | null {
-  if (data.byteLength < HEADER_SIZE) {
+export function decodeBinaryFrame(input: ArrayBuffer | ArrayBufferView): DecodedFrame | null {
+  if (!input) return null;
+  const isView = 'buffer' in input && input.buffer instanceof ArrayBuffer;
+  const buffer = isView ? input.buffer : (input as ArrayBuffer);
+  const byteOffset = isView ? (input as ArrayBufferView).byteOffset : 0;
+  const byteLength = isView ? (input as ArrayBufferView).byteLength : (input as ArrayBuffer).byteLength;
+
+  if (byteLength < HEADER_SIZE) {
     return null;
   }
 
-  const view = new DataView(data);
+  const view = new DataView(buffer, byteOffset, byteLength);
   const magic = view.getUint32(0, false);
   if (magic !== AURA_MAGIC) {
     return null; // Invalid magic header
@@ -93,7 +99,7 @@ export function decodeBinaryFrame(data: ArrayBuffer): DecodedFrame | null {
   const frameType = view.getUint8(5) as BinaryFrameType;
 
   // Transfer ID (16 bytes)
-  const tidBytes = new Uint8Array(data, 6, 16);
+  const tidBytes = new Uint8Array(buffer, byteOffset + 6, 16);
   const decoder = new TextDecoder();
   const transferId = decoder.decode(tidBytes).trim();
 
@@ -101,11 +107,11 @@ export function decodeBinaryFrame(data: ArrayBuffer): DecodedFrame | null {
   const offset = view.getBigUint64(26, false);
   const payloadLength = view.getUint32(34, false);
 
-  if (data.byteLength < HEADER_SIZE + payloadLength) {
+  if (byteLength < HEADER_SIZE + payloadLength) {
     return null; // Incomplete payload
   }
 
-  const payload = new Uint8Array(data, HEADER_SIZE, payloadLength);
+  const payload = new Uint8Array(buffer, byteOffset + HEADER_SIZE, payloadLength);
 
   return {
     magic,

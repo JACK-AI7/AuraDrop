@@ -34,7 +34,7 @@ export interface PeerDevice {
   lastSeen: Date;
   isTrusted?: boolean;
   connectionState?: ConnectionState;
-  transport?: 'BroadcastChannel' | 'WebRTC Direct' | 'LAN TCP' | 'Relay';
+  transport?: 'WebRTC Direct' | 'LAN TCP' | 'Relay';
 }
 
 export interface PickedFile {
