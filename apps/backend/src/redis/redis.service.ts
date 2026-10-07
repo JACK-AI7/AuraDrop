@@ -22,10 +22,10 @@ export class RedisRealtimeService {
   private isConnected = false;
   private instanceId = `inst_${process.pid}_${Math.random().toString(36).substring(2, 7)}`;
 
-  // In-memory fallback
-  private memPresence = new Map<string, { data: PresencePayload; expiresAt: number }>();
-  private localBus = new EventEmitter();
-  private rateLimitCounters = new Map<string, { count: number; expiresAt: number }>();
+  // In-memory fallback (shared across instances in local testing)
+  private static sharedPresence = new Map<string, { data: PresencePayload; expiresAt: number }>();
+  private static sharedBus = new EventEmitter();
+  private static sharedRateLimit = new Map<string, { count: number; expiresAt: number }>();
 
   constructor(redisUrl?: string) {
     const url = redisUrl || process.env.REDIS_URL;
@@ -48,6 +48,10 @@ export class RedisRealtimeService {
             return Math.min(times * 200, 1000);
           },
         });
+
+        this.pubClient.on('connect', () => { this.isConnected = true; });
+        this.pubClient.on('error', () => { this.isConnected = false; });
+        this.pubClient.on('close', () => { this.isConnected = false; });
       } catch (err) {
         console.warn('[RedisRealtimeService] Redis client initialization warning:', err);
       }
@@ -56,14 +60,14 @@ export class RedisRealtimeService {
     // Periodic sweep for in-memory presence expiration
     setInterval(() => {
       const now = Date.now();
-      for (const [id, item] of this.memPresence.entries()) {
+      for (const [id, item] of RedisRealtimeService.sharedPresence.entries()) {
         if (now > item.expiresAt) {
-          this.memPresence.delete(id);
+          RedisRealtimeService.sharedPresence.delete(id);
         }
       }
-      for (const [key, item] of this.rateLimitCounters.entries()) {
+      for (const [key, item] of RedisRealtimeService.sharedRateLimit.entries()) {
         if (now > item.expiresAt) {
-          this.rateLimitCounters.delete(key);
+          RedisRealtimeService.sharedRateLimit.delete(key);
         }
       }
     }, 5000).unref();
@@ -89,6 +93,16 @@ export class RedisRealtimeService {
     return this.instanceId;
   }
 
+  get isRedisConnected(): boolean {
+    return this.isConnected;
+  }
+
+  get status(): 'connected' | 'disconnected' | 'fallback' {
+    if (this.isConnected) return 'connected';
+    if (!this.pubClient) return 'fallback';
+    return 'disconnected';
+  }
+
   // ==========================================
   // DISTRIBUTED PRESENCE (Section 10)
   // ==========================================
@@ -106,7 +120,7 @@ export class RedisRealtimeService {
       }
     }
 
-    this.memPresence.set(payload.deviceId, {
+    RedisRealtimeService.sharedPresence.set(payload.deviceId, {
       data: payload,
       expiresAt: Date.now() + ttlSeconds * 1000,
     });
@@ -123,7 +137,7 @@ export class RedisRealtimeService {
       }
     }
 
-    const item = this.memPresence.get(deviceId);
+    const item = RedisRealtimeService.sharedPresence.get(deviceId);
     if (item) {
       item.data.lastSeen = Date.now();
       item.expiresAt = Date.now() + ttlSeconds * 1000;
@@ -141,7 +155,7 @@ export class RedisRealtimeService {
       }
     }
 
-    this.memPresence.delete(deviceId);
+    RedisRealtimeService.sharedPresence.delete(deviceId);
   }
 
   async getPresence(deviceId: string): Promise<PresencePayload | null> {
@@ -156,7 +170,7 @@ export class RedisRealtimeService {
       }
     }
 
-    const item = this.memPresence.get(deviceId);
+    const item = RedisRealtimeService.sharedPresence.get(deviceId);
     if (item && Date.now() <= item.expiresAt) {
       return item.data;
     }
@@ -190,7 +204,7 @@ export class RedisRealtimeService {
 
     const now = Date.now();
     const peers: PresencePayload[] = [];
-    for (const [id, item] of this.memPresence.entries()) {
+    for (const [id, item] of RedisRealtimeService.sharedPresence.entries()) {
       if (id !== excludeDeviceId && now <= item.expiresAt && item.data.visibility !== 'off') {
         peers.push(item.data);
       }
@@ -217,7 +231,7 @@ export class RedisRealtimeService {
       }
     }
 
-    this.localBus.emit(channel, enriched);
+    RedisRealtimeService.sharedBus.emit(channel, enriched);
   }
 
   async subscribeSignaling(channel: string, onMessage: (message: any) => void): Promise<void> {
@@ -242,7 +256,7 @@ export class RedisRealtimeService {
       }
     }
 
-    this.localBus.on(channel, (data) => {
+    RedisRealtimeService.sharedBus.on(channel, (data) => {
       if (data._originInstance !== this.instanceId) {
         onMessage(data);
       }
@@ -270,9 +284,9 @@ export class RedisRealtimeService {
     }
 
     const now = Date.now();
-    const entry = this.rateLimitCounters.get(rateKey);
+    const entry = RedisRealtimeService.sharedRateLimit.get(rateKey);
     if (!entry || now > entry.expiresAt) {
-      this.rateLimitCounters.set(rateKey, { count: 1, expiresAt: now + windowSeconds * 1000 });
+      RedisRealtimeService.sharedRateLimit.set(rateKey, { count: 1, expiresAt: now + windowSeconds * 1000 });
       return { allowed: true, remaining: limit - 1 };
     }
 

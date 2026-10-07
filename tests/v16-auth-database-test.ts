@@ -31,9 +31,10 @@ async function runAuthDatabaseTest() {
 
     // 3. Register user (Section 8)
     console.log('[Step 3] Registering new user via /auth/register...');
+    const testNonce = Date.now().toString(36);
     const regPayload = {
-      username: 'jaswanth_test',
-      email: 'jaswanth@example.com',
+      username: `jaswanth_${testNonce}`,
+      email: `jaswanth_${testNonce}@example.com`,
       password: 'ProductionPassword2026!',
       displayName: 'Jaswanth Production',
     };
@@ -44,7 +45,7 @@ async function runAuthDatabaseTest() {
     });
     assert.strictEqual(regRes.status, 201);
     const regData = await regRes.json();
-    assert.strictEqual(regData.user.username, 'jaswanth_test');
+    assert.strictEqual(regData.user.username, regPayload.username);
     assert.ok(regData.accessToken);
     assert.ok(regData.refreshToken);
     console.log(`✓ User registered: ${regData.user.id}, Access Token issued: PASS`);
@@ -65,7 +66,7 @@ async function runAuthDatabaseTest() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        login: 'jaswanth@example.com',
+        login: regPayload.email,
         password: 'ProductionPassword2026!',
         deviceId: 'dev_test_mac_01',
       }),
@@ -83,7 +84,7 @@ async function runAuthDatabaseTest() {
     });
     assert.strictEqual(meRes.status, 200);
     const meData = await meRes.json();
-    assert.strictEqual(meData.user.email, 'jaswanth@example.com');
+    assert.strictEqual(meData.user.email, regPayload.email);
     assert.strictEqual(meData.preferences.default_visibility, 'EVERYONE');
     console.log('✓ Profile retrieved with default preferences: PASS');
 

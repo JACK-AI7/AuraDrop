@@ -119,28 +119,65 @@ export class BackendServer {
         return;
       }
 
-      // Health / Status (Section 11 & 12)
-      if (pathname === '/health' && req.method === 'GET') {
-        const networkInterfaces = os.networkInterfaces();
-        const lanIps: string[] = [];
-        for (const iface of Object.values(networkInterfaces)) {
-          if (iface) {
-            for (const addr of iface) {
-              if (addr.family === 'IPv4' && !addr.internal) {
-                lanIps.push(addr.address);
-              }
-            }
-          }
-        }
+      // Liveness probe (Section 47)
+      if (pathname === '/live' && req.method === 'GET') {
+        this.sendJson(res, 200, { status: 'ALIVE', uptime: process.uptime(), timestamp: Date.now() });
+        return;
+      }
 
+      // Readiness probe (Section 43 & 47): strictly fails if Neon is down in production
+      if (pathname === '/ready' && req.method === 'GET') {
+        const isProd = process.env.NODE_ENV === 'production';
+        if (isProd && !this.db.isConnectedToDb) {
+          this.sendJson(res, 503, {
+            status: 'NOT_READY',
+            service: 'AuraDrop-Backend-V17',
+            error: 'Neon PostgreSQL database is disconnected or unavailable in production',
+            database: 'disconnected',
+            timestamp: Date.now(),
+          });
+          return;
+        }
         this.sendJson(res, 200, {
-          status: 'healthy',
-          service: 'AuraDrop-Backend-V16',
-          websocket: true,
+          status: 'READY',
+          service: 'AuraDrop-Backend-V17',
+          database: this.db.isConnectedToDb ? 'connected' : 'memory_fallback',
           timestamp: Date.now(),
-          lanIps,
+        });
+        return;
+      }
+
+      // Comprehensive Health Check (Section 47)
+      if (pathname === '/health' && req.method === 'GET') {
+        const isProd = process.env.NODE_ENV === 'production';
+        const isHealthy = !isProd || this.db.isConnectedToDb;
+        const statusCode = isHealthy ? 200 : 503;
+
+        this.sendJson(res, statusCode, {
+          status: isHealthy ? 'healthy' : 'unhealthy',
+          service: 'AuraDrop-Backend-V17',
+          timestamp: Date.now(),
+          uptime: process.uptime(),
+          components: {
+            neon: {
+              status: this.db.isConnectedToDb ? 'connected' : (isProd ? 'error' : 'memory_fallback'),
+              error: this.db.lastError,
+            },
+            redis: {
+              status: this.redisService.status,
+              connected: this.redisService.isRedisConnected,
+              nodeId: this.redisService.getInstanceId(),
+            },
+            websocket: {
+              status: 'ready',
+              activeClients: this.wsGateway.getConnectedPeers().length,
+            },
+            turn: {
+              status: 'configured',
+              host: process.env.TURN_HOST || 'turn.auradrop.network',
+            },
+          },
           connectedPeers: this.wsGateway.getConnectedPeers(),
-          databaseOnline: this.db.isConnectedToDb,
         });
         return;
       }
@@ -180,6 +217,9 @@ export class BackendServer {
       // SECTION 8: AUTH REST ENDPOINTS
       // ==========================================
       if (pathname === '/auth/register' && req.method === 'POST') {
+        if (process.env.NODE_ENV === 'production' && !this.db.isConnectedToDb) {
+          return this.sendJson(res, 503, { error: 'Database service unavailable. Cannot process authentication without durable persistence.' });
+        }
         // Rate limit: 10 per minute per IP
         const rate = await this.redisService.checkRateLimit(`reg:${clientIp}`, 10, 60);
         if (!rate.allowed) {
@@ -250,6 +290,9 @@ export class BackendServer {
       }
 
       if (pathname === '/auth/login' && req.method === 'POST') {
+        if (process.env.NODE_ENV === 'production' && !this.db.isConnectedToDb) {
+          return this.sendJson(res, 503, { error: 'Database service unavailable. Cannot authenticate without durable persistence.' });
+        }
         // Rate limit: 20 per minute per IP
         const rate = await this.redisService.checkRateLimit(`login:${clientIp}`, 20, 60);
         if (!rate.allowed) {

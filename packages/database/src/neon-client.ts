@@ -201,8 +201,22 @@ export class NeonDatabaseClient {
     }
   }
 
+  public lastError: string | null = null;
+
+  private ensureDatabase(): void {
+    if (!this.isConnectedToDb && process.env.NODE_ENV === 'production') {
+      throw new Error(`[NeonDatabaseClient FATAL] Database unavailable in production: ${this.lastError || 'No connection to Neon'}`);
+    }
+  }
+
   async initialize(): Promise<void> {
     if (!this.pool) {
+      this.isConnectedToDb = false;
+      this.lastError = 'DATABASE_URL environment variable is required in production';
+      if (process.env.NODE_ENV === 'production') {
+        console.error('[NeonDatabaseClient FATAL] DATABASE_URL is not set in production. In-memory fallback is strictly disabled in production.');
+        return;
+      }
       console.log('[NeonDatabaseClient] No DATABASE_URL provided. Running in high-performance memory store mode.');
       return;
     }
@@ -210,6 +224,7 @@ export class NeonDatabaseClient {
     try {
       const client = await this.pool.connect();
       this.isConnectedToDb = true;
+      this.lastError = null;
       console.log('[NeonDatabaseClient] Connected to Neon PostgreSQL database.');
 
       // Check or run migrations
@@ -237,8 +252,13 @@ export class NeonDatabaseClient {
         client.release();
       }
     } catch (err: any) {
-      console.warn(`[NeonDatabaseClient] PostgreSQL connection failed: ${err.message}. Falling back to in-memory store.`);
       this.isConnectedToDb = false;
+      this.lastError = err.message;
+      if (process.env.NODE_ENV === 'production') {
+        console.error(`[NeonDatabaseClient FATAL] Production Neon connection failed: ${err.message}. Refusing in-memory fallback in production.`);
+        return;
+      }
+      console.warn(`[NeonDatabaseClient] PostgreSQL connection failed: ${err.message}. Falling back to in-memory store.`);
     }
   }
 
@@ -262,6 +282,7 @@ export class NeonDatabaseClient {
       username: string;
       avatarUrl?: string;
     }): Promise<UserRow> => {
+      this.ensureDatabase();
       const emailNormalized = user.email.trim().toLowerCase();
       const now = new Date();
       const row: UserRow = {
@@ -303,6 +324,7 @@ export class NeonDatabaseClient {
     },
 
     findById: async (id: string): Promise<UserRow | null> => {
+      this.ensureDatabase();
       if (this.isConnectedToDb && this.pool) {
         const res = await this.pool.query('SELECT * FROM users WHERE id = $1 AND deleted_at IS NULL LIMIT 1;', [id]);
         return res.rows[0] || null;
@@ -311,6 +333,7 @@ export class NeonDatabaseClient {
     },
 
     findByEmail: async (email: string): Promise<UserRow | null> => {
+      this.ensureDatabase();
       const norm = email.trim().toLowerCase();
       if (this.isConnectedToDb && this.pool) {
         const res = await this.pool.query('SELECT * FROM users WHERE email_normalized = $1 AND deleted_at IS NULL LIMIT 1;', [norm]);
@@ -323,6 +346,7 @@ export class NeonDatabaseClient {
     },
 
     findByUsername: async (username: string): Promise<UserRow | null> => {
+      this.ensureDatabase();
       const norm = username.trim().toLowerCase();
       if (this.isConnectedToDb && this.pool) {
         const res = await this.pool.query('SELECT * FROM users WHERE username = $1 AND deleted_at IS NULL LIMIT 1;', [norm]);
@@ -335,6 +359,7 @@ export class NeonDatabaseClient {
     },
 
     updateLastLogin: async (id: string): Promise<void> => {
+      this.ensureDatabase();
       const now = new Date();
       if (this.isConnectedToDb && this.pool) {
         await this.pool.query('UPDATE users SET last_login_at = $1, updated_at = $1 WHERE id = $2;', [now, id]);
