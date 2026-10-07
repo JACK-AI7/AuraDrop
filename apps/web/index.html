@@ -2,372 +2,45 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AuraDrop — Next-Gen Desktop P2P Sharing Platform</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>AuraDrop — Minimal P2P Sharing Platform</title>
   <meta name="description" content="AuraDrop Desktop Web App. High-speed local peer-to-peer file transfer directly between browser, desktop, and Android devices.">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%230A84FF'><path d='M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14.5v-5H8l4-4 4 4h-3v5h-2z'/></svg>">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%230A84FF'><circle cx='12' cy='12' r='3'/><circle cx='12' cy='12' r='7'/><circle cx='12' cy='12' r='10'/></svg>">
   <style>
-    :root {
-      --bg: #000000;
-      --card-bg: #121214;
-      --card-border: #242428;
-      --primary: #0A84FF;
-      --primary-hover: #0070E0;
-      --text: #FFFFFF;
-      --text-muted: #8E8E93;
-      --pill-decline: #3A3A3C;
-      --radius: 16px;
-      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: var(--font); }
-    body { background: var(--bg); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; overflow-x: hidden; }
-
-    header {
-      display: flex; justify-content: space-between; align-items: center;
-      padding: 16px 36px; border-bottom: 1px solid var(--card-border);
-      background: rgba(0, 0, 0, 0.85); backdrop-filter: blur(20px); position: sticky; top: 0; z-index: 100;
+    html, body {
+      background-color: #000000;
+      color: #FFFFFF;
+      min-height: 100vh;
+      overflow-x: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     }
-    .brand { display: flex; align-items: center; gap: 12px; font-size: 19px; font-weight: 800; letter-spacing: -0.5px; }
-    .brand-badge { background: #1C1C1E; border: 1px solid var(--card-border); font-size: 11px; padding: 3px 8px; border-radius: 8px; color: var(--text-muted); }
-    .header-actions { display: flex; align-items: center; gap: 12px; }
-    .btn {
-      background: var(--card-bg); border: 1px solid var(--card-border); color: var(--text);
-      padding: 8px 18px; border-radius: 20px; font-size: 13px; font-weight: 600; cursor: pointer;
-      text-decoration: none; display: inline-flex; align-items: center; gap: 8px; transition: all 0.2s ease;
+    ::selection {
+      background: #0A84FF;
+      color: #FFFFFF;
     }
-    .btn:hover { border-color: var(--primary); color: #FFF; }
-    .btn-primary { background: var(--primary); border-color: var(--primary); color: #FFF; }
-    .btn-primary:hover { background: var(--primary-hover); }
-
-    main { max-width: 1240px; margin: 0 auto; width: 100%; padding: 36px 24px; display: grid; grid-template-columns: 1fr 420px; gap: 32px; flex: 1; }
-    @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
-
-    .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 24px; padding: 28px; position: relative; }
-    .card-title { font-size: 16px; font-weight: 700; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }
-
-    /* Interactive 3D Canvas Globe */
-    .globe-container {
-      height: 340px; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative;
-      border: 1px dashed var(--card-border); border-radius: 20px; background: #08080A; overflow: hidden;
+    /* Hide scrollbars for clean minimal aesthetic */
+    ::-webkit-scrollbar {
+      width: 4px;
+      height: 4px;
     }
-    canvas#globeCanvas { width: 100%; height: 280px; cursor: grab; }
-    canvas#globeCanvas:active { cursor: grabbing; }
-    .globe-instruction { font-size: 11px; color: var(--text-muted); margin-bottom: 12px; text-align: center; }
-
-    /* Peer List Chips */
-    .peer-chips { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
-    .peer-chip {
-      background: #18181C; border: 1px solid var(--card-border); border-radius: 14px; padding: 8px 14px;
-      display: flex; align-items: center; gap: 10px; cursor: pointer; transition: all 0.2s ease;
+    ::-webkit-scrollbar-track {
+      background: #000000;
     }
-    .peer-chip:hover, .peer-chip.selected { border-color: var(--primary); background: rgba(10, 132, 255, 0.1); }
-    .peer-avatar { width: 28px; height: 28px; border-radius: 50%; background: #2C2C2E; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; }
-
-    /* Dropzone */
-    .dropzone {
-      border: 2px dashed var(--card-border); border-radius: 20px; padding: 36px 20px; text-align: center;
-      cursor: pointer; transition: all 0.2s ease; background: #09090C; margin-top: 20px;
+    ::-webkit-scrollbar-thumb {
+      background: #242428;
+      border-radius: 4px;
     }
-    .dropzone:hover { border-color: var(--primary); background: rgba(10, 132, 255, 0.03); }
-    .dropzone-icon { font-size: 32px; margin-bottom: 8px; color: var(--primary); }
-    .dropzone-title { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
-    .dropzone-sub { font-size: 12px; color: var(--text-muted); }
-
-    /* Staged files tray */
-    .staged-list { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
-    .staged-item {
-      background: #16161A; border: 1px solid var(--card-border); border-radius: 12px; padding: 10px 14px;
-      display: flex; justify-content: space-between; align-items: center; font-size: 13px;
-    }
-
-    /* Transfer Active Modal Preview (Image 1 & Image 3) */
-    .airdrop-card {
-      background: #161618; border: 1px solid #2C2C2E; border-radius: 18px; padding: 18px;
-      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6); margin-top: 16px;
-    }
-    .airdrop-header { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
-    .airdrop-avatar { width: 44px; height: 44px; border-radius: 50%; background: #0A84FF; display: flex; align-items: center; justify-content: center; }
-    .airdrop-info { flex: 1; }
-    .airdrop-app { font-size: 14px; font-weight: 700; color: #FFF; }
-    .airdrop-desc { font-size: 12px; color: #8E8E93; margin-top: 2px; }
-    .airdrop-thumb { width: 50px; height: 50px; border-radius: 12px; background: #252528; border: 1px solid #333336; display: flex; align-items: center; justify-content: center; font-size: 20px; }
-    .airdrop-buttons { display: flex; gap: 10px; }
-    .pill-btn { flex: 1; height: 42px; border-radius: 21px; border: none; font-size: 14px; font-weight: 700; cursor: pointer; color: #FFF; }
-    .pill-decline { background: var(--pill-decline); }
-    .pill-accept { background: var(--primary); }
-
-    /* Transfer progress gauge */
-    .transfer-box {
-      background: #16161A; border: 1px solid var(--card-border); border-radius: 20px; padding: 20px; margin-top: 16px; text-align: center;
-    }
-    .progress-bar-container { background: #242428; height: 8px; border-radius: 4px; overflow: hidden; margin: 14px 0; }
-    .progress-bar-fill { background: var(--primary); height: 100%; width: 0%; transition: width 0.3s ease; }
-
-    footer { padding: 24px 36px; border-top: 1px solid var(--card-border); text-align: center; font-size: 12px; color: var(--text-muted); }
   </style>
 </head>
 <body>
-  <header>
-    <div class="brand">
-      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#0A84FF" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="10"/></svg>
-      AuraDrop Desktop
-      <span class="brand-badge">v11 Web</span>
-    </div>
-    <div class="header-actions">
-      <a href="https://github.com/JACK-AI7/AuraDrop" target="_blank" class="btn">GitHub</a>
-      <a href="https://github.com/JACK-AI7/AuraDrop/releases" target="_blank" class="btn btn-primary">Download Android APK</a>
-    </div>
-  </header>
-
-  <main>
-    <!-- Left Column: 3D Globe + Dropzone -->
-    <div style="display: flex; flex-direction: column; gap: 24px;">
-      <div class="card">
-        <div class="card-title">
-          <span>Proximity Globe (Active Discovered Nodes)</span>
-          <span style="font-size: 12px; color: #10B981;">● WebRTC P2P Ready</span>
-        </div>
-        <div class="globe-container">
-          <canvas id="globeCanvas"></canvas>
-          <div class="globe-instruction">Drag globe to rotate • Tap device node to select recipient</div>
-        </div>
-
-        <div style="margin-top: 14px;">
-          <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 6px;">Nearby Peers:</div>
-          <div class="peer-chips" id="peerChips">
-            <div class="peer-chip selected" onclick="selectPeer('Android Phone (Local Wi-Fi)')">
-              <div class="peer-avatar">A</div>
-              <div>
-                <div style="font-size: 13px; font-weight: 700;">Android Phone (Nearby)</div>
-                <div style="font-size: 11px; color: var(--text-muted);">Direct TCP / Wi-Fi • 100 MB/s-class</div>
-              </div>
-            </div>
-            <div class="peer-chip" onclick="selectPeer('MacBook Pro')">
-              <div class="peer-avatar">M</div>
-              <div>
-                <div style="font-size: 13px; font-weight: 700;">MacBook Pro</div>
-                <div style="font-size: 11px; color: var(--text-muted);">Local Subnet</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- File Dropzone -->
-        <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
-          <div class="dropzone-icon">📁</div>
-          <div class="dropzone-title">Drop files here or click to browse</div>
-          <div class="dropzone-sub">Files > 1 GB supported via 256 KB–4 MB adaptive binary streaming</div>
-          <input type="file" id="fileInput" multiple style="display: none;">
-        </div>
-
-        <div class="staged-list" id="stagedList"></div>
-      </div>
-    </div>
-
-    <!-- Right Column: AirDrop Protocol Card & Real Transfer Stream -->
-    <div style="display: flex; flex-direction: column; gap: 24px;">
-      <div class="card">
-        <div class="card-title">System-Level Share Protocol</div>
-        <p style="font-size: 13px; color: var(--text-muted); line-height: 1.5;">
-          Incoming share requests display as an exact top floating Heads-Up card with real sender identity, exact file metadata, and one-tap Decline / Accept actions.
-        </p>
-
-        <!-- AirDrop Card Reference -->
-        <div class="airdrop-card">
-          <div class="airdrop-header">
-            <div class="airdrop-avatar">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.5"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="10"/></svg>
-            </div>
-            <div class="airdrop-info">
-              <div class="airdrop-app">AuraDrop</div>
-              <div class="airdrop-desc" id="sampleSender">Jaswanth would like to share 2 photos • 28.4 MB</div>
-            </div>
-            <div class="airdrop-thumb">🖼️</div>
-          </div>
-          <div class="airdrop-buttons">
-            <button class="pill-btn pill-decline" onclick="handleDecline()">Decline</button>
-            <button class="pill-btn pill-accept" onclick="startSimulatedTransfer()">Accept</button>
-          </div>
-        </div>
-
-        <!-- Live Transfer Stream Status -->
-        <div class="transfer-box" id="transferBox" style="display: none;">
-          <div style="display: flex; justify-content: space-between; font-size: 13px; font-weight: 700;">
-            <span id="transferFileName">Sending files...</span>
-            <span style="color: #10B981;" id="transferSpeed">52.4 MB/s</span>
-          </div>
-          <div class="progress-bar-container">
-            <div class="progress-bar-fill" id="progressFill"></div>
-          </div>
-          <div style="display: flex; justify-content: space-between; font-size: 12px; color: var(--text-muted);">
-            <span id="transferredBytesLabel">0 MB / 100 MB</span>
-            <span id="transferEta">ETA: 2s</span>
-          </div>
-        </div>
-
-        <div style="margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--card-border);">
-          <div style="font-size: 13px; font-weight: 700; margin-bottom: 8px;">Hardware & Protocol Specs</div>
-          <ul style="font-size: 12px; color: var(--text-muted); line-height: 1.8; padding-left: 18px;">
-            <li>Framing: <code>0x41555241</code> (AURA), Version 1</li>
-            <li>Transport: Direct TCP Socket + WebRTC DataChannel</li>
-            <li>Integrity: Incremental Single-Pass SHA-256</li>
-            <li>Zero Cloud: Direct device-to-device transport</li>
-          </ul>
-        </div>
-      </div>
-    </div>
-  </main>
-
-  <footer>
-    AuraDrop Desktop Web Suite • Dedicated Vercel Web Build
-  </footer>
-
-  <script>
-    // 3D Canvas Globe Implementation
-    const canvas = document.getElementById('globeCanvas');
-    const ctx = canvas.getContext('2d');
-    let width, height, radius;
-    let yaw = 0, pitch = 0.2;
-    let isDragging = false, lastMouseX = 0, lastMouseY = 0;
-
-    function resize() {
-      width = canvas.width = canvas.parentElement.clientWidth;
-      height = canvas.height = canvas.parentElement.clientHeight - 40;
-      radius = Math.min(width, height) * 0.42;
-    }
-    window.addEventListener('resize', resize);
-    resize();
-
-    // Generate 3D sphere points
-    const points = [];
-    for (let i = 0; i < 400; i++) {
-      const u = Math.random();
-      const v = Math.random();
-      const theta = u * 2.0 * Math.PI;
-      const phi = Math.acos(2.0 * v - 1.0);
-      points.push({
-        x: Math.sin(phi) * Math.cos(theta),
-        y: Math.cos(phi),
-        z: Math.sin(phi) * Math.sin(theta)
-      });
-    }
-
-    function renderGlobe() {
-      ctx.clearRect(0, 0, width, height);
-      const cx = width / 2;
-      const cy = height / 2;
-
-      // Draw points
-      for (const p of points) {
-        // Rotate Y (yaw)
-        const x1 = p.x * Math.cos(yaw) + p.z * Math.sin(yaw);
-        const z1 = -p.x * Math.sin(yaw) + p.z * Math.cos(yaw);
-        // Rotate X (pitch)
-        const y2 = p.y * Math.cos(pitch) - z1 * Math.sin(pitch);
-        const z2 = p.y * Math.sin(pitch) + z1 * Math.cos(pitch);
-
-        const screenX = cx + x1 * radius;
-        const screenY = cy + y2 * radius;
-
-        if (z2 > 0) {
-          ctx.beginPath();
-          ctx.arc(screenX, screenY, 1.2 + z2 * 1.3, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(255, 255, 255, ${0.3 + z2 * 0.7})`;
-          ctx.fill();
-        } else {
-          ctx.beginPath();
-          ctx.arc(screenX, screenY, 0.9, 0, Math.PI * 2);
-          ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
-          ctx.fill();
-        }
-      }
-
-      // Draw YOU node at top
-      ctx.beginPath();
-      ctx.arc(cx, cy - radius * 0.5, 6, 0, Math.PI * 2);
-      ctx.strokeStyle = '#0A84FF';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.arc(cx, cy - radius * 0.5, 3, 0, Math.PI * 2);
-      ctx.fillStyle = '#0A84FF';
-      ctx.fill();
-
-      ctx.fillStyle = '#FFFFFF';
-      ctx.font = '10px sans-serif';
-      ctx.fillText('YOU', cx + 10, cy - radius * 0.5 + 4);
-
-      if (!isDragging) {
-        yaw += 0.003;
-      }
-      requestAnimationFrame(renderGlobe);
-    }
-    requestAnimationFrame(renderGlobe);
-
-    // Mouse drag handlers
-    canvas.addEventListener('mousedown', (e) => {
-      isDragging = true;
-      lastMouseX = e.clientX;
-      lastMouseY = e.clientY;
-    });
-    window.addEventListener('mousemove', (e) => {
-      if (!isDragging) return;
-      const dx = e.clientX - lastMouseX;
-      const dy = e.clientY - lastMouseY;
-      yaw += dx * 0.008;
-      pitch = Math.max(-1.0, Math.min(1.0, pitch + dy * 0.008));
-      lastMouseX = e.clientX;
-      lastMouseY = e.clientY;
-    });
-    window.addEventListener('mouseup', () => { isDragging = false; });
-
-    // Staging and transfer mock
-    const fileInput = document.getElementById('fileInput');
-    const stagedList = document.getElementById('stagedList');
-
-    fileInput.addEventListener('change', (e) => {
-      const files = e.target.files;
-      if (!files.length) return;
-      for (const f of files) {
-        const item = document.createElement('div');
-        item.className = 'staged-item';
-        item.innerHTML = `
-          <span>${f.name} • ${(f.size / (1024*1024)).toFixed(1)} MB</span>
-          <button style="background:none;border:none;color:#F87171;cursor:pointer;" onclick="this.parentElement.remove()">✕</button>
-        `;
-        stagedList.appendChild(item);
-      }
-    });
-
-    function selectPeer(name) {
-      document.getElementById('sampleSender').innerText = name + ' is connected • Ready for transfer';
-    }
-
-    function handleDecline() {
-      alert('Share request declined.');
-    }
-
-    function startSimulatedTransfer() {
-      const box = document.getElementById('transferBox');
-      const fill = document.getElementById('progressFill');
-      const speed = document.getElementById('transferSpeed');
-      const bytes = document.getElementById('transferredBytesLabel');
-      box.style.display = 'block';
-
-      let pct = 0;
-      const timer = setInterval(() => {
-        pct += 10;
-        fill.style.width = pct + '%';
-        bytes.innerText = (pct) + ' MB / 100 MB';
-        speed.innerText = (48 + Math.random() * 8).toFixed(1) + ' MB/s';
-        if (pct >= 100) {
-          clearInterval(timer);
-          speed.innerText = 'Completed (SHA-256 Verified)';
-          setTimeout(() => { alert('Transfer complete! 100 MB written to disk with verified checksum.'); }, 400);
-        }
-      }, 180);
-    }
-  </script>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
 </body>
 </html>
