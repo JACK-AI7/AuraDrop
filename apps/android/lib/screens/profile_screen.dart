@@ -307,17 +307,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
             height: 52,
             child: ElevatedButton.icon(
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF0A84FF),
-                foregroundColor: Colors.white,
-                elevation: 4,
-                shadowColor: const Color(0xFF0A84FF).withValues(alpha: 0.4),
+                backgroundColor: theme.actionBackground,
+                foregroundColor: theme.actionText,
+                elevation: 2,
+                shadowColor: Colors.black.withValues(alpha: 0.3),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
               ),
               onPressed: _saveProfile,
-              icon: const Icon(Icons.check_circle_outline_rounded, size: 20, color: Colors.white),
-              label: const Text(
+              icon: Icon(Icons.check_circle_outline_rounded, size: 20, color: theme.actionText),
+              label: Text(
                 'Save Profile',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white),
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: theme.actionText),
               ),
             ),
           ),

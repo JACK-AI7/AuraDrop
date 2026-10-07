@@ -408,8 +408,8 @@ class _InAppNotificationHostState extends State<InAppNotificationHost>
                             item.onAccept?.call();
                           },
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF0A84FF),
-                            foregroundColor: Colors.white,
+                            backgroundColor: theme.isDark ? const Color(0xFF0B2B4C) : const Color(0xFF007AFF),
+                            foregroundColor: theme.isDark ? const Color(0xFF2997FF) : Colors.white,
                             elevation: 0,
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(19),

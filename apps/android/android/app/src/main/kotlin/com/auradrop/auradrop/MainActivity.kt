@@ -141,6 +141,7 @@ class MainActivity : FlutterActivity() {
     private var isAppInForeground = true
 
     private var multicastLock: WifiManager.MulticastLock? = null
+    private var wakeLock: android.os.PowerManager.WakeLock? = null
     private var isDiscovering = false
     private var discoveryJob: Job? = null
     private var serverJob: Job? = null
@@ -216,6 +217,11 @@ class MainActivity : FlutterActivity() {
     override fun onResume() {
         super.onResume()
         isAppInForeground = true
+        if (!AuraOverlayManager.getInstance(this).canDrawOverlays()) {
+            mainHandler.postDelayed({
+                AuraOverlayManager.getInstance(this).requestOverlayPermission(this)
+            }, 1200)
+        }
     }
 
     override fun onPause() {
@@ -620,6 +626,14 @@ class MainActivity : FlutterActivity() {
             acquire()
         }
 
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+            wakeLock = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "AuraDrop::DiscoveryWakeLock").apply {
+                setReferenceCounted(false)
+                acquire(60 * 60 * 1000L) // 1 hour standby wake lock
+            }
+        } catch (e: Exception) {}
+
         discoveryJob = scope.launch {
             launch { runUdpListener() }
             launch { runUdpBroadcaster() }
@@ -635,6 +649,12 @@ class MainActivity : FlutterActivity() {
             if (it.isHeld) it.release()
         }
         multicastLock = null
+        wakeLock?.let {
+            if (it.isHeld) {
+                try { it.release() } catch (e: Exception) {}
+            }
+        }
+        wakeLock = null
     }
 
     private suspend fun runPeerPruner() = withContext(Dispatchers.IO) {
@@ -724,8 +744,13 @@ class MainActivity : FlutterActivity() {
                             connectionState = "DISCOVERED",
                             lastSeen = System.currentTimeMillis()
                         )
-                        PeerRegistry.updateOrAdd(peer)
+                        val isNew = PeerRegistry.updateOrAdd(peer)
                         sendEvent("peerDiscovered", mapOf("peer" to peer.toMap()))
+                        if (isNew && !isAppInForeground) {
+                            mainHandler.post {
+                                AuraOverlayManager.getInstance(this@MainActivity).showNameDropOverlay(resolvedName)
+                            }
+                        }
                     }
                 } catch (e: Exception) {
                     // Ignore malformed beacon
@@ -2028,7 +2053,12 @@ class MainActivity : FlutterActivity() {
         } else {
             senderName
         }
-        val fileSummary = if (totalFiles > 1) "$firstFileName + ${totalFiles - 1} more" else firstFileName
+        val isPhoto = firstFileName.matches(Regex(".*\\.(jpg|jpeg|png|heic|webp|gif)$", RegexOption.IGNORE_CASE))
+        val fileSummary = if (totalFiles > 1) {
+            if (isPhoto) "$totalFiles photos" else "$totalFiles files"
+        } else {
+            if (isPhoto) "1 photo" else firstFileName
+        }
 
         // Display directly on mobile screen over other apps & home screen
         overlayMgr.showTransferRequestOverlay(

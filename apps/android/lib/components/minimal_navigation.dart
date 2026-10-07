@@ -83,11 +83,11 @@ class MinimalNavigationBar extends StatelessWidget {
   }) {
     final isSelected = currentIndex == index;
     final itemIconColor = isSelected
-        ? const Color(0xFF0A84FF)
-        : (theme.isDark ? const Color(0xFFE5E5EA) : const Color(0xFF48484A));
+        ? (theme.isDark ? const Color(0xFFFFFFFF) : const Color(0xFF000000))
+        : (theme.isDark ? const Color(0xFFA1A1AA) : const Color(0xFF71717A));
     final itemTextColor = isSelected
-        ? (theme.isDark ? Colors.white : Colors.black)
-        : (theme.isDark ? const Color(0xFFD1D1D6) : const Color(0xFF636366));
+        ? (theme.isDark ? const Color(0xFFFFFFFF) : const Color(0xFF000000))
+        : (theme.isDark ? const Color(0xFFA1A1AA) : const Color(0xFF71717A));
 
     return GestureDetector(
       onTap: () {
@@ -102,7 +102,7 @@ class MinimalNavigationBar extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
           color: isSelected
-              ? (theme.isDark ? const Color(0xFF2C2C2E) : const Color(0xFFF2F2F7))
+              ? (theme.isDark ? const Color(0xFF27272A) : const Color(0xFFF4F4F5))
               : Colors.transparent,
           borderRadius: BorderRadius.circular(18),
         ),
@@ -125,15 +125,15 @@ class MinimalNavigationBar extends StatelessWidget {
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF0A84FF),
+                        color: theme.isDark ? const Color(0xFFFFFFFF) : const Color(0xFF000000),
                         borderRadius: BorderRadius.circular(8),
                       ),
                       constraints: const BoxConstraints(minWidth: 14, minHeight: 14),
                       child: Text(
                         '$badgeCount',
                         textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          color: Colors.white,
+                        style: TextStyle(
+                          color: theme.isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
                           fontSize: 9,
                           fontWeight: FontWeight.w800,
                         ),
@@ -158,7 +158,9 @@ class MinimalNavigationBar extends StatelessWidget {
               width: isSelected ? 16 : 0,
               height: 2.5,
               decoration: BoxDecoration(
-                color: isSelected ? const Color(0xFF0A84FF) : Colors.transparent,
+                color: isSelected
+                    ? (theme.isDark ? const Color(0xFFFFFFFF) : const Color(0xFF000000))
+                    : Colors.transparent,
                 borderRadius: BorderRadius.circular(1.5),
               ),
             ),

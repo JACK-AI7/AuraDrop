@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="44dp"
+    android:height="44dp"
+    android:viewportWidth="44"
+    android:viewportHeight="44">
+    <!-- Concentric electric blue arcs matching Apple AirDrop exactly -->
+    <!-- Outer arc -->
+    <path
+        android:strokeColor="#00A3FF"
+        android:strokeWidth="3.2"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M8,22 A14,14 0 0,1 36,22" />
+    <!-- Middle arc -->
+    <path
+        android:strokeColor="#00A3FF"
+        android:strokeWidth="3.2"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M12,23 A10,10 0 0,1 32,23" />
+    <!-- Inner arc -->
+    <path
+        android:strokeColor="#00A3FF"
+        android:strokeWidth="3.2"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M16,24 A6,6 0 0,1 28,24" />
+    <!-- Center node -->
+    <path
+        android:fillColor="#00A3FF"
+        android:pathData="M22,25m-2.2,0a2.2,2.2 0,1,1 4.4,0a2.2,2.2 0,1,1 -4.4,0" />
+</vector>
