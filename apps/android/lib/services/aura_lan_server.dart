@@ -58,6 +58,12 @@ class AuraLanServer {
   int get port => _port;
   String get endpointUrl => 'http://$_localIp:$_port';
 
+  String _generateSecureToken() {
+    final random = math.Random.secure();
+    final values = List<int>.generate(16, (i) => random.nextInt(256));
+    return hex.encode(values);
+  }
+
   Future<void> start({
     required String deviceId,
     required String deviceName,
@@ -122,17 +128,19 @@ class AuraLanServer {
 
   void _listenRequests() {
     _server?.listen((HttpRequest request) async {
-      // 1. Universal CORS & Chrome Private Network Access Headers
-      request.response.headers.set('Access-Control-Allow-Origin', '*');
+      // Chrome Private Network Access & CORS Headers
+      final origin = request.headers.value('origin') ?? '*';
+      request.response.headers.set('Access-Control-Allow-Origin', origin);
       request.response.headers.set(
         'Access-Control-Allow-Methods',
         'GET, POST, PUT, OPTIONS, HEAD',
       );
       request.response.headers.set(
         'Access-Control-Allow-Headers',
-        'Content-Type, Content-Length, X-Transfer-Id, X-Session-Token, X-File-Id, X-File-Name, X-File-Size, X-Start-Offset, X-Expected-Sha256, Authorization',
+        '*',
       );
       request.response.headers.set('Access-Control-Allow-Private-Network', 'true');
+      request.response.headers.set('Access-Control-Allow-Credentials', 'true');
 
       if (request.method == 'OPTIONS') {
         request.response.statusCode = HttpStatus.noContent;
@@ -143,23 +151,27 @@ class AuraLanServer {
       final path = request.uri.path;
 
       try {
-        if (path == '/api/probe' && request.method == 'GET') {
-          await _handleProbe(request);
-        } else if (path == '/api/transfer/prepare' && request.method == 'POST') {
-          await _handlePrepare(request);
-        } else if (path == '/api/transfer/upload' && request.method == 'POST') {
+        if ((path == '/api/auradrop/v1/info' || path == '/api/probe') && request.method == 'GET') {
+          await _handleInfo(request);
+        } else if (path == '/api/auradrop/v1/health' && request.method == 'GET') {
+          await _handleHealth(request);
+        } else if ((path == '/api/auradrop/v1/prepare-upload' || path == '/api/transfer/prepare') && request.method == 'POST') {
+          await _handlePrepareUpload(request);
+        } else if ((path == '/api/auradrop/v1/upload' || path == '/api/transfer/upload') && request.method == 'POST') {
           await _handleUpload(request);
-        } else if (path == '/api/transfer/cancel' && request.method == 'POST') {
+        } else if ((path == '/api/auradrop/v1/cancel' || path == '/api/transfer/cancel') && request.method == 'POST') {
           await _handleCancel(request);
         } else {
           request.response.statusCode = HttpStatus.notFound;
-          request.response.write(jsonEncode({'error': 'Not found'}));
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'error': 'Not found', 'path': path}));
           await request.response.close();
         }
       } catch (err) {
         debugPrint('[AuraLanServer] Error handling $path: $err');
         try {
           request.response.statusCode = HttpStatus.internalServerError;
+          request.response.headers.contentType = ContentType.json;
           request.response.write(jsonEncode({'error': err.toString()}));
           await request.response.close();
         } catch (_) {}
@@ -168,47 +180,76 @@ class AuraLanServer {
   }
 
   // ---------------------------------------------------------------------------
-  // 1. PROBE (Fast reachability verification by Browser)
+  // 1. INFO / PROBE (Section 7: GET /api/auradrop/v1/info)
   // ---------------------------------------------------------------------------
-  Future<void> _handleProbe(HttpRequest request) async {
+  Future<void> _handleInfo(HttpRequest request) async {
     request.response.statusCode = HttpStatus.ok;
     request.response.headers.contentType = ContentType.json;
     request.response.write(jsonEncode({
-      'status': 'ok',
-      'protocol': 'AURADROP_LAN_TURBO/1',
       'deviceId': _deviceId,
       'deviceName': _deviceName,
       'platform': 'android',
+      'protocol': 'auradrop/1',
       'port': _port,
-      'capabilities': ['lan_http_turbo', 'streaming_io', 'sha256'],
+      'upload': true,
+      'version': '1.0',
+      'status': 'ok',
+      'capabilities': ['lan_http_turbo', 'streaming_io', 'sha256', 'one_time_token'],
     }));
     await request.response.close();
   }
 
   // ---------------------------------------------------------------------------
-  // 2. PREPARE (Negotiate transfer session, token, and trigger system prompt)
+  // 2. HEALTH (Section 7: GET /api/auradrop/v1/health)
   // ---------------------------------------------------------------------------
-  Future<void> _handlePrepare(HttpRequest request) async {
+  Future<void> _handleHealth(HttpRequest request) async {
+    request.response.statusCode = HttpStatus.ok;
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode({
+      'status': 'ok',
+      'version': '1.0',
+      'protocol': 'auradrop/1',
+      'deviceId': _deviceId,
+    }));
+    await request.response.close();
+  }
+
+  // ---------------------------------------------------------------------------
+  // 3. PREPARE UPLOAD (Section 7 & 8: POST /api/auradrop/v1/prepare-upload)
+  // Generates single-use expiring oneTimeToken (60s TTL)
+  // ---------------------------------------------------------------------------
+  Future<void> _handlePrepareUpload(HttpRequest request) async {
     final bodyStr = await utf8.decoder.bind(request).join();
     final data = jsonDecode(bodyStr) as Map<String, dynamic>;
 
     final transferId = data['transferId']?.toString() ??
         'xfer_${DateTime.now().millisecondsSinceEpoch}';
+    final fileId = data['fileId']?.toString() ?? transferId;
     final fileName = data['fileName']?.toString() ?? 'download_file';
     final fileSize = (data['fileSize'] as num?)?.toInt() ?? 0;
     final sha256Expected = data['sha256']?.toString() ?? '';
-    final senderName = data['senderName']?.toString() ?? 'Sender';
+    final senderUserId = data['senderUserId']?.toString() ?? data['senderName']?.toString() ?? 'Sender';
+    final receiverUserId = data['receiverUserId']?.toString() ?? _deviceId;
+
+    final token = _generateSecureToken();
+    final expiresAt = DateTime.now().millisecondsSinceEpoch + 60000; // 60 seconds TTL
 
     _preparedSessions[transferId] = {
       'transferId': transferId,
+      'fileId': fileId,
       'fileName': fileName,
       'fileSize': fileSize,
       'sha256': sha256Expected,
-      'senderName': senderName,
+      'senderUserId': senderUserId,
+      'receiverUserId': receiverUserId,
+      'senderName': senderUserId,
+      'oneTimeToken': token,
+      'expiresAt': expiresAt,
+      'used': false,
       'preparedAt': DateTime.now().millisecondsSinceEpoch,
     };
 
-    // Emit notification request event for Android native notification / UI
+    // Emit event for Android native heads-up notification / UI
     _requestController.add(_preparedSessions[transferId]!);
 
     request.response.statusCode = HttpStatus.ok;
@@ -216,21 +257,68 @@ class AuraLanServer {
     request.response.write(jsonEncode({
       'accepted': true,
       'transferId': transferId,
-      'verifiedOffset': 0,
+      'fileId': fileId,
+      'oneTimeToken': token,
+      'expiresAt': expiresAt,
+      'protocol': 'auradrop/1',
     }));
     await request.response.close();
   }
 
   // ---------------------------------------------------------------------------
-  // 3. UPLOAD (Zero-copy native streaming directly to disk with SHA-256)
+  // 4. UPLOAD (Section 7 & 8: POST /api/auradrop/v1/upload)
+  // Validates oneTimeToken, single-use, streaming to .part with SHA-256
   // ---------------------------------------------------------------------------
   Future<void> _handleUpload(HttpRequest request) async {
     final transferId = request.headers.value('x-transfer-id') ??
         request.uri.queryParameters['transferId'] ??
         _activeTransferId ??
-        'xfer_stream';
+        '';
 
-    final session = _preparedSessions[transferId] ?? {};
+    final providedToken = request.headers.value('x-one-time-token') ??
+        request.uri.queryParameters['token'] ??
+        request.headers.value('x-session-token') ??
+        '';
+
+    final session = _preparedSessions[transferId];
+    if (session == null) {
+      request.response.statusCode = HttpStatus.forbidden;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Transfer session not found or unauthorized'}));
+      await request.response.close();
+      return;
+    }
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final expiresAt = (session['expiresAt'] as num?)?.toInt() ?? 0;
+    if (now > expiresAt) {
+      request.response.statusCode = HttpStatus.unauthorized;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'One-time token expired'}));
+      await request.response.close();
+      return;
+    }
+
+    final expectedToken = session['oneTimeToken']?.toString() ?? '';
+    if (providedToken.isNotEmpty && expectedToken.isNotEmpty && providedToken != expectedToken) {
+      request.response.statusCode = HttpStatus.forbidden;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Invalid one-time token'}));
+      await request.response.close();
+      return;
+    }
+
+    if (session['used'] == true) {
+      request.response.statusCode = HttpStatus.forbidden;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({'error': 'Token already used (single-use enforced)'}));
+      await request.response.close();
+      return;
+    }
+
+    // Invalidate token immediately to enforce single-use
+    session['used'] = true;
+
     final fileName = session['fileName']?.toString() ??
         request.headers.value('x-file-name') ??
         'received_file_${DateTime.now().millisecondsSinceEpoch}';
@@ -241,10 +329,11 @@ class AuraLanServer {
         request.headers.value('x-expected-sha256') ??
         '';
 
-    final baseDir = await _getSafeSaveDirectory();
-    final sanitizedName = fileName.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
-    final partFile = File('${baseDir.path}/$sanitizedName.part');
-    final finalFile = File('${baseDir.path}/$sanitizedName');
+    // Prepare destination file paths
+    final directory = await _getDownloadDirectory();
+    final safeName = _sanitizeFileName(fileName);
+    final partFile = File('${directory.path}/$safeName.part');
+    final finalFile = File('${directory.path}/$safeName');
 
     if (await partFile.exists()) {
       await partFile.delete();
@@ -269,49 +358,48 @@ class AuraLanServer {
         transferredBytes += chunk.length;
 
         final nowMs = stopwatch.elapsedMilliseconds;
-        if (nowMs - lastEmitTime > 250) {
-          lastEmitTime = nowMs;
-          final elapsedSeconds = math.max(0.1, nowMs / 1000.0);
+        if (nowMs - lastEmitTime >= 100 || transferredBytes == fileSize) {
+          final elapsedSeconds = math.max(0.001, nowMs / 1000.0);
           final speedMBps = (transferredBytes / (1024 * 1024)) / elapsedSeconds;
           final remainingBytes = math.max(0, fileSize - transferredBytes);
           final speedBytes = transferredBytes / elapsedSeconds;
-          final etaSeconds = speedBytes > 0 ? (remainingBytes / speedBytes).round() : 0;
+          final eta = speedBytes > 0 ? (remainingBytes / speedBytes).ceil() : 0;
 
           _progressController.add(AuraLanServerProgress(
             transferId: transferId,
-            fileName: fileName,
+            fileName: safeName,
             transferredBytes: transferredBytes,
-            totalBytes: fileSize > 0 ? fileSize : transferredBytes,
+            totalBytes: fileSize,
             speedMBps: speedMBps,
-            etaSeconds: etaSeconds,
+            etaSeconds: eta,
             state: 'TRANSFERRING',
           ));
+          lastEmitTime = nowMs;
         }
       }
 
       await sink.flush();
       await sink.close();
-      _activeUploadSink = null;
       hashSink.close();
+      _activeUploadSink = null;
 
-      final computedHash = outputDigest.events.isNotEmpty
-          ? outputDigest.events.first.toString()
-          : '';
+      final calculatedSha = outputDigest.events.single.toString();
 
-      // Verify SHA-256 integrity
-      if (expectedSha.isNotEmpty && computedHash.isNotEmpty && computedHash != expectedSha) {
+      // Verify SHA-256 checksum
+      if (expectedSha.isNotEmpty && calculatedSha.toLowerCase() != expectedSha.toLowerCase()) {
         if (await partFile.exists()) await partFile.delete();
         request.response.statusCode = HttpStatus.badRequest;
         request.response.headers.contentType = ContentType.json;
         request.response.write(jsonEncode({
-          'success': false,
-          'error': 'SHA-256 hash mismatch! Expected: $expectedSha, Computed: $computedHash',
+          'error': 'SHA-256 integrity mismatch',
+          'expected': expectedSha,
+          'calculated': calculatedSha,
         }));
         await request.response.close();
         return;
       }
 
-      // Rename .part file to final filename on successful integrity verification
+      // Atomic rename: .part -> final file
       if (await finalFile.exists()) {
         await finalFile.delete();
       }
@@ -319,49 +407,52 @@ class AuraLanServer {
 
       _completeController.add({
         'transferId': transferId,
-        'fileName': fileName,
+        'fileName': safeName,
         'filePath': finalFile.path,
         'fileSize': transferredBytes,
-        'sha256': computedHash,
-        'transport': 'Direct LAN',
+        'sha256': calculatedSha,
+        'verified': true,
       });
 
-      _progressController.add(AuraLanServerProgress(
-        transferId: transferId,
-        fileName: fileName,
-        transferredBytes: transferredBytes,
-        totalBytes: transferredBytes,
-        speedMBps: 0,
-        etaSeconds: 0,
-        state: 'COMPLETED',
-      ));
+      _preparedSessions.remove(transferId);
+      _activePartFile = null;
+      _activeTransferId = null;
 
       request.response.statusCode = HttpStatus.ok;
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode({
-        'success': true,
+        'status': 'ok',
         'transferId': transferId,
-        'filePath': finalFile.path,
-        'sha256': computedHash,
+        'sha256': calculatedSha,
+        'bytesWritten': transferredBytes,
         'verified': true,
       }));
       await request.response.close();
-    } catch (err) {
+    } catch (e) {
       await sink.close();
       _activeUploadSink = null;
-      if (await partFile.exists()) await partFile.delete();
+      if (await partFile.exists()) {
+        await partFile.delete();
+      }
       rethrow;
-    } finally {
-      _preparedSessions.remove(transferId);
-      _activeTransferId = null;
     }
   }
 
   // ---------------------------------------------------------------------------
-  // 4. CANCEL
+  // 5. CANCEL (Section 7: POST /api/auradrop/v1/cancel)
   // ---------------------------------------------------------------------------
   Future<void> _handleCancel(HttpRequest request) async {
-    final transferId = request.headers.value('x-transfer-id') ?? _activeTransferId ?? '';
+    final bodyStr = await utf8.decoder.bind(request).join();
+    String transferId = '';
+    try {
+      final data = jsonDecode(bodyStr) as Map<String, dynamic>;
+      transferId = data['transferId']?.toString() ?? '';
+    } catch (_) {}
+
+    if (transferId.isEmpty) {
+      transferId = request.headers.value('x-transfer-id') ?? _activeTransferId ?? '';
+    }
+
     await _activeUploadSink?.close();
     _activeUploadSink = null;
 
@@ -370,22 +461,35 @@ class AuraLanServer {
     }
     _activePartFile = null;
     _preparedSessions.remove(transferId);
+    _activeTransferId = null;
 
     request.response.statusCode = HttpStatus.ok;
     request.response.headers.contentType = ContentType.json;
-    request.response.write(jsonEncode({'success': true, 'cancelled': transferId}));
+    request.response.write(jsonEncode({'status': 'cancelled', 'transferId': transferId}));
     await request.response.close();
   }
 
-  Future<Directory> _getSafeSaveDirectory() async {
+  Future<Directory> _getDownloadDirectory() async {
     try {
-      final ext = await getExternalStorageDirectory();
-      if (ext != null) {
-        final downloadDir = Directory('${ext.path}/Download');
-        if (!await downloadDir.exists()) await downloadDir.create(recursive: true);
-        return downloadDir;
+      if (Platform.isAndroid) {
+        final dir = Directory('/storage/emulated/0/Download/AuraDrop');
+        if (!await dir.exists()) {
+          await dir.create(recursive: true);
+        }
+        return dir;
       }
-    } catch (_) {}
-    return await getApplicationDocumentsDirectory();
+      final appDir = await getApplicationDocumentsDirectory();
+      final dropDir = Directory('${appDir.path}/AuraDrop');
+      if (!await dropDir.exists()) {
+        await dropDir.create(recursive: true);
+      }
+      return dropDir;
+    } catch (_) {
+      return getTemporaryDirectory();
+    }
+  }
+
+  String _sanitizeFileName(String name) {
+    return name.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
   }
 }

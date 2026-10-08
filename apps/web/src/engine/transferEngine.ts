@@ -645,23 +645,31 @@ export class TransferEngine {
     const lanUrl = `http://${targetPeer.localIp}:${targetPeer.localPort}`;
     console.log(`[LAN HTTP Turbo] Probing target peer at ${lanUrl}...`);
 
-    // 1. Fast probe
+    // 1. Fast probe (AuraDrop V1 Protocol)
     try {
       const probeController = new AbortController();
       const probeTimer = setTimeout(() => probeController.abort(), 1200);
-      const probeRes = await fetch(`${lanUrl}/api/probe`, {
+      let probeRes = await fetch(`${lanUrl}/api/auradrop/v1/info`, {
         method: 'GET',
         signal: probeController.signal,
         mode: 'cors',
-      });
+      }).catch(() => null);
+
+      if (!probeRes || !probeRes.ok) {
+        probeRes = await fetch(`${lanUrl}/api/probe`, {
+          method: 'GET',
+          signal: probeController.signal,
+          mode: 'cors',
+        }).catch(() => null);
+      }
       clearTimeout(probeTimer);
 
-      if (!probeRes.ok) {
-        console.log(`[LAN HTTP Turbo] Probe returned HTTP ${probeRes.status}, fallback to WebRTC.`);
+      if (!probeRes || !probeRes.ok) {
+        console.log(`[LAN HTTP Turbo] Probe failed, fallback to WebRTC.`);
         return false;
       }
       const probeData = await probeRes.json();
-      if (probeData.status !== 'ok') {
+      if (probeData.protocol !== 'auradrop/1' && probeData.status !== 'ok') {
         return false;
       }
     } catch (err) {
@@ -669,21 +677,36 @@ export class TransferEngine {
       return false;
     }
 
-    // 2. Prepare transfer
+    // 2. Prepare transfer & obtain single-use expiring token
+    let oneTimeToken = '';
     try {
-      const prepRes = await fetch(`${lanUrl}/api/transfer/prepare`, {
+      const prepPayload = JSON.stringify({
+        transferId,
+        fileId: transferId,
+        fileName: safeName,
+        fileSize: file.size,
+        sha256: senderSha256,
+        senderUserId: this.localId,
+        senderName: this.localName,
+        senderDeviceName: this.identity.deviceName,
+        receiverUserId: targetPeer.deviceId,
+      });
+
+      let prepRes = await fetch(`${lanUrl}/api/auradrop/v1/prepare-upload`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          transferId,
-          fileName: safeName,
-          fileSize: file.size,
-          sha256: senderSha256,
-          senderName: this.localName,
-          senderDeviceName: this.identity.deviceName,
-        }),
-      });
-      if (!prepRes.ok) {
+        body: prepPayload,
+      }).catch(() => null);
+
+      if (!prepRes || !prepRes.ok) {
+        prepRes = await fetch(`${lanUrl}/api/transfer/prepare`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: prepPayload,
+        }).catch(() => null);
+      }
+
+      if (!prepRes || !prepRes.ok) {
         return false;
       }
       const prepData = await prepRes.json();
@@ -703,6 +726,7 @@ export class TransferEngine {
         this.activeOutgoingTransfer = null;
         return true;
       }
+      oneTimeToken = prepData.oneTimeToken || '';
     } catch (err) {
       console.warn('[LAN HTTP Turbo] Prepare failed:', err);
       return false;
@@ -712,10 +736,12 @@ export class TransferEngine {
     return new Promise<boolean>((resolve) => {
       const xhr = new XMLHttpRequest();
       this.activeXhr = xhr;
-      const uploadUrl = `${lanUrl}/api/transfer/upload?transferId=${encodeURIComponent(transferId)}&fileName=${encodeURIComponent(safeName)}`;
+      const uploadUrl = `${lanUrl}/api/auradrop/v1/upload?transferId=${encodeURIComponent(transferId)}&token=${encodeURIComponent(oneTimeToken)}&fileName=${encodeURIComponent(safeName)}`;
       xhr.open('POST', uploadUrl, true);
       xhr.setRequestHeader('X-Transfer-Id', transferId);
+      if (oneTimeToken) xhr.setRequestHeader('X-One-Time-Token', oneTimeToken);
       xhr.setRequestHeader('X-File-Name', encodeURIComponent(safeName));
+      xhr.setRequestHeader('X-File-Size', file.size.toString());
       xhr.setRequestHeader('X-Expected-Sha256', senderSha256);
 
       let lastCalcTime = performance.now();

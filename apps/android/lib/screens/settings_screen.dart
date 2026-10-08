@@ -574,6 +574,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     runSpacing: 6,
                     children: [
                       ActionChip(
+                        label: Text('📋 Paste & Connect', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: theme.textPrimary)),
+                        backgroundColor: theme.cardBackground,
+                        side: BorderSide(color: theme.border, width: 1.0),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        onPressed: () async {
+                          HapticFeedback.lightImpact();
+                          final clipboardData = await Clipboard.getData('text/plain');
+                          if (!context.mounted) return;
+                          final text = clipboardData?.text?.trim() ?? '';
+                          if (text.isNotEmpty) {
+                            final normalized = AuraSignalingService.normalizeUrl(text);
+                            _signalingUrlController.text = normalized;
+                            AuraSignalingService().setSignalingUrl(normalized);
+                            setState(() {});
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Connected to: $normalized'), duration: const Duration(seconds: 2)),
+                            );
+                          } else {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Clipboard is empty'), duration: Duration(seconds: 1)),
+                            );
+                          }
+                        },
+                      ),
+                      ActionChip(
                         label: Text('💻 PC Wi-Fi (5173)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: theme.textPrimary)),
                         backgroundColor: theme.cardBackground,
                         side: BorderSide(color: theme.border, width: 1.0),
