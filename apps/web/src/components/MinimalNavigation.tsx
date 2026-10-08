@@ -134,7 +134,7 @@ export const MinimalNavigation: React.FC<MinimalNavigationProps> = ({
                     position: 'absolute',
                     top: '4px',
                     right: '18px',
-                    background: '#0A84FF',
+                    background: '#34C759',
                     color: '#FFFFFF',
                     fontSize: '9px',
                     fontWeight: 800,

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
 import '../models/models.dart';
 
 class AuraSignalingService {
@@ -9,8 +10,23 @@ class AuraSignalingService {
   factory AuraSignalingService() => _instance;
   AuraSignalingService._internal();
 
-  // Default production signaling endpoint (Prompt Section 24)
-  static const String defaultProductionSignalingUrl = 'wss://api.auradrop.network/ws';
+  // Default production & local Wi-Fi endpoints
+  static const String defaultLocalWifiSignalingUrl = 'http://192.168.0.8:5173/api/signaling';
+  static const String defaultProductionSignalingUrl = defaultLocalWifiSignalingUrl;
+
+  static String normalizeUrl(String input) {
+    var url = input.trim();
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      if (!url.contains('/api/signaling') && !url.contains('/ws')) {
+        if (url.endsWith('/')) {
+          url = '${url}api/signaling';
+        } else {
+          url = '$url/api/signaling';
+        }
+      }
+    }
+    return url;
+  }
 
   WebSocket? _socket;
   Timer? _heartbeatTimer;
@@ -25,6 +41,7 @@ class AuraSignalingService {
   String _deviceName = '';
   String _visibility = 'everyone';
   int _avatarIndex = 0;
+  final Set<String> _knownPeerIds = <String>{};
 
   // Streams for reactive UI updates
   final _connectionStateController = StreamController<bool>.broadcast();
@@ -50,7 +67,31 @@ class AuraSignalingService {
 
   bool _isHttpSignaling = false;
   Timer? _httpPollTimer;
-  final HttpClient _httpClient = HttpClient()..connectionTimeout = const Duration(seconds: 6);
+  final HttpClient _httpClient = HttpClient()
+    ..connectionTimeout = const Duration(seconds: 6)
+    ..badCertificateCallback = ((X509Certificate cert, String host, int port) => true);
+
+  Future<void> initPersistedUrl() async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File('${dir.path}/auradrop_signaling_url.txt');
+      if (await file.exists()) {
+        final saved = (await file.readAsString()).trim();
+        if (saved.isNotEmpty) {
+          _signalingUrl = normalizeUrl(saved);
+          debugPrint('[AuraSignaling] Loaded persisted URL: $_signalingUrl');
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<void> savePersistedUrl(String url) async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File('${dir.path}/auradrop_signaling_url.txt');
+      await file.writeAsString(url.trim());
+    } catch (_) {}
+  }
 
   void configureIdentity({
     required String deviceId,
@@ -66,13 +107,14 @@ class AuraSignalingService {
     _visibility = visibility;
     _avatarIndex = avatarIndex;
     if (customSignalingUrl != null && customSignalingUrl.isNotEmpty) {
-      _signalingUrl = customSignalingUrl;
+      _signalingUrl = normalizeUrl(customSignalingUrl);
     }
   }
 
   void setSignalingUrl(String url) {
     if (url.trim().isEmpty) return;
-    _signalingUrl = url.trim();
+    _signalingUrl = normalizeUrl(url);
+    savePersistedUrl(_signalingUrl);
     disconnect();
     _shouldReconnect = true;
     _reconnectAttempts = 0;
@@ -132,7 +174,7 @@ class AuraSignalingService {
     debugPrint('[AuraSignaling] Starting HTTP Serverless Signaling to $_signalingUrl');
 
     // 1. Register device
-    await _httpSend({
+    final regResult = await _httpSend({
       'action': 'register',
       'deviceId': _deviceId,
       'displayName': _displayName,
@@ -141,6 +183,24 @@ class AuraSignalingService {
       'visibility': _visibility,
       'avatarIndex': _avatarIndex,
     });
+
+    if (regResult != null && regResult['peers'] is List) {
+      final peersRaw = regResult['peers'] as List;
+      final peers = peersRaw
+          .whereType<Map>()
+          .map((m) => _mapToPeerDevice(Map<String, dynamic>.from(m)))
+          .where((p) => p.id != _deviceId)
+          .toList();
+      if (peers.isNotEmpty) {
+        _peerListController.add(peers);
+        for (final p in peers) {
+          if (!_knownPeerIds.contains(p.id)) {
+            _knownPeerIds.add(p.id);
+            _peerOnlineController.add(p);
+          }
+        }
+      }
+    }
 
     // 2. Start polling
     _httpPollTimer?.cancel();
@@ -151,7 +211,7 @@ class AuraSignalingService {
       }
       try {
         final sep = _signalingUrl.contains('?') ? '&' : '?';
-        final pollUri = Uri.parse('$_signalingUrl${sep}action=poll&deviceId=${Uri.encodeComponent(_deviceId)}&name=${Uri.encodeComponent(_displayName)}');
+        final pollUri = Uri.parse('$_signalingUrl${sep}action=poll&deviceId=${Uri.encodeComponent(_deviceId)}&name=${Uri.encodeComponent(_displayName)}&platform=android&deviceName=${Uri.encodeComponent(_deviceName)}');
         final req = await _httpClient.getUrl(pollUri);
         final resp = await req.close();
         if (resp.statusCode == 200) {
@@ -166,6 +226,13 @@ class AuraSignalingService {
                   .where((p) => p.id != _deviceId)
                   .toList();
               _peerListController.add(peers);
+
+              for (final p in peers) {
+                if (!_knownPeerIds.contains(p.id)) {
+                  _knownPeerIds.add(p.id);
+                  _peerOnlineController.add(p);
+                }
+              }
             }
             final msgs = data['messages'];
             if (msgs is List) {
@@ -183,23 +250,36 @@ class AuraSignalingService {
     });
   }
 
-  Future<void> _httpSend(Map<String, dynamic> data) async {
+  Future<Map<String, dynamic>?> _httpSend(Map<String, dynamic> data) async {
     try {
+      final action = data['action']?.toString() ?? 'send';
       final sep = _signalingUrl.contains('?') ? '&' : '?';
-      final uri = Uri.parse('$_signalingUrl${sep}action=send');
+      final uri = Uri.parse('$_signalingUrl${sep}action=$action');
       final req = await _httpClient.postUrl(uri);
       req.headers.contentType = ContentType.json;
-      req.add(utf8.encode(jsonEncode({
-        'action': 'send',
+      final payload = {
+        'action': action,
         ...data,
         'senderId': data['senderId'] ?? _deviceId,
         'deviceId': _deviceId,
-      })));
+      };
+      req.add(utf8.encode(jsonEncode(payload)));
       final resp = await req.close();
-      await resp.drain();
+      if (resp.statusCode == 200) {
+        final body = await resp.transform(utf8.decoder).join();
+        if (body.trim().isNotEmpty) {
+          final decoded = jsonDecode(body);
+          if (decoded is Map) {
+            return Map<String, dynamic>.from(decoded);
+          }
+        }
+      } else {
+        await resp.drain();
+      }
     } catch (e) {
       debugPrint('[AuraSignaling] HTTP send notice: $e');
     }
+    return null;
   }
 
   void _sendRegister() {

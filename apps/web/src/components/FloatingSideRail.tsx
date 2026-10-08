@@ -93,7 +93,7 @@ export const FloatingSideRail: React.FC<FloatingSideRailProps> = ({
                       width: '22px',
                       height: '22px',
                       borderRadius: '50%',
-                      border: '1.5px solid rgba(10, 132, 255, 0.6)',
+                      border: '1.5px solid rgba(255, 255, 255, 0.7)',
                       animation: 'activePulse 2s ease infinite',
                     }}
                   />
@@ -121,8 +121,8 @@ export const FloatingSideRail: React.FC<FloatingSideRailProps> = ({
                       width: '6px',
                       height: '6px',
                       borderRadius: '50%',
-                      background: '#0A84FF',
-                      boxShadow: '0 0 6px #0A84FF',
+                      background: '#34C759',
+                      boxShadow: '0 0 6px #34C759',
                     }}
                   />
                 ) : null}

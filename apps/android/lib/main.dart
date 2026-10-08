@@ -221,6 +221,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
       _checkSystemShare();
 
       // Initialize AuraDrop Production Signaling & WebRTC P2P (Section 1, 10, 16)
+      await AuraSignalingService().initPersistedUrl();
       AuraSignalingService().configureIdentity(
         deviceId: _deviceId,
         displayName: _deviceName,

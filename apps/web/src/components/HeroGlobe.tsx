@@ -184,19 +184,19 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
 
         visiblePeerPositionsRef.current.set(peer.id, { x: px, y: py, peer });
 
-        // Orbital selection ring
+        // Orbital selection ring (Apple monochrome)
         if (isSelected) {
           ctx.beginPath();
           ctx.arc(px, py, 11, 0, Math.PI * 2);
-          ctx.strokeStyle = '#0A84FF';
-          ctx.lineWidth = 1.5;
+          ctx.strokeStyle = '#FFFFFF';
+          ctx.lineWidth = 1.6;
           ctx.stroke();
 
           // Outer pulsing ring if transferring
           if (isTransferring) {
             ctx.beginPath();
             ctx.arc(px, py, 17, 0, Math.PI * 2);
-            ctx.strokeStyle = 'rgba(10, 132, 255, 0.4)';
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
             ctx.lineWidth = 1.0;
             ctx.stroke();
           }
@@ -205,14 +205,19 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
         // Peer Dot
         ctx.beginPath();
         ctx.arc(px, py, isSelected ? 5.0 : 3.8, 0, Math.PI * 2);
-        ctx.fillStyle = isSelected ? '#FFFFFF' : '#8E8E93';
+        ctx.fillStyle = isSelected
+          ? '#FFFFFF'
+          : peer.platform === 'android'
+          ? '#34C759'
+          : '#A1A1AA';
         ctx.fill();
 
-        // Peer name tag
+        // Peer name tag with platform distinction
         ctx.font = isSelected ? '700 11px -apple-system, sans-serif' : '600 10px -apple-system, sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillStyle = isSelected ? '#FFFFFF' : 'rgba(200, 200, 200, 0.8)';
-        ctx.fillText(peer.name, px, py + 18);
+        ctx.fillStyle = isSelected ? '#FFFFFF' : 'rgba(220, 220, 225, 0.85)';
+        const displayLabel = peer.platform === 'android' ? `📱 ${peer.name}` : peer.name;
+        ctx.fillText(displayLabel, px, py + 18);
       }
     });
   }, [yaw, pitch, peers, selectedPeerId, isTransferring, size]);

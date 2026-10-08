@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
-import { PeerDevice, PickedFile, VisibilityMode } from '../types';
+import { PeerDevice, PickedFile, VisibilityMode, TransferRecord } from '../types';
+import { DiagnosticsView } from './DiagnosticsView';
 
 interface ModalWrapperProps {
   title: string;
@@ -114,8 +115,8 @@ export const ChatModal: React.FC<{
                 style={{
                   alignSelf: isMe ? 'flex-end' : 'flex-start',
                   maxWidth: '75%',
-                  background: isMe ? '#0A84FF' : '#1C1C1F',
-                  color: '#FFFFFF',
+                  background: isMe ? '#FFFFFF' : '#1C1C1F',
+                  color: isMe ? '#000000' : '#FFFFFF',
                   padding: '10px 14px',
                   borderRadius: isMe ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
                   fontSize: '13px',
@@ -123,7 +124,7 @@ export const ChatModal: React.FC<{
                 }}
               >
                 <div>{m.text}</div>
-                <div style={{ fontSize: '10px', color: isMe ? 'rgba(255,255,255,0.7)' : '#8E8E93', marginTop: '4px', textAlign: 'right' }}>
+                <div style={{ fontSize: '10px', color: isMe ? 'rgba(0,0,0,0.6)' : '#8E8E93', marginTop: '4px', textAlign: 'right' }}>
                   {m.time}
                 </div>
               </div>
@@ -152,12 +153,12 @@ export const ChatModal: React.FC<{
           <button
             onClick={sendMessage}
             style={{
-              background: '#0A84FF',
+              background: '#FFFFFF',
               border: 'none',
               borderRadius: '16px',
               padding: '10px 18px',
-              color: '#FFFFFF',
-              fontWeight: 700,
+              color: '#000000',
+              fontWeight: 800,
               cursor: 'pointer',
             }}
           >
@@ -190,7 +191,7 @@ export const SettingsModal: React.FC<{
                 onClick={() => onVisibilityChange(mode)}
                 style={{
                   background: visibility === mode ? '#18181E' : '#101012',
-                  border: `1px solid ${visibility === mode ? '#0A84FF' : '#202024'}`,
+                  border: `1px solid ${visibility === mode ? '#FFFFFF' : '#202024'}`,
                   borderRadius: '14px',
                   padding: '12px 16px',
                   display: 'flex',
@@ -216,13 +217,13 @@ export const SettingsModal: React.FC<{
                     width: '18px',
                     height: '18px',
                     borderRadius: '50%',
-                    border: `2px solid ${visibility === mode ? '#0A84FF' : '#3A3A3E'}`,
+                    border: `2px solid ${visibility === mode ? '#FFFFFF' : '#3A3A3E'}`,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                   }}
                 >
-                  {visibility === mode && <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#0A84FF' }} />}
+                  {visibility === mode && <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#FFFFFF' }} />}
                 </div>
               </div>
             ))}
@@ -245,8 +246,8 @@ export const SettingsModal: React.FC<{
               alignItems: 'center',
               justifyContent: 'center',
               gap: '8px',
-              background: '#0A84FF',
-              color: '#FFFFFF',
+              background: '#FFFFFF',
+              color: '#000000',
               textDecoration: 'none',
               padding: '12px 20px',
               borderRadius: '16px',
@@ -254,7 +255,7 @@ export const SettingsModal: React.FC<{
               fontWeight: 800,
             }}
           >
-            Download AuraDrop-V11-Release.apk
+            Download AuraDrop Android APK
           </a>
         </div>
       </div>
@@ -487,14 +488,14 @@ export const ProfileModal: React.FC<{
                 width: '68px',
                 height: '68px',
                 borderRadius: '50%',
-                background: '#0A84FF',
+                background: '#27272A',
+                border: '1px solid #3F3F46',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 fontSize: '24px',
                 fontWeight: 800,
                 color: '#FFFFFF',
-                boxShadow: '0 0 24px rgba(10, 132, 255, 0.4)',
               }}
             >
               {deviceName.charAt(0).toUpperCase()}
@@ -534,7 +535,8 @@ export const ProfileModal: React.FC<{
                   width: '56px',
                   height: '56px',
                   borderRadius: '50%',
-                  background: '#0A84FF',
+                  background: '#27272A',
+                  border: '1px solid #3F3F46',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -543,7 +545,6 @@ export const ProfileModal: React.FC<{
                   color: '#FFFFFF',
                   overflow: 'hidden',
                   flexShrink: 0,
-                  border: '2px solid #2C2C32',
                 }}
               >
                 {user.avatarUrl ? (
@@ -579,7 +580,7 @@ export const ProfileModal: React.FC<{
                   border: '1px solid #323238',
                   borderRadius: '12px',
                   padding: '10px',
-                  color: '#0A84FF',
+                  color: '#FFFFFF',
                   fontWeight: 700,
                   fontSize: '12px',
                   cursor: 'pointer',
@@ -695,11 +696,11 @@ export const ProfileModal: React.FC<{
               type="submit"
               disabled={authLoading}
               style={{
-                background: '#0A84FF',
+                background: '#FFFFFF',
                 border: 'none',
                 borderRadius: '12px',
                 padding: '12px',
-                color: '#FFFFFF',
+                color: '#000000',
                 fontWeight: 800,
                 fontSize: '13px',
                 cursor: 'pointer',
@@ -717,7 +718,7 @@ export const ProfileModal: React.FC<{
                   setAuthMode(authMode === 'login' ? 'register' : 'login');
                   setAuthError('');
                 }}
-                style={{ background: 'none', border: 'none', color: '#0A84FF', fontSize: '12px', cursor: 'pointer', fontWeight: 600 }}
+                style={{ background: 'none', border: 'none', color: '#A1A1AA', fontSize: '12px', cursor: 'pointer', fontWeight: 600 }}
               >
                 {authMode === 'login' ? "Don't have an account? Create one" : 'Already have an account? Sign In'}
               </button>
@@ -725,6 +726,65 @@ export const ProfileModal: React.FC<{
           </form>
         )}
       </div>
+    </ModalWrapper>
+  );
+};
+
+// Transfer History Modal (Single-page experience)
+export const TransferHistoryModal: React.FC<{
+  isOpen: boolean;
+  onClose: () => void;
+  history: TransferRecord[];
+}> = ({ isOpen, onClose, history }) => {
+  return (
+    <ModalWrapper title="Transfer History Ledger" isOpen={isOpen} onClose={onClose}>
+      {history.length === 0 ? (
+        <div style={{ fontSize: '13px', color: '#8E8E93', textAlign: 'center', padding: '36px 0' }}>
+          No completed transfers yet. Select a file and a peer on the main screen to start a real P2P transfer.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {history.map((item, idx) => (
+            <div
+              key={idx}
+              style={{
+                background: '#16161A',
+                border: '1px solid #28282E',
+                borderRadius: '14px',
+                padding: '14px 16px',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <div>
+                <div style={{ fontSize: '14px', fontWeight: 700, color: '#FFFFFF' }}>{item.fileName}</div>
+                <div style={{ fontSize: '11px', color: '#8E8E93', marginTop: '3px' }}>
+                  {(item.fileSize / (1024 * 1024)).toFixed(1)} MB • {item.senderName} → {item.receiverName} • {new Date(item.timestamp).toLocaleTimeString()}
+                </div>
+                {item.sha256 && (
+                  <div style={{ fontSize: '10px', color: '#34C759', fontFamily: 'monospace', marginTop: '4px' }}>
+                    SHA-256: {item.sha256.substring(0, 24)}...
+                  </div>
+                )}
+              </div>
+              <span style={{ fontSize: '12px', color: '#34C759', fontWeight: 700 }}>✓ Verified</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </ModalWrapper>
+  );
+};
+
+// Diagnostics Modal (Single-page experience)
+export const DiagnosticsModal: React.FC<{
+  isOpen: boolean;
+  onClose: () => void;
+}> = ({ isOpen, onClose }) => {
+  return (
+    <ModalWrapper title="WebRTC & Signaling Diagnostics" isOpen={isOpen} onClose={onClose}>
+      <DiagnosticsView />
     </ModalWrapper>
   );
 };

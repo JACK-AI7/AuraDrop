@@ -127,7 +127,7 @@ export const AirDropNotification: React.FC<AirDropNotificationProps> = ({
                 height: '44px',
                 borderRadius: '50%',
                 background: '#000000',
-                border: '1px solid rgba(10, 132, 255, 0.25)',
+                border: '1px solid rgba(255, 255, 255, 0.2)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -137,17 +137,17 @@ export const AirDropNotification: React.FC<AirDropNotificationProps> = ({
                 {/* Concentric AirDrop Radiating Rings */}
                 <path
                   d="M12 17C14.7614 17 17 14.7614 17 12C17 9.23858 14.7614 7 12 7"
-                  stroke="#0A84FF"
+                  stroke="#FFFFFF"
                   strokeWidth="2.2"
                   strokeLinecap="round"
                 />
                 <path
                   d="M12 20C16.4183 20 20 16.4183 20 12C20 7.58172 16.4183 4 12 4"
-                  stroke="#0A84FF"
+                  stroke="#FFFFFF"
                   strokeWidth="2.2"
                   strokeLinecap="round"
                 />
-                <circle cx="12" cy="12" r="2.2" fill="#0A84FF" />
+                <circle cx="12" cy="12" r="2.2" fill="#FFFFFF" />
               </svg>
             </div>
 
@@ -290,17 +290,17 @@ export const AirDropNotification: React.FC<AirDropNotificationProps> = ({
                 style={{
                   height: '100%',
                   width: `${progressPct}%`,
-                  background: '#007AFF',
+                  background: '#34C759',
                   borderRadius: '3px',
                   transition: 'width 0.15s ease',
-                  boxShadow: '0 0 10px rgba(0, 122, 255, 0.8)',
+                  boxShadow: '0 0 10px rgba(52, 199, 89, 0.6)',
                 }}
               />
             </div>
           </div>
         )}
 
-        {/* Bottom Row: [Decline] (dark charcoal pill) and [Accept] (deep iOS blue pill) */}
+        {/* Bottom Row: [Decline] (dark charcoal pill) and [Accept] (Apple high-contrast white pill) */}
         {!isTransferring && !isCompleted && (
           <div style={{ display: 'flex', gap: '12px', marginTop: '14px' }}>
             <button
@@ -328,17 +328,17 @@ export const AirDropNotification: React.FC<AirDropNotificationProps> = ({
                 flex: 1,
                 height: '44px',
                 borderRadius: '22px',
-                background: '#007AFF',
+                background: '#FFFFFF',
                 border: 'none',
-                color: '#FFFFFF',
+                color: '#000000',
                 fontSize: '15px',
                 fontWeight: 700,
                 cursor: 'pointer',
-                boxShadow: '0 4px 14px rgba(0, 122, 255, 0.4)',
+                boxShadow: '0 4px 14px rgba(255, 255, 255, 0.25)',
                 transition: 'background 0.2s ease',
               }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = '#0062CC')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = '#007AFF')}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#E5E5EA')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = '#FFFFFF')}
             >
               Accept
             </button>

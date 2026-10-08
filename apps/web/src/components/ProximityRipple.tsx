@@ -14,7 +14,7 @@ interface ProximityRippleProps {
 
 export const ProximityRipple: React.FC<ProximityRippleProps> = ({
   triggerKey,
-  color = '#0A84FF',
+  color = 'rgba(255, 255, 255, 0.45)',
 }) => {
   const [ripples, setRipples] = useState<Ripple[]>([]);
 

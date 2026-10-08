@@ -297,7 +297,7 @@ export class SignalingClient {
       }
 
       try {
-        const pollUrl = `${this.serverlessApiUrl}?action=poll&deviceId=${encodeURIComponent(this.identity.deviceId)}&name=${encodeURIComponent(this.identity.displayName)}`;
+        const pollUrl = `${this.serverlessApiUrl}?action=poll&deviceId=${encodeURIComponent(this.identity.deviceId)}&name=${encodeURIComponent(this.identity.displayName)}&platform=${encodeURIComponent(this.identity.platform)}&deviceName=${encodeURIComponent(this.identity.deviceName)}`;
         const res = await fetch(pollUrl);
         if (res.ok) {
           const data = await res.json();
@@ -346,48 +346,10 @@ export class SignalingClient {
         const msg = event.data;
         if (!msg || typeof msg !== 'object') return;
 
-        if (msg.senderDeviceId && msg.senderDeviceId !== this.identity.deviceId) {
-          if (msg.type === 'TAB_PRESENCE') {
-            const peer = this.mapToPeerDevice(msg.peer);
-            this.localMeshPeers.set(peer.id, peer);
-            this.emitCombinedPeers();
-          } else if (msg.type === 'TAB_LEAVE') {
-            this.localMeshPeers.delete(msg.senderDeviceId);
-            this.emitCombinedPeers();
-          } else if (msg.targetDeviceId === this.identity.deviceId) {
-            this.handleIncomingMessage(msg.payload || msg);
-          }
+        if (msg.targetDeviceId === this.identity.deviceId) {
+          this.handleIncomingMessage(msg.payload || msg);
         }
       };
-
-      const broadcastPresence = () => {
-        if (!this.broadcastChannel) return;
-        this.broadcastChannel.postMessage({
-          type: 'TAB_PRESENCE',
-          senderDeviceId: this.identity.deviceId,
-          peer: {
-            deviceId: this.identity.deviceId,
-            displayName: this.identity.displayName,
-            deviceName: `${this.identity.deviceName} (Local Tab)`,
-            platform: this.identity.platform,
-            clientIp: '127.0.0.1',
-            lastSeen: Date.now(),
-            visibility: this.identity.visibility,
-          },
-        });
-      };
-
-      broadcastPresence();
-      setInterval(broadcastPresence, 1200);
-
-      window.addEventListener('beforeunload', () => {
-        try {
-          this.broadcastChannel?.postMessage({
-            type: 'TAB_LEAVE',
-            senderDeviceId: this.identity.deviceId,
-          });
-        } catch {}
-      });
     } catch (e) {
       console.warn('[AuraDrop] BroadcastChannel notice:', e);
     }
@@ -401,14 +363,7 @@ export class SignalingClient {
   private emitCombinedPeers(): void {
     const combined = new Map<string, PeerDevice>();
 
-    // 1. Add local mesh peers from BroadcastChannel (same machine tabs/windows)
-    for (const [id, peer] of this.localMeshPeers) {
-      if (id !== this.identity.deviceId) {
-        combined.set(id, peer);
-      }
-    }
-
-    // 2. Add network peers from Serverless API / Neon DB / WebSocket
+    // Add real network peers from Serverless API / Neon DB / WebSocket
     for (const p of this.networkDiscoveredPeers) {
       const id = p.deviceId || p.id;
       if (id && id !== this.identity.deviceId && !combined.has(id)) {
@@ -416,7 +371,13 @@ export class SignalingClient {
       }
     }
 
-    const peerDevices = Array.from(combined.values());
+    // Sort so Android mobile peers are always prioritized at the top
+    const peerDevices = Array.from(combined.values()).sort((a, b) => {
+      if (a.platform === 'android' && b.platform !== 'android') return -1;
+      if (b.platform === 'android' && a.platform !== 'android') return 1;
+      return b.lastSeen.getTime() - a.lastSeen.getTime();
+    });
+
     this.connectedPeersCount = peerDevices.length;
     this.callbacks.onPeerList?.(peerDevices);
     this.callbacks.onDiagnosticsUpdate?.();
@@ -555,12 +516,17 @@ export class SignalingClient {
 
   private mapToPeerDevice(p: any): PeerDevice {
     const id = p.deviceId || p.id || '';
+    const platform = p.platform || 'web';
+    const rawName = p.displayName || p.name || id.substring(0, 8);
+    const defaultDevName = platform === 'android'
+      ? `${rawName} (Android Mobile App)`
+      : `${platform.toUpperCase()} Device • WebRTC Direct`;
     return {
       id,
       deviceId: id,
-      name: p.displayName || p.name || id.substring(0, 8),
-      deviceName: p.deviceName || `${p.platform?.toUpperCase() || 'DEVICE'} • WebRTC Direct`,
-      platform: p.platform || 'web',
+      name: rawName,
+      deviceName: p.deviceName || defaultDevName,
+      platform,
       ip: p.clientIp || p.remoteIp || p.ip || 'WebRTC P2P',
       port: 0,
       lastSeen: new Date(p.lastSeen || Date.now()),

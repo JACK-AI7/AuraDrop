@@ -73,7 +73,7 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({
             padding: '4px 10px',
             fontSize: '11px',
             fontWeight: 700,
-            color: '#0A84FF',
+            color: '#FFFFFF',
           }}
         >
           {peersCount} device{peersCount === 1 ? '' : 's'} nearby
@@ -102,10 +102,10 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({
         <div
           style={{
             background: '#18181E',
-            border: '1.5px solid #0A84FF',
+            border: '1.5px solid #FFFFFF',
             borderRadius: '20px',
             padding: '20px',
-            boxShadow: '0 12px 30px rgba(10, 132, 255, 0.15)',
+            boxShadow: '0 12px 30px rgba(0, 0, 0, 0.5)',
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
@@ -114,7 +114,8 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({
                 width: '46px',
                 height: '46px',
                 borderRadius: '50%',
-                background: '#0A84FF',
+                background: '#27272A',
+                border: '1px solid #3F3F46',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -156,8 +157,8 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({
                 height: '42px',
                 borderRadius: '21px',
                 border: 'none',
-                background: '#0A84FF',
-                color: '#FFFFFF',
+                background: '#FFFFFF',
+                color: '#000000',
                 fontSize: '14px',
                 fontWeight: 800,
                 cursor: 'pointer',
@@ -176,7 +177,7 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({
             <div style={{ fontSize: '13px', fontWeight: 800, color: '#FFFFFF' }}>
               Receiving {transferProgress.fileName}...
             </div>
-            <span style={{ fontSize: '12px', color: '#0A84FF', fontWeight: 700 }}>
+            <span style={{ fontSize: '12px', color: '#34C759', fontWeight: 700 }}>
               {(transferProgress.speedBytesPerSec / (1024 * 1024)).toFixed(1)} MB/s
             </span>
           </div>
@@ -186,7 +187,7 @@ export const ReceiverView: React.FC<ReceiverViewProps> = ({
               style={{
                 height: '100%',
                 width: `${progressPct}%`,
-                background: '#0A84FF',
+                background: '#34C759',
                 transition: 'width 0.1s linear',
               }}
             />

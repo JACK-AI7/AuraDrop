@@ -85,7 +85,7 @@ export const DiagnosticsView: React.FC = () => {
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-          <div style={{ fontSize: '12px', fontWeight: 800, color: '#0A84FF', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+          <div style={{ fontSize: '12px', fontWeight: 800, color: '#FFFFFF', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
             Physical Signaling & Peer Registry
           </div>
           <span style={{ fontSize: '11px', color: '#8E8E93' }}>
@@ -93,7 +93,7 @@ export const DiagnosticsView: React.FC = () => {
           </span>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '10px', fontSize: '12px' }}>
+        <div style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', display: 'grid', gap: '10px', fontSize: '12px' }}>
           <div>
             <span style={{ color: '#8E8E93' }}>Web App URL: </span>
             <div style={{ color: '#FFFFFF', fontFamily: 'monospace', fontSize: '11px', wordBreak: 'break-all', marginTop: '2px' }}>
@@ -102,7 +102,7 @@ export const DiagnosticsView: React.FC = () => {
           </div>
           <div>
             <span style={{ color: '#8E8E93' }}>Active Signaling URL: </span>
-            <div style={{ color: '#0A84FF', fontFamily: 'monospace', fontSize: '11px', wordBreak: 'break-all', marginTop: '2px' }}>
+            <div style={{ color: '#A1A1AA', fontFamily: 'monospace', fontSize: '11px', wordBreak: 'break-all', marginTop: '2px' }}>
               {signalingDiag.signalingUrl || 'None configured'}
             </div>
           </div>
@@ -189,11 +189,11 @@ export const DiagnosticsView: React.FC = () => {
             <button
               onClick={() => handleSaveSignalingUrl(customUrlInput)}
               style={{
-                background: '#0A84FF',
+                background: '#FFFFFF',
                 border: 'none',
                 borderRadius: '10px',
                 padding: '8px 16px',
-                color: '#FFFFFF',
+                color: '#000000',
                 fontSize: '12px',
                 fontWeight: 700,
                 cursor: 'pointer',
@@ -245,22 +245,22 @@ export const DiagnosticsView: React.FC = () => {
             </button>
             <button
               onClick={() => {
-                const url = 'ws://192.168.0.21:48280';
+                const url = 'ws://192.168.0.8:48280';
                 setCustomUrlInput(url);
                 handleSaveSignalingUrl(url);
               }}
               style={{
-                background: '#1A2433',
-                border: '1px solid #0A84FF',
+                background: '#1E1E24',
+                border: '1px solid #3F3F46',
                 borderRadius: '8px',
-                color: '#0A84FF',
+                color: '#FFFFFF',
                 fontSize: '10px',
                 fontWeight: 700,
                 padding: '3px 8px',
                 cursor: 'pointer',
               }}
             >
-              ⚡ Wi-Fi: ws://192.168.0.21:48280
+              ⚡ Wi-Fi: ws://192.168.0.8:48280
             </button>
             <button
               onClick={() => {
@@ -357,13 +357,13 @@ export const DiagnosticsView: React.FC = () => {
           Android testing on same Wi-Fi? Open <strong>http://192.168.0.21:5173</strong> or test health at <strong>http://192.168.0.21:48280/health</strong>
         </div>
         <a
-          href="http://192.168.0.21:48280/health"
+          href="http://192.168.0.8:48280/health"
           target="_blank"
           rel="noreferrer"
           style={{
-            background: '#1A2433',
-            border: '1px solid #0A84FF',
-            color: '#0A84FF',
+            background: '#1E1E24',
+            border: '1px solid #3F3F46',
+            color: '#FFFFFF',
             textDecoration: 'none',
             fontSize: '11px',
             fontWeight: 700,

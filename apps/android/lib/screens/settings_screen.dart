@@ -43,6 +43,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _backgroundDiscovery = true;
   bool _allowNearbyRequests = true;
   Map<String, dynamic> _deviceInfo = {};
+  late final TextEditingController _signalingUrlController;
 
   @override
   void initState() {
@@ -50,7 +51,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _selectedThemeMode = widget.currentThemeMode;
     _selectedVisibilityMode = widget.currentVisibility;
     _selectedAnimationSettings = widget.animationSettings;
+    _signalingUrlController = TextEditingController(text: AuraSignalingService().currentUrl);
     _loadAllData();
+  }
+
+  @override
+  void dispose() {
+    _signalingUrlController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadAllData() async {
@@ -510,36 +518,90 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     'Active Endpoint: ${AuraSignalingService().currentUrl}',
                     style: TextStyle(fontSize: 11, color: theme.textSecondary, fontFamily: 'monospace'),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: theme.cardBackground,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: theme.border, width: 1.0),
+                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _signalingUrlController,
+                            style: TextStyle(fontSize: 12, color: theme.textPrimary, fontFamily: 'monospace'),
+                            decoration: InputDecoration(
+                              hintText: 'http://192.168.0.8:5173/api/signaling',
+                              hintStyle: TextStyle(fontSize: 11, color: theme.textSecondary),
+                              border: InputBorder.none,
+                              isDense: true,
+                              contentPadding: const EdgeInsets.symmetric(vertical: 8),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        ElevatedButton(
+                          onPressed: () {
+                            final val = _signalingUrlController.text.trim();
+                            if (val.isNotEmpty) {
+                              HapticFeedback.mediumImpact();
+                              AuraSignalingService().setSignalingUrl(val);
+                              _signalingUrlController.text = AuraSignalingService().currentUrl;
+                              setState(() {});
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Connected: ${AuraSignalingService().currentUrl}'), duration: const Duration(seconds: 2)),
+                              );
+                            }
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: theme.textPrimary,
+                            foregroundColor: theme.background,
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          ),
+                          child: const Text('Connect', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700)),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 10),
                   Wrap(
                     spacing: 8,
                     runSpacing: 6,
                     children: [
                       ActionChip(
-                        label: Text('⚡ Cloud Prod', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: theme.textPrimary)),
+                        label: Text('💻 PC Wi-Fi (5173)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: theme.textPrimary)),
                         backgroundColor: theme.cardBackground,
                         side: BorderSide(color: theme.border, width: 1.0),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                         onPressed: () {
                           HapticFeedback.lightImpact();
-                          AuraSignalingService().setSignalingUrl(AuraSignalingService.defaultProductionSignalingUrl);
+                          const url = 'http://192.168.0.8:5173/api/signaling';
+                          _signalingUrlController.text = url;
+                          AuraSignalingService().setSignalingUrl(url);
                           setState(() {});
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Switched to Cloud Signaling'), duration: Duration(seconds: 2)),
+                            const SnackBar(content: Text('Switched to PC Wi-Fi (Port 5173)'), duration: Duration(seconds: 2)),
                           );
                         },
                       ),
                       ActionChip(
-                        label: Text('🏠 Wi-Fi LAN', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: theme.textPrimary)),
+                        label: Text('🏠 Backend (48280)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: theme.textPrimary)),
                         backgroundColor: theme.cardBackground,
                         side: BorderSide(color: theme.border, width: 1.0),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                         onPressed: () {
                           HapticFeedback.lightImpact();
-                          AuraSignalingService().setSignalingUrl('ws://192.168.0.21:48280');
+                          const url = 'ws://192.168.0.8:48280';
+                          _signalingUrlController.text = url;
+                          AuraSignalingService().setSignalingUrl(url);
                           setState(() {});
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Switched to Wi-Fi LAN Signaling'), duration: Duration(seconds: 2)),
+                            const SnackBar(content: Text('Switched to Backend LAN (Port 48280)'), duration: Duration(seconds: 2)),
                           );
                         },
                       ),
@@ -550,10 +612,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                         onPressed: () {
                           HapticFeedback.lightImpact();
-                          AuraSignalingService().setSignalingUrl('ws://10.0.2.2:48280');
+                          const url = 'http://10.0.2.2:5173/api/signaling';
+                          _signalingUrlController.text = url;
+                          AuraSignalingService().setSignalingUrl(url);
                           setState(() {});
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Switched to Android Emulator Signaling'), duration: Duration(seconds: 2)),
+                            const SnackBar(content: Text('Switched to Emulator Signaling'), duration: Duration(seconds: 2)),
                           );
                         },
                       ),

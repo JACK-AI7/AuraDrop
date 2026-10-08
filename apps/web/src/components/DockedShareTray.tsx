@@ -69,7 +69,7 @@ export const DockedShareTray: React.FC<DockedShareTrayProps> = ({
             transition: 'all 0.2s ease',
           }}
           onMouseEnter={(e) => {
-            e.currentTarget.style.borderColor = '#0A84FF';
+            e.currentTarget.style.borderColor = '#FFFFFF';
             e.currentTarget.style.background = '#1A1A20';
           }}
           onMouseLeave={(e) => {
@@ -77,7 +77,7 @@ export const DockedShareTray: React.FC<DockedShareTrayProps> = ({
             e.currentTarget.style.background = '#16161A';
           }}
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0A84FF" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <line x1="12" y1="5" x2="12" y2="19" />
             <line x1="5" y1="12" x2="19" y2="12" />
           </svg>
@@ -138,11 +138,11 @@ export const DockedShareTray: React.FC<DockedShareTrayProps> = ({
           onClick={onSend}
           disabled={files.length === 0}
           style={{
-            background: files.length > 0 ? '#0A84FF' : '#1C1C1E',
+            background: files.length > 0 ? '#FFFFFF' : '#1C1C1E',
             border: 'none',
             borderRadius: '20px',
             padding: '10px 22px',
-            color: files.length > 0 ? '#FFFFFF' : '#636366',
+            color: files.length > 0 ? '#000000' : '#636366',
             fontSize: '13px',
             fontWeight: 800,
             cursor: files.length > 0 ? 'pointer' : 'not-allowed',
@@ -150,13 +150,13 @@ export const DockedShareTray: React.FC<DockedShareTrayProps> = ({
             alignItems: 'center',
             gap: '8px',
             transition: 'all 0.2s ease',
-            boxShadow: files.length > 0 ? '0 0 16px rgba(10, 132, 255, 0.4)' : 'none',
+            boxShadow: files.length > 0 ? '0 0 16px rgba(255, 255, 255, 0.25)' : 'none',
           }}
           onMouseEnter={(e) => {
-            if (files.length > 0) e.currentTarget.style.background = '#0070E0';
+            if (files.length > 0) e.currentTarget.style.background = '#E5E5EA';
           }}
           onMouseLeave={(e) => {
-            if (files.length > 0) e.currentTarget.style.background = '#0A84FF';
+            if (files.length > 0) e.currentTarget.style.background = '#FFFFFF';
           }}
         >
           <span>{selectedPeer ? `Send to ${selectedPeer.name}` : files.length > 0 ? 'Send Now' : 'Send'}</span>

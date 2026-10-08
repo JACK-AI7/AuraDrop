@@ -7,7 +7,6 @@ interface DevicePairModalProps {
   localId: string;
   localName: string;
   peers: PeerDevice[];
-  onOpenTestWindow: () => void;
 }
 
 export const DevicePairModal: React.FC<DevicePairModalProps> = ({
@@ -16,17 +15,24 @@ export const DevicePairModal: React.FC<DevicePairModalProps> = ({
   localId,
   localName,
   peers,
-  onOpenTestWindow,
 }) => {
-  const [connectCode, setConnectCode] = useState('');
   const [isCopied, setIsCopied] = useState(false);
 
   if (!isOpen) return null;
 
-  const handleCopyLink = () => {
+  const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+  const signalingUrl = `${currentOrigin}/api/signaling`;
+
+  const handleCopySignalingUrl = () => {
+    navigator.clipboard.writeText(signalingUrl);
+    setIsCopied(true);
+    setTimeout(() => setIsCopied(false), 2200);
+  };
+
+  const handleCopyWebLink = () => {
     navigator.clipboard.writeText(window.location.href);
     setIsCopied(true);
-    setTimeout(() => setIsCopied(false), 2000);
+    setTimeout(() => setIsCopied(false), 2200);
   };
 
   return (
@@ -34,8 +40,8 @@ export const DevicePairModal: React.FC<DevicePairModalProps> = ({
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'rgba(0, 0, 0, 0.75)',
-        backdropFilter: 'blur(16px)',
+        background: 'rgba(0, 0, 0, 0.82)',
+        backdropFilter: 'blur(20px)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -46,105 +52,160 @@ export const DevicePairModal: React.FC<DevicePairModalProps> = ({
     >
       <div
         style={{
-          background: '#121214',
-          border: '1px solid #242428',
+          background: '#0D0D10',
+          border: '1px solid #27272A',
           borderRadius: '24px',
           width: '100%',
-          maxWidth: '500px',
+          maxWidth: '520px',
           padding: '24px',
-          boxShadow: '0 24px 60px rgba(0, 0, 0, 0.9)',
+          boxShadow: '0 24px 60px rgba(0, 0, 0, 0.95)',
         }}
         onClick={(e) => e.stopPropagation()}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
-          <h2 style={{ fontSize: '17px', fontWeight: 800, color: '#FFFFFF' }}>Real Device Pairing & Discovery</h2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '18px' }}>📱</span>
+            <h2 style={{ fontSize: '17px', fontWeight: 800, color: '#FFFFFF', margin: 0 }}>
+              Pair Android Mobile App
+            </h2>
+          </div>
           <button
             onClick={onClose}
             style={{
-              background: '#1C1C20',
-              border: '1px solid #2C2C32',
+              background: '#18181B',
+              border: '1px solid #27272A',
               borderRadius: '50%',
-              width: '28px',
-              height: '28px',
-              color: '#8E8E93',
+              width: '30px',
+              height: '30px',
+              color: '#A1A1AA',
               cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '12px',
             }}
           >
             ✕
           </button>
         </div>
 
-        {/* Current Device Info */}
-        <div style={{ background: '#16161A', border: '1px solid #222226', borderRadius: '16px', padding: '14px', marginBottom: '16px' }}>
-          <div style={{ fontSize: '11px', color: '#8E8E93', textTransform: 'uppercase', fontWeight: 700 }}>This Device</div>
-          <div style={{ fontSize: '15px', fontWeight: 800, color: '#FFFFFF', marginTop: '4px' }}>{localName}</div>
-          <div style={{ fontSize: '11px', color: '#34C759', marginTop: '2px' }}>● Ready to discover nearby devices via zero-cloud P2P</div>
+        {/* Current Desktop Info */}
+        <div style={{ background: '#141418', border: '1px solid #222226', borderRadius: '16px', padding: '14px', marginBottom: '16px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <div style={{ fontSize: '10px', color: '#71717A', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.4px' }}>This Desktop</div>
+              <div style={{ fontSize: '15px', fontWeight: 800, color: '#FFFFFF', marginTop: '2px' }}>{localName}</div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#34C759', boxShadow: '0 0 8px #34C759' }} />
+              <span style={{ fontSize: '11px', color: '#34C759', fontWeight: 700 }}>Online & Ready</span>
+            </div>
+          </div>
         </div>
 
-        {/* Instant Multi-Tab / Second Window Test */}
-        <div style={{ background: '#101014', border: '1px solid #1F1F24', borderRadius: '16px', padding: '16px', marginBottom: '16px' }}>
-          <div style={{ fontSize: '13px', fontWeight: 800, color: '#FFFFFF', marginBottom: '4px' }}>
-            Instant Two-Device Test
+        {/* Mobile Connection Instruction */}
+        <div style={{ background: '#121216', border: '1px solid #1E1E24', borderRadius: '18px', padding: '16px', marginBottom: '16px' }}>
+          <div style={{ fontSize: '13px', fontWeight: 800, color: '#FFFFFF', marginBottom: '6px' }}>
+            Connect from AuraDrop Android App
           </div>
-          <p style={{ fontSize: '12px', color: '#8E8E93', lineHeight: '1.4', marginBottom: '12px' }}>
-            Open a second AuraDrop window side-by-side. Both windows will detect each other immediately on the 3D Globe, allowing you to test real sending, the popping AirDrop card, and real file downloads!
+          <p style={{ fontSize: '12px', color: '#A1A1AA', lineHeight: '1.45', margin: '0 0 12px 0' }}>
+            Open AuraDrop on your phone. In Settings or on the Home Screen, tap <strong>Web Sync</strong> and enter or copy this URL. Both devices connect instantly on this screen!
           </p>
-          <button
-            onClick={onOpenTestWindow}
+
+          <div
             style={{
-              width: '100%',
-              background: '#0A84FF',
-              border: 'none',
-              borderRadius: '14px',
-              padding: '11px',
-              color: '#FFFFFF',
-              fontSize: '13px',
-              fontWeight: 800,
-              cursor: 'pointer',
+              background: '#09090B',
+              border: '1px solid #27272A',
+              borderRadius: '12px',
+              padding: '10px 14px',
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'center',
-              gap: '8px',
+              justifyContent: 'space-between',
+              gap: '10px',
+              marginBottom: '10px',
             }}
           >
-            <span>Open Receiver Window (Side-by-Side Test)</span>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-              <polyline points="15 3 21 3 21 9" />
-              <line x1="10" y1="14" x2="21" y2="3" />
-            </svg>
-          </button>
+            <div style={{ fontFamily: 'monospace', fontSize: '12px', color: '#FFFFFF', wordBreak: 'break-all' }}>
+              {signalingUrl}
+            </div>
+            <button
+              onClick={handleCopySignalingUrl}
+              style={{
+                background: '#FFFFFF',
+                border: 'none',
+                borderRadius: '8px',
+                padding: '6px 14px',
+                color: '#000000',
+                fontSize: '11px',
+                fontWeight: 700,
+                cursor: 'pointer',
+                flexShrink: 0,
+              }}
+            >
+              {isCopied ? 'Copied ✓' : 'Copy URL'}
+            </button>
+          </div>
         </div>
 
-        {/* Discovered Peers List */}
+        {/* Discovered Devices List */}
         <div>
-          <div style={{ fontSize: '12px', fontWeight: 700, color: '#8E8E93', marginBottom: '8px' }}>
-            Currently Discovered Peers ({peers.length})
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+            <div style={{ fontSize: '12px', fontWeight: 700, color: '#A1A1AA', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+              Active Devices Nearby ({peers.length})
+            </div>
+            {peers.length > 0 && (
+              <span style={{ fontSize: '11px', color: '#34C759', fontWeight: 700 }}>
+                ● {peers.filter((p) => p.platform === 'android').length} Android Phone(s)
+              </span>
+            )}
           </div>
+
           {peers.length === 0 ? (
-            <div style={{ fontSize: '12px', color: '#636366', padding: '10px 0', textAlign: 'center' }}>
-              No other device detected yet. Open another tab or phone on the same network to connect.
+            <div style={{ background: '#141418', border: '1px solid #222226', borderRadius: '14px', padding: '20px', textAlign: 'center' }}>
+              <div style={{ fontSize: '24px', marginBottom: '8px' }}>📡</div>
+              <div style={{ fontSize: '13px', fontWeight: 700, color: '#FFFFFF' }}>Listening for Android Phone...</div>
+              <div style={{ fontSize: '11px', color: '#71717A', marginTop: '4px' }}>
+                Open AuraDrop on your Android device to appear on the 3D Globe automatically.
+              </div>
             </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '180px', overflowY: 'auto' }}>
               {peers.map((p) => (
                 <div
                   key={p.id}
                   style={{
                     background: '#16161A',
-                    border: '1px solid #242428',
-                    borderRadius: '12px',
-                    padding: '10px 14px',
+                    border: '1px solid #27272A',
+                    borderRadius: '14px',
+                    padding: '12px 14px',
                     display: 'flex',
                     justifyContent: 'space-between',
                     alignItems: 'center',
                   }}
                 >
-                  <div>
-                    <div style={{ fontSize: '13px', fontWeight: 700, color: '#FFFFFF' }}>{p.name}</div>
-                    <div style={{ fontSize: '10px', color: '#8E8E93' }}>{p.deviceName}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <div
+                      style={{
+                        width: '32px',
+                        height: '32px',
+                        borderRadius: '50%',
+                        background: '#27272A',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '15px',
+                      }}
+                    >
+                      {p.platform === 'android' ? '📱' : '💻'}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '13px', fontWeight: 800, color: '#FFFFFF' }}>{p.name}</div>
+                      <div style={{ fontSize: '11px', color: '#A1A1AA' }}>
+                        {p.platform === 'android' ? 'Android Mobile App' : p.deviceName}
+                      </div>
+                    </div>
                   </div>
-                  <span style={{ fontSize: '11px', color: '#34C759', fontWeight: 700 }}>● Connected</span>
+                  <span style={{ fontSize: '11px', color: '#34C759', fontWeight: 700 }}>● Online</span>
                 </div>
               ))}
             </div>

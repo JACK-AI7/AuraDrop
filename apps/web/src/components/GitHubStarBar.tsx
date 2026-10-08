@@ -23,7 +23,7 @@ export const GitHubStarBar: React.FC = () => {
             padding: '2px 8px',
             fontSize: '10px',
             fontWeight: 800,
-            color: '#0A84FF',
+            color: '#FFFFFF',
             letterSpacing: '0.4px',
           }}
         >
@@ -54,7 +54,7 @@ export const GitHubStarBar: React.FC = () => {
             transition: 'all 0.2s ease',
           }}
           onMouseEnter={(e) => {
-            e.currentTarget.style.borderColor = '#0A84FF';
+            e.currentTarget.style.borderColor = '#FFFFFF';
             e.currentTarget.style.background = '#22222C';
           }}
           onMouseLeave={(e) => {
@@ -76,17 +76,17 @@ export const GitHubStarBar: React.FC = () => {
             display: 'flex',
             alignItems: 'center',
             gap: '6px',
-            background: '#0A84FF',
+            background: '#FFFFFF',
             borderRadius: '14px',
             padding: '4px 12px',
-            color: '#FFFFFF',
+            color: '#000000',
             textDecoration: 'none',
             fontSize: '11px',
             fontWeight: 800,
             transition: 'background 0.2s ease',
           }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = '#0070E0')}
-          onMouseLeave={(e) => (e.currentTarget.style.background = '#0A84FF')}
+          onMouseEnter={(e) => (e.currentTarget.style.background = '#E5E5EA')}
+          onMouseLeave={(e) => (e.currentTarget.style.background = '#FFFFFF')}
         >
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />

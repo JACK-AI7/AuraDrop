@@ -180,8 +180,8 @@ export default async function handler(req: any, res: any) {
         if (raw) body = JSON.parse(raw);
       } catch {}
     }
-    action = action || body.action || '';
-    deviceId = deviceId || body.deviceId || '';
+    action = body.action || action || '';
+    deviceId = body.deviceId || deviceId || '';
   }
 
   // ---------------------------------------------------------------------------
@@ -259,20 +259,26 @@ export default async function handler(req: any, res: any) {
     }
 
     const name = url.searchParams.get('name') || body.displayName || 'AuraDrop Device';
+    const reqPlatform = url.searchParams.get('platform') || body.platform || (globalPeers.get(deviceId)?.platform) || 'web';
+    const reqDeviceName = url.searchParams.get('deviceName') || body.deviceName || name;
+    const reqVisibility = url.searchParams.get('visibility') || body.visibility || 'everyone';
 
     // Refresh memory lastSeen
     const current = globalPeers.get(deviceId);
     if (current) {
       current.lastSeen = Date.now();
+      if (reqPlatform && reqPlatform !== 'web') {
+        current.platform = reqPlatform;
+      }
     } else {
       globalPeers.set(deviceId, {
         deviceId,
         displayName: name,
-        deviceName: name,
-        platform: 'web',
+        deviceName: reqDeviceName,
+        platform: reqPlatform,
         clientIp,
         lastSeen: Date.now(),
-        visibility: 'everyone',
+        visibility: reqVisibility,
       });
     }
 
@@ -283,10 +289,15 @@ export default async function handler(req: any, res: any) {
         await pool.query(
           `
           INSERT INTO active_peers (device_id, display_name, device_name, platform, client_ip, visibility, last_seen_at)
-          VALUES ($1, $2, $2, 'web', $3, 'everyone', NOW())
-          ON CONFLICT (device_id) DO UPDATE SET last_seen_at = NOW();
+          VALUES ($1, $2, $3, $4, $5, $6, NOW())
+          ON CONFLICT (device_id) DO UPDATE SET
+            last_seen_at = NOW(),
+            client_ip = EXCLUDED.client_ip,
+            display_name = CASE WHEN EXCLUDED.display_name != 'AuraDrop Device' THEN EXCLUDED.display_name ELSE active_peers.display_name END,
+            device_name = CASE WHEN EXCLUDED.device_name != 'AuraDrop Device' THEN EXCLUDED.device_name ELSE active_peers.device_name END,
+            platform = CASE WHEN EXCLUDED.platform != 'web' THEN EXCLUDED.platform ELSE active_peers.platform END;
         `,
-          [deviceId, name, clientIp]
+          [deviceId, name, reqDeviceName, reqPlatform, clientIp, reqVisibility]
         ).catch(() => {});
       } catch {}
     }
