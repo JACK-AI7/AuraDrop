@@ -46,32 +46,15 @@ export class IdentityManager {
 
     if (!baseDeviceId) {
       const randomHex = typeof crypto !== 'undefined' && crypto.randomUUID
-        ? crypto.randomUUID().replace(/-/g, '').substring(0, 8)
-        : Math.random().toString(36).substring(2, 10);
-      baseDeviceId = `aura_${randomHex}`;
+        ? crypto.randomUUID().replace(/-/g, '').substring(0, 10)
+        : Math.random().toString(36).substring(2, 12);
+      baseDeviceId = `aura_desktop_${randomHex}`;
     }
 
-    // Ensure each tab or window has its own distinct session identity
-    let tabSessionId = '';
-    const isReceiverRole = typeof window !== 'undefined' && window.location.search.includes('role=receiver');
-
-    try {
-      if (typeof sessionStorage !== 'undefined') {
-        tabSessionId = sessionStorage.getItem('auradrop_tab_session_id') || '';
-        if (!tabSessionId) {
-          tabSessionId = isReceiverRole ? 'receiver' : Math.random().toString(36).substring(2, 6);
-          sessionStorage.setItem('auradrop_tab_session_id', tabSessionId);
-        }
-      }
-    } catch {}
-
     const platform = this.detectPlatform();
-    const deviceName = this.detectDeviceModel(platform);
-
-    const deviceId = tabSessionId ? `${baseDeviceId}_${tabSessionId}` : baseDeviceId;
-    const displayName = isReceiverRole
-      ? `${deviceName} (Receiver)`
-      : `${deviceName} (${tabSessionId || baseDeviceId.substring(5, 9)})`;
+    const deviceName = storedName || this.detectDeviceModel(platform);
+    const deviceId = baseDeviceId;
+    const displayName = deviceName;
 
     const identity: DeviceIdentity = {
       deviceId,

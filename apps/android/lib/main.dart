@@ -221,8 +221,9 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
       _applyVisibilityMode(_visibilityMode);
       _checkSystemShare();
 
-      // Initialize AuraDrop Production Signaling, LAN Turbo & WebRTC P2P (V20 Specification)
+      // Initialize AuraDrop Production Signaling, LAN Turbo & WebRTC P2P (V24 Persistent Architecture)
       await AuraSignalingService().initPersistedUrl();
+      await AuraSignalingService().initTrustedPeers();
       await AuraLanServer().start(
         deviceId: _deviceId,
         deviceName: _deviceName,

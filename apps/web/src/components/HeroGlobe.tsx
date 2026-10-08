@@ -12,6 +12,8 @@ interface HeroGlobeProps {
   selectedPeerId?: string | null;
   onSelectPeer?: (peer: PeerDevice) => void;
   isTransferring?: boolean;
+  transferSpeed?: string | null;
+  statusBadgeText?: string | null;
   size?: number;
 }
 
@@ -64,6 +66,8 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
   selectedPeerId,
   onSelectPeer,
   isTransferring = false,
+  transferSpeed = null,
+  statusBadgeText = null,
   size = 320,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -72,6 +76,29 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
   const isInteractingRef = useRef(false);
   const lastMousePosRef = useRef({ x: 0, y: 0 });
   const visiblePeerPositionsRef = useRef<Map<string, { x: number; y: number; peer: PeerDevice }>>(new Map());
+
+  const activePeer = peers.find((p) => p.id === selectedPeerId) || peers[0] || null;
+  const isConnected = activePeer?.connectionState === 'READY_TO_TRANSFER';
+
+  let computedBadge = statusBadgeText;
+  let dotColor = '#71717A';
+  let isDotPulsing = false;
+
+  if (!computedBadge) {
+    if (isTransferring && transferSpeed) {
+      computedBadge = `${activePeer ? activePeer.name : 'Device'} — Sending ${transferSpeed}`;
+      dotColor = '#34C759';
+      isDotPulsing = true;
+    } else if (peers.length > 0 && activePeer) {
+      computedBadge = `${activePeer.name} — ${isConnected ? 'Connected' : 'Online'}`;
+      dotColor = isConnected ? '#34C759' : '#FFFFFF';
+      isDotPulsing = isConnected;
+    } else {
+      computedBadge = 'No connected devices';
+      dotColor = '#52525B';
+      isDotPulsing = false;
+    }
+  }
 
   // Animation frame loop
   useEffect(() => {
@@ -269,7 +296,41 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+      {/* Real Runtime Device Status Badge Pill */}
+      <div
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '8px',
+          padding: '6px 16px',
+          borderRadius: '9999px',
+          background: 'rgba(20, 20, 24, 0.75)',
+          border: '1px solid rgba(255, 255, 255, 0.12)',
+          backdropFilter: 'blur(20px)',
+          boxShadow: '0 8px 24px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.08)',
+          marginBottom: '10px',
+          fontSize: '12px',
+          fontWeight: 700,
+          color: '#FFFFFF',
+          letterSpacing: '-0.2px',
+          transition: 'all 0.25s ease',
+        }}
+      >
+        <span
+          style={{
+            width: '7px',
+            height: '7px',
+            borderRadius: '50%',
+            background: dotColor,
+            boxShadow: isDotPulsing ? `0 0 8px ${dotColor}` : 'none',
+            display: 'inline-block',
+            transition: 'background-color 0.25s ease, box-shadow 0.25s ease',
+          }}
+        />
+        <span>{computedBadge}</span>
+      </div>
+
       <canvas
         ref={canvasRef}
         style={{

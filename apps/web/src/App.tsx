@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { GitHubStarBar } from './components/GitHubStarBar';
 import { FloatingSideRail, ActiveTab } from './components/FloatingSideRail';
+import { HeroGlobe } from './components/HeroGlobe';
 import { DockedShareTray } from './components/DockedShareTray';
 import { DevicePairModal } from './components/DevicePairModal';
 import {
@@ -523,7 +524,21 @@ export const App: React.FC = () => {
         </div>
       </div>
 
-      {/* 6. MAIN VIEWPORT — AUTHORITATIVE NEARBY DEVICES DISCOVERY (ZERO FAKE GLOBE / FAKE RADAR) */}
+      {/* FLOATING SIDE RAIL */}
+      <FloatingSideRail
+        currentTab={currentTab}
+        onSelectTab={(tab) => {
+          setCurrentTab(tab);
+          if (tab === 'chat' && selectedPeer) setIsChatOpen(true);
+          if (tab === 'devices') setIsPairModalOpen(true);
+          if (tab === 'transfers') setIsHistoryOpen(true);
+          if (tab === 'specs') setIsDiagnosticsOpen(true);
+        }}
+        activeTransfersCount={transferProgress ? 1 : 0}
+        discoveredPeersCount={peers.length}
+      />
+
+      {/* 6. MAIN VIEWPORT — AUTHORITATIVE RUNTIME GLOBE + NEARBY DEVICES */}
       <main
         style={{
           flex: 1,
@@ -533,10 +548,37 @@ export const App: React.FC = () => {
           justifyContent: 'flex-start',
           position: 'relative',
           overflowY: 'auto',
-          padding: '28px 24px 120px 24px',
+          padding: '20px 24px 120px 24px',
         }}
       >
         <div style={{ width: '100%', maxWidth: '640px', zIndex: 10 }}>
+          {/* HERO GLOBE WITH REAL RUNTIME DEVICE STATES */}
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginBottom: '20px',
+            }}
+          >
+            <HeroGlobe
+              peers={peers}
+              selectedPeerId={selectedPeer?.id}
+              onSelectPeer={(p) => {
+                setSelectedPeer(p);
+                engine.connectToPeer(p);
+              }}
+              isTransferring={Boolean(transferProgress && transferProgress.state === 'TRANSFERRING')}
+              transferSpeed={
+                transferProgress && transferProgress.speedBytesPerSec > 0
+                  ? `${(transferProgress.speedBytesPerSec / (1024 * 1024)).toFixed(1)} MB/s`
+                  : null
+              }
+              size={250}
+            />
+          </div>
+
           {/* Section Header */}
           <div
             style={{
@@ -915,6 +957,35 @@ export const App: React.FC = () => {
                             }}
                           >
                             Android Phone
+                          </span>
+                        )}
+                        {peer.isTrusted && (
+                          <span
+                            style={{
+                              background: 'rgba(52, 199, 89, 0.2)',
+                              border: '1px solid rgba(52, 199, 89, 0.5)',
+                              color: '#34C759',
+                              fontSize: '10px',
+                              fontWeight: 700,
+                              padding: '1px 6px',
+                              borderRadius: '6px',
+                            }}
+                          >
+                            🛡️ Trusted
+                          </span>
+                        )}
+                        {peer.connectionState === 'READY_TO_TRANSFER' && (
+                          <span
+                            style={{
+                              background: 'rgba(52, 199, 89, 0.15)',
+                              color: '#34C759',
+                              fontSize: '10px',
+                              fontWeight: 700,
+                              padding: '1px 6px',
+                              borderRadius: '6px',
+                            }}
+                          >
+                            ● Connected
                           </span>
                         )}
                       </div>

@@ -4,6 +4,7 @@
 
 import { DeviceIdentity } from './identity';
 import { PeerDevice } from '../types';
+import { TransferStorage } from './transferStorage';
 
 export interface SignalingEventCallbacks {
   onPeerList?: (peers: PeerDevice[]) => void;
@@ -264,6 +265,7 @@ export class SignalingClient {
     this.isHttpPolling = true;
 
     // 1. Initial Device Registration via Serverless API
+    const trustedPeers = TransferStorage.getInstance().getTrustedDevices().map((d) => d.deviceId);
     const regPayload = {
       action: 'register',
       deviceId: this.identity.deviceId,
@@ -271,6 +273,7 @@ export class SignalingClient {
       deviceName: this.identity.deviceName,
       platform: this.identity.platform,
       visibility: this.identity.visibility,
+      trustedPeers,
     };
 
     fetch(`${this.serverlessApiUrl}?action=register`, {
@@ -297,8 +300,20 @@ export class SignalingClient {
       }
 
       try {
-        const pollUrl = `${this.serverlessApiUrl}?action=poll&deviceId=${encodeURIComponent(this.identity.deviceId)}&name=${encodeURIComponent(this.identity.displayName)}&platform=${encodeURIComponent(this.identity.platform)}&deviceName=${encodeURIComponent(this.identity.deviceName)}`;
-        const res = await fetch(pollUrl);
+        const currentTrusted = TransferStorage.getInstance().getTrustedDevices().map((d) => d.deviceId);
+        const pollPayload = {
+          action: 'poll',
+          deviceId: this.identity.deviceId,
+          name: this.identity.displayName,
+          platform: this.identity.platform,
+          deviceName: this.identity.deviceName,
+          trustedPeers: currentTrusted,
+        };
+        const res = await fetch(`${this.serverlessApiUrl}?action=poll`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(pollPayload),
+        });
         if (res.ok) {
           const data = await res.json();
           this.lastHttpPollTime = Date.now();
@@ -511,6 +526,21 @@ export class SignalingClient {
         this.callbacks.onChatMessage?.(payload);
         break;
       }
+
+      case 'PAIR_CONFIRMED': {
+        const pairedDeviceId = msg.pairedWith;
+        if (pairedDeviceId) {
+          TransferStorage.getInstance().saveTrustedDevice({
+            deviceId: pairedDeviceId,
+            name: msg.name || 'Android Phone',
+            platform: msg.platform || 'android',
+            relationshipId: msg.relationshipId || `rel_${Date.now()}`,
+            pairedAt: new Date().toISOString(),
+          });
+          this.requestPeerList();
+        }
+        break;
+      }
     }
   }
 
@@ -521,6 +551,7 @@ export class SignalingClient {
     const localIp = p.localIp || p.local_ip || undefined;
     const localPort = p.localPort || p.local_port ? Number(p.localPort || p.local_port) : undefined;
     const capabilities = Array.isArray(p.capabilities) ? p.capabilities : undefined;
+    const isTrusted = p.isTrusted === true || TransferStorage.getInstance().isDeviceTrusted(id);
     const defaultDevName = platform === 'android'
       ? `${rawName} (Android Mobile App)`
       : `${platform.toUpperCase()} Device • WebRTC Direct`;
@@ -536,8 +567,8 @@ export class SignalingClient {
       localPort,
       capabilities,
       lastSeen: new Date(p.lastSeen || Date.now()),
-      isTrusted: p.visibility === 'trusted',
-      connectionState: 'DISCOVERED' as any,
+      isTrusted,
+      connectionState: isTrusted ? 'READY_TO_TRANSFER' : ('DISCOVERED' as any),
       transport: localIp ? 'Direct LAN' : 'Direct P2P',
     };
   }
@@ -659,11 +690,47 @@ export class SignalingClient {
   private scheduleReconnect(): void {
     if (this.reconnectTimer) return;
     this.reconnectAttempts++;
-    const delay = Math.min(10000, 1500 * Math.pow(1.4, this.reconnectAttempts));
+    const backoffs = [1000, 2000, 4000, 8000, 16000, 30000];
+    const base = backoffs[Math.min(this.reconnectAttempts - 1, backoffs.length - 1)];
+    const jitter = Math.floor(Math.random() * 600);
+    const delay = base + jitter;
+
+    console.log(`[AuraDrop Signaling] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})...`);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect();
     }, delay);
+  }
+
+  public async pairWithDevice(targetDeviceId: string, targetName: string, relationshipId?: string): Promise<boolean> {
+    const relId = relationshipId || `rel_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    // Store locally in permanent storage
+    TransferStorage.getInstance().saveTrustedDevice({
+      deviceId: targetDeviceId,
+      name: targetName,
+      platform: 'android',
+      relationshipId: relId,
+      pairedAt: new Date().toISOString(),
+    });
+
+    // Notify control plane
+    if (this.serverlessApiUrl) {
+      await fetch(`${this.serverlessApiUrl}?action=pair`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'pair',
+          deviceId: this.identity.deviceId,
+          targetDeviceId,
+          relationshipId: relId,
+        }),
+      }).catch((e) => {
+        console.warn('Pair API notify notice:', e);
+      });
+    }
+
+    this.requestPeerList();
+    return true;
   }
 
   public disconnect(): void {

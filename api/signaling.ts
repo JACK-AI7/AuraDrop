@@ -1,10 +1,11 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Pool, PoolConfig } from 'pg';
+import crypto from 'node:crypto';
 
-// AuraDrop Production Serverless Signaling Channel (P2PFS/1 Specification)
+// AuraDrop Production Serverless Signaling Channel (P2PFS/1 & V24 Specification)
 // Triple-tier cross-device discovery:
 // 1. Neon PostgreSQL durable connection pooling for multi-container Vercel discovery
-// 2. Same Wi-Fi / IP subnet cluster matching
+// 2. Persistent trusted-device pairing relationships across any network / cellular / Wi-Fi
 // 3. Fallback in-memory hot-path buffer for zero-latency local invocations
 
 interface PeerEntry {
@@ -18,14 +19,28 @@ interface PeerEntry {
   capabilities?: string[];
   lastSeen: number;
   visibility: string;
+  isTrusted?: boolean;
 }
 
 // In-memory cache persisted across warm serverless invocations
 const globalPeers = (globalThis as any).__auradrop_peers || new Map<string, PeerEntry>();
 const globalMessages = (globalThis as any).__auradrop_messages || new Map<string, any[]>();
+const globalTrustedPairings = (globalThis as any).__auradrop_pairings || new Map<string, Set<string>>();
 
 (globalThis as any).__auradrop_peers = globalPeers;
 (globalThis as any).__auradrop_messages = globalMessages;
+(globalThis as any).__auradrop_pairings = globalTrustedPairings;
+
+function addMemoryPair(a: string, b: string) {
+  if (!globalTrustedPairings.has(a)) globalTrustedPairings.set(a, new Set());
+  if (!globalTrustedPairings.has(b)) globalTrustedPairings.set(b, new Set());
+  globalTrustedPairings.get(a).add(b);
+  globalTrustedPairings.get(b).add(a);
+}
+
+function isMemoryPaired(a: string, b: string): boolean {
+  return globalTrustedPairings.get(a)?.has(b) || false;
+}
 
 let dbPool: Pool | null = null;
 let tablesInitialized = false;
@@ -80,6 +95,17 @@ async function ensureTables(pool: Pool): Promise<void> {
         created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
       );
       CREATE INDEX IF NOT EXISTS idx_signaling_messages_target ON signaling_messages(target_device_id);
+
+      CREATE TABLE IF NOT EXISTS trusted_device_pairings (
+        device_id_a VARCHAR(128) NOT NULL,
+        device_id_b VARCHAR(128) NOT NULL,
+        relationship_id VARCHAR(128) NOT NULL,
+        auth_token VARCHAR(256),
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (device_id_a, device_id_b)
+      );
+      CREATE INDEX IF NOT EXISTS idx_trusted_pairings_a ON trusted_device_pairings(device_id_a);
+      CREATE INDEX IF NOT EXISTS idx_trusted_pairings_b ON trusted_device_pairings(device_id_b);
     `);
     tablesInitialized = true;
   } catch (err) {
@@ -101,14 +127,32 @@ async function getActivePeers(
   pool: Pool | null,
   selfDeviceId: string,
   clientIp: string,
-  visibility = 'everyone'
+  visibility = 'everyone',
+  trustedPeers: string[] = []
 ): Promise<PeerEntry[]> {
   const peersMap = new Map<string, PeerEntry>();
+  const trustedSet = new Set<string>(trustedPeers);
 
   // 1. Query Durable Database (Shared across ALL Vercel lambda instances and devices)
   if (pool) {
     try {
       await ensureTables(pool);
+
+      // Load DB trusted relationships for this device
+      if (selfDeviceId) {
+        try {
+          const pairRes = await pool.query(
+            `SELECT device_id_a, device_id_b FROM trusted_device_pairings WHERE device_id_a = $1 OR device_id_b = $1`,
+            [selfDeviceId]
+          );
+          for (const row of pairRes.rows) {
+            const other = row.device_id_a === selfDeviceId ? row.device_id_b : row.device_id_a;
+            trustedSet.add(other);
+            addMemoryPair(selfDeviceId, other);
+          }
+        } catch {}
+      }
+
       const q = `
         SELECT device_id, display_name, device_name, platform, client_ip, local_ip, local_port, capabilities, visibility,
                EXTRACT(EPOCH FROM last_seen_at) * 1000 as last_seen
@@ -120,9 +164,11 @@ async function getActivePeers(
       `;
       const res = await pool.query(q, [selfDeviceId]);
       for (const r of res.rows) {
+        const isTrusted = trustedSet.has(r.device_id) || isMemoryPaired(selfDeviceId, r.device_id);
         const isSameIp = r.client_ip === clientIp || clientIp === '127.0.0.1' || r.client_ip === '127.0.0.1';
         const isPublicEveryone = visibility === 'everyone' && r.visibility === 'everyone';
-        if (isSameIp || isPublicEveryone) {
+        // Trusted devices ALWAYS match regardless of client IP / Wi-Fi subnet!
+        if (isTrusted || isSameIp || isPublicEveryone) {
           peersMap.set(r.device_id, {
             deviceId: r.device_id,
             displayName: r.display_name,
@@ -134,6 +180,7 @@ async function getActivePeers(
             capabilities: r.capabilities || undefined,
             lastSeen: Number(r.last_seen),
             visibility: r.visibility,
+            isTrusted: isTrusted || undefined,
           });
         }
       }
@@ -145,10 +192,13 @@ async function getActivePeers(
   // 2. Merge Memory Peers (Fast same-process fallback)
   for (const [id, p] of globalPeers) {
     if (id !== selfDeviceId && Date.now() - p.lastSeen < 35000) {
+      const isTrusted = trustedSet.has(id) || isMemoryPaired(selfDeviceId, id);
       const isSameIp = p.clientIp === clientIp || clientIp === '127.0.0.1' || p.clientIp === '127.0.0.1';
       const isPublicEveryone = visibility === 'everyone' && p.visibility === 'everyone';
-      if (isSameIp || isPublicEveryone) {
-        if (!peersMap.has(id)) peersMap.set(id, p);
+      if (isTrusted || isSameIp || isPublicEveryone) {
+        if (!peersMap.has(id)) {
+          peersMap.set(id, { ...p, isTrusted: isTrusted || undefined });
+        }
       }
     }
   }
@@ -178,9 +228,9 @@ export default async function handler(req: any, res: any) {
     '127.0.0.1';
 
   // Parse query & body
-  const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
-  let action = url.searchParams.get('action') || '';
-  let deviceId = url.searchParams.get('deviceId') || '';
+  const url = new URL(req.url || '/', `http://${req.headers?.host || 'localhost'}`);
+  let action = (req.query?.action as string) || url.searchParams.get('action') || '';
+  let deviceId = (req.query?.deviceId as string) || url.searchParams.get('deviceId') || '';
 
   let body: any = {};
   if (req.method === 'POST') {
@@ -255,7 +305,16 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    const activePeers = await getActivePeers(pool, regDeviceId, clientIp, visibility);
+    const queryTrustedReg = (req.query?.trustedPeers as string) || url.searchParams.get('trustedPeers');
+    const trustedPeers: string[] = Array.isArray(body.trustedPeers)
+      ? body.trustedPeers
+      : queryTrustedReg
+      ? queryTrustedReg.split(',').map((s: string) => s.trim()).filter(Boolean)
+      : [];
+    for (const tId of trustedPeers) {
+      addMemoryPair(regDeviceId, tId);
+    }
+    const activePeers = await getActivePeers(pool, regDeviceId, clientIp, visibility, trustedPeers);
 
     res.statusCode = 200;
     res.end(
@@ -279,13 +338,22 @@ export default async function handler(req: any, res: any) {
       return;
     }
 
-    const name = url.searchParams.get('name') || body.displayName || 'AuraDrop Device';
-    const reqPlatform = url.searchParams.get('platform') || body.platform || (globalPeers.get(deviceId)?.platform) || 'web';
-    const reqDeviceName = url.searchParams.get('deviceName') || body.deviceName || name;
-    const reqVisibility = url.searchParams.get('visibility') || body.visibility || 'everyone';
-    const localIp = body.localIp || url.searchParams.get('localIp') || undefined;
-    const localPort = body.localPort ? Number(body.localPort) : (url.searchParams.get('localPort') ? Number(url.searchParams.get('localPort')) : undefined);
+    const name = (req.query?.name as string) || url.searchParams.get('name') || body.displayName || 'AuraDrop Device';
+    const reqPlatform = (req.query?.platform as string) || url.searchParams.get('platform') || body.platform || (globalPeers.get(deviceId)?.platform) || 'web';
+    const reqDeviceName = (req.query?.deviceName as string) || url.searchParams.get('deviceName') || body.deviceName || name;
+    const reqVisibility = (req.query?.visibility as string) || url.searchParams.get('visibility') || body.visibility || 'everyone';
+    const localIp = body.localIp || (req.query?.localIp as string) || url.searchParams.get('localIp') || undefined;
+    const localPort = body.localPort ? Number(body.localPort) : (req.query?.localPort ? Number(req.query.localPort) : (url.searchParams.get('localPort') ? Number(url.searchParams.get('localPort')) : undefined));
     const capabilities = Array.isArray(body.capabilities) ? body.capabilities : undefined;
+    const queryTrustedPoll = (req.query?.trustedPeers as string) || url.searchParams.get('trustedPeers');
+    const trustedPeers: string[] = Array.isArray(body.trustedPeers)
+      ? body.trustedPeers
+      : queryTrustedPoll
+      ? queryTrustedPoll.split(',').map((s: string) => s.trim()).filter(Boolean)
+      : [];
+    for (const tId of trustedPeers) {
+      addMemoryPair(deviceId, tId);
+    }
 
     // Refresh memory lastSeen
     const current = globalPeers.get(deviceId);
@@ -359,7 +427,7 @@ export default async function handler(req: any, res: any) {
     globalMessages.delete(deviceId);
     messages.push(...memQueue);
 
-    const activePeers = await getActivePeers(pool, deviceId, clientIp, 'everyone');
+    const activePeers = await getActivePeers(pool, deviceId, clientIp, 'everyone', trustedPeers);
 
     res.statusCode = 200;
     res.end(
@@ -370,6 +438,91 @@ export default async function handler(req: any, res: any) {
         messages,
       })
     );
+    return;
+  }
+
+  // ---------------------------------------------------------------------------
+  // 3. PAIR (V24 Persistent Authorization Handshake)
+  // ---------------------------------------------------------------------------
+  if (action === 'pair') {
+    const deviceA = deviceId || body.deviceId || body.initiatorDeviceId;
+    const deviceB = body.targetDeviceId;
+    const relationshipId = body.relationshipId || `rel_${Date.now()}`;
+    const authToken = body.authToken || body.pairingToken || `tok_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+
+    if (!deviceA || !deviceB) {
+      res.statusCode = 400;
+      res.end(JSON.stringify({ error: 'deviceId and targetDeviceId required' }));
+      return;
+    }
+
+    addMemoryPair(deviceA, deviceB);
+
+    if (pool) {
+      try {
+        await ensureTables(pool);
+        await pool.query(
+          `INSERT INTO trusted_device_pairings (device_id_a, device_id_b, relationship_id, auth_token, created_at)
+           VALUES ($1, $2, $3, $4, NOW())
+           ON CONFLICT (device_id_a, device_id_b) DO UPDATE SET relationship_id = EXCLUDED.relationship_id;`,
+          [deviceA, deviceB, relationshipId, authToken]
+        );
+      } catch (err) {
+        console.warn('[Signaling] DB pair notice:', err);
+      }
+    }
+
+    // Queue confirmation message to target device
+    const pairNotif = {
+      type: 'PAIR_CONFIRMED',
+      relationshipId,
+      pairedWith: deviceA,
+      timestamp: Date.now(),
+    };
+    const targetQueue = globalMessages.get(deviceB) || [];
+    targetQueue.push(pairNotif);
+    globalMessages.set(deviceB, targetQueue);
+
+    if (pool) {
+      pool.query(
+        `INSERT INTO signaling_messages (target_device_id, sender_device_id, payload_json, created_at) VALUES ($1, $2, $3, NOW());`,
+        [deviceB, deviceA, JSON.stringify(pairNotif)]
+      ).catch(() => {});
+    }
+
+    res.statusCode = 200;
+    res.end(JSON.stringify({ success: true, relationshipId, paired: true, pairingToken: authToken }));
+    return;
+  }
+
+  // ---------------------------------------------------------------------------
+  // 4. TURN CREDENTIALS (V24 Coturn Ephemeral Credentials)
+  // ---------------------------------------------------------------------------
+  if (action === 'turn') {
+    const turnSecret = process.env.TURN_SECRET || 'auradrop-production-coturn-shared-secret-2026';
+    const turnHost = process.env.TURN_HOST || 'turn.auradrop.network';
+    const ttl = 86400;
+    const timestamp = Math.floor(Date.now() / 1000) + ttl;
+    const username = `${timestamp}:${deviceId || 'device'}`;
+    const hmac = crypto.createHmac('sha1', turnSecret).update(username).digest('base64');
+
+    res.statusCode = 200;
+    res.end(JSON.stringify({
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        {
+          urls: [
+            `turn:${turnHost}:3478?transport=udp`,
+            `turn:${turnHost}:3478?transport=tcp`,
+            `turns:${turnHost}:5349?transport=tcp`,
+          ],
+          username,
+          credential: hmac,
+        },
+      ],
+      ttl,
+    }));
     return;
   }
 

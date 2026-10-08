@@ -11,8 +11,9 @@ class AuraSignalingService {
   AuraSignalingService._internal();
 
   // Default production & local Wi-Fi endpoints
+  static const String defaultVercelSignalingUrl = 'https://auradrop.vercel.app/api/signaling';
   static const String defaultLocalWifiSignalingUrl = 'http://192.168.0.8:5173/api/signaling';
-  static const String defaultProductionSignalingUrl = defaultLocalWifiSignalingUrl;
+  static const String defaultProductionSignalingUrl = defaultVercelSignalingUrl;
 
   static String normalizeUrl(String input) {
     var url = input.trim();
@@ -44,6 +45,64 @@ class AuraSignalingService {
   String _localIp = '';
   int _localPort = 0;
   final Set<String> _knownPeerIds = <String>{};
+  final Set<String> _trustedPeerIds = <String>{};
+
+  Set<String> get trustedPeerIds => Set.unmodifiable(_trustedPeerIds);
+
+  Future<void> initTrustedPeers() async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File('${dir.path}/auradrop_trusted_peers.json');
+      if (await file.exists()) {
+        final content = await file.readAsString();
+        final decoded = jsonDecode(content);
+        if (decoded is List) {
+          _trustedPeerIds.clear();
+          for (final id in decoded) {
+            if (id is String && id.trim().isNotEmpty) {
+              _trustedPeerIds.add(id.trim());
+            }
+          }
+          debugPrint('[AuraSignaling] Loaded ${_trustedPeerIds.length} trusted peers');
+        }
+      }
+    } catch (e) {
+      debugPrint('[AuraSignaling] Error loading trusted peers: $e');
+    }
+  }
+
+  Future<void> _saveTrustedPeers() async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File('${dir.path}/auradrop_trusted_peers.json');
+      await file.writeAsString(jsonEncode(_trustedPeerIds.toList()));
+    } catch (e) {
+      debugPrint('[AuraSignaling] Error saving trusted peers: $e');
+    }
+  }
+
+  Future<void> trustPeer(String peerId) async {
+    if (peerId.trim().isEmpty) return;
+    _trustedPeerIds.add(peerId.trim());
+    await _saveTrustedPeers();
+  }
+
+  Future<void> untrustPeer(String peerId) async {
+    _trustedPeerIds.remove(peerId.trim());
+    await _saveTrustedPeers();
+  }
+
+  bool isPeerTrusted(String peerId) => _trustedPeerIds.contains(peerId.trim());
+
+  Future<void> pairWithPeer(String targetDeviceId) async {
+    await trustPeer(targetDeviceId);
+    await _httpSend({
+      'action': 'pair',
+      'initiatorDeviceId': _deviceId,
+      'targetDeviceId': targetDeviceId,
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+    });
+  }
 
   void updateLanEndpoint({required String localIp, required int localPort}) {
     _localIp = localIp;
@@ -192,6 +251,7 @@ class AuraSignalingService {
       'localIp': _localIp,
       'localPort': _localPort,
       'capabilities': ['lan_http_turbo', 'webrtc_direct', 'chunk_stream', 'sha256'],
+      'trustedPeers': _trustedPeerIds.toList(),
     });
 
     if (regResult != null && regResult['peers'] is List) {
@@ -221,7 +281,11 @@ class AuraSignalingService {
       }
       try {
         final sep = _signalingUrl.contains('?') ? '&' : '?';
-        final pollUri = Uri.parse('$_signalingUrl${sep}action=poll&deviceId=${Uri.encodeComponent(_deviceId)}&name=${Uri.encodeComponent(_displayName)}&platform=android&deviceName=${Uri.encodeComponent(_deviceName)}&localIp=${Uri.encodeComponent(_localIp)}&localPort=$_localPort');
+        final trustedParam = _trustedPeerIds.isNotEmpty
+            ? '&trustedPeers=${Uri.encodeComponent(_trustedPeerIds.join(','))}'
+            : '';
+        final pollUri = Uri.parse(
+            '$_signalingUrl${sep}action=poll&deviceId=${Uri.encodeComponent(_deviceId)}&name=${Uri.encodeComponent(_displayName)}&platform=android&deviceName=${Uri.encodeComponent(_deviceName)}&localIp=${Uri.encodeComponent(_localIp)}&localPort=$_localPort$trustedParam');
         final req = await _httpClient.getUrl(pollUri);
         final resp = await req.close();
         if (resp.statusCode == 200) {
@@ -333,9 +397,12 @@ class AuraSignalingService {
 
     if (_shouldReconnect) {
       _reconnectAttempts++;
-      final delaySeconds = (_reconnectAttempts < 5) ? _reconnectAttempts * 2 : 10;
+      final backoff = [1, 2, 4, 8, 16, 30];
+      final idx = (_reconnectAttempts - 1).clamp(0, backoff.length - 1);
+      final delaySec = backoff[idx];
+      final jitterMs = (DateTime.now().millisecondsSinceEpoch % 1000);
       _reconnectTimer?.cancel();
-      _reconnectTimer = Timer(Duration(seconds: delaySeconds), () {
+      _reconnectTimer = Timer(Duration(milliseconds: delaySec * 1000 + jitterMs), () {
         if (_shouldReconnect && !isConnected) {
           connect();
         }
@@ -379,6 +446,17 @@ class AuraSignalingService {
           }
           break;
 
+        case 'PAIR_REQUEST':
+        case 'PAIR_CONFIRMED':
+          final partnerId = data['initiatorDeviceId']?.toString() ??
+              data['senderId']?.toString() ??
+              data['targetDeviceId']?.toString() ??
+              '';
+          if (partnerId.isNotEmpty && partnerId != _deviceId) {
+            trustPeer(partnerId);
+          }
+          break;
+
         case 'SIGNAL':
           final senderId = data['senderId']?.toString() ?? '';
           final signal = data['signal'];
@@ -416,6 +494,7 @@ class AuraSignalingService {
     final devName = p['deviceName']?.toString() ?? name;
     final platform = p['platform']?.toString() ?? 'android';
     final id = p['deviceId']?.toString() ?? p['id']?.toString() ?? '';
+    final isTrusted = _trustedPeerIds.contains(id);
 
     return PeerDevice(
       id: id,
@@ -427,9 +506,10 @@ class AuraSignalingService {
       localIp: p['localIp']?.toString() ?? '',
       localPort: (p['localPort'] as num?)?.toInt() ?? 0,
       lastSeen: DateTime.now(),
+      isTrusted: isTrusted,
       avatarIndex: (p['avatarIndex'] as num?)?.toInt() ?? 0,
-      transport: 'WebRTC Direct',
-      connectionState: 'DISCOVERED',
+      transport: isTrusted ? 'Trusted P2P' : 'WebRTC Direct',
+      connectionState: isTrusted ? 'READY_TO_TRANSFER' : 'DISCOVERED',
     );
   }
 

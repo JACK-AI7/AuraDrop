@@ -109,4 +109,52 @@ export class TransferStorage {
     // 5. Fallback if empty
     return safe.trim() || 'auradrop_file';
   }
+
+  // ---------------------------------------------------------------------------
+  // TRUSTED DEVICES REPOSITORY (V24 Persistent Authorization)
+  // ---------------------------------------------------------------------------
+  public getTrustedDevices(): TrustedDeviceRecord[] {
+    try {
+      const raw = localStorage.getItem('auradrop_trusted_devices_v24');
+      if (!raw) return [];
+      return JSON.parse(raw);
+    } catch {
+      return [];
+    }
+  }
+
+  public saveTrustedDevice(device: TrustedDeviceRecord): void {
+    try {
+      const list = this.getTrustedDevices();
+      const updated = [device, ...list.filter((d) => d.deviceId !== device.deviceId)];
+      localStorage.setItem('auradrop_trusted_devices_v24', JSON.stringify(updated));
+    } catch (e) {
+      console.warn('Failed to save trusted device', e);
+    }
+  }
+
+  public removeTrustedDevice(deviceId: string): void {
+    try {
+      const list = this.getTrustedDevices();
+      const updated = list.filter((d) => d.deviceId !== deviceId);
+      localStorage.setItem('auradrop_trusted_devices_v24', JSON.stringify(updated));
+    } catch (e) {
+      console.warn('Failed to remove trusted device', e);
+    }
+  }
+
+  public isDeviceTrusted(deviceId: string): boolean {
+    return this.getTrustedDevices().some((d) => d.deviceId === deviceId);
+  }
+}
+
+export interface TrustedDeviceRecord {
+  deviceId: string;
+  name: string;
+  platform: string;
+  relationshipId: string;
+  pairedAt: string;
+  lastSeen?: string;
+  authSecret?: string;
+  isOnline?: boolean;
 }
