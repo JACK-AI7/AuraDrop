@@ -44,19 +44,85 @@ class AuraLanServer {
   File? _activePartFile;
   String? _activeTransferId;
 
+  // V26 Local-First Bootstrap & WebSockets
+  String _activeBootstrapToken = '';
+  int _bootstrapTokenExpiresAt = 0;
+  final Map<String, String> _activeSessionTokens = {};
+  final Set<String> _trustedDevices = {};
+  final Map<String, WebSocket> _connectedLocalWebSockets = {};
+
   // Streams
   final _progressController = StreamController<AuraLanServerProgress>.broadcast();
   final _completeController = StreamController<Map<String, dynamic>>.broadcast();
   final _requestController = StreamController<Map<String, dynamic>>.broadcast();
+  final _localSignalController = StreamController<Map<String, dynamic>>.broadcast();
+  final _localPeerConnectedController = StreamController<Map<String, dynamic>>.broadcast();
+  final _localPeerDisconnectedController = StreamController<String>.broadcast();
 
   Stream<AuraLanServerProgress> get onTransferProgress => _progressController.stream;
   Stream<Map<String, dynamic>> get onTransferComplete => _completeController.stream;
   Stream<Map<String, dynamic>> get onTransferRequest => _requestController.stream;
+  Stream<Map<String, dynamic>> get onLocalSignal => _localSignalController.stream;
+  Stream<Map<String, dynamic>> get onLocalPeerConnected => _localPeerConnectedController.stream;
+  Stream<String> get onLocalPeerDisconnected => _localPeerDisconnectedController.stream;
 
   bool get isRunning => _isRunning;
   String get localIp => _localIp;
   int get port => _port;
   String get endpointUrl => 'http://$_localIp:$_port';
+
+  bool hasLocalClient(String deviceId) =>
+      _connectedLocalWebSockets.containsKey(deviceId) &&
+      _connectedLocalWebSockets[deviceId]?.readyState == WebSocket.open;
+
+  void trustDevice(String deviceId) => _trustedDevices.add(deviceId);
+  bool isDeviceTrusted(String deviceId) => _trustedDevices.contains(deviceId);
+
+  String generateBootstrapToken() {
+    _activeBootstrapToken = _generateSecureToken();
+    _bootstrapTokenExpiresAt = DateTime.now().millisecondsSinceEpoch + 120000; // 2 minutes TTL
+    return _activeBootstrapToken;
+  }
+
+  Map<String, dynamic> getQrPayload() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (_activeBootstrapToken.isEmpty || now >= _bootstrapTokenExpiresAt) {
+      generateBootstrapToken();
+    }
+    return {
+      'protocol': 'AURADROP_LOCAL_V1',
+      'deviceId': _deviceId,
+      'deviceName': _deviceName,
+      'hostname': 'auradrop-${_deviceId.substring(0, math.min(6, _deviceId.length))}.local',
+      'ip': _localIp,
+      'port': _port,
+      'bootstrapToken': _activeBootstrapToken,
+      'expiresAt': _bootstrapTokenExpiresAt,
+    };
+  }
+
+  bool sendLocalMessage(String targetDeviceId, Map<String, dynamic> message) {
+    final ws = _connectedLocalWebSockets[targetDeviceId];
+    if (ws != null && ws.readyState == WebSocket.open) {
+      try {
+        ws.add(jsonEncode(message));
+        return true;
+      } catch (e) {
+        debugPrint('[AuraLanServer] Failed to send local message: $e');
+      }
+    }
+    return false;
+  }
+
+  bool sendLocalSignal(String targetDeviceId, Map<String, dynamic> signal) {
+    return sendLocalMessage(targetDeviceId, {
+      'type': 'SIGNAL',
+      'senderId': _deviceId,
+      'targetDeviceId': targetDeviceId,
+      'signal': signal,
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+    });
+  }
 
   String _generateSecureToken() {
     final random = math.Random.secure();
@@ -96,6 +162,12 @@ class AuraLanServer {
 
   Future<void> stop() async {
     _isRunning = false;
+    for (final ws in _connectedLocalWebSockets.values) {
+      try {
+        ws.close(WebSocketStatus.goingAway, 'Server stopping');
+      } catch (_) {}
+    }
+    _connectedLocalWebSockets.clear();
     await _activeUploadSink?.close();
     _activeUploadSink = null;
     await _server?.close(force: true);
@@ -148,6 +220,18 @@ class AuraLanServer {
         return;
       }
 
+      // Check for WebSocket upgrade request (e.g. /ws or any path from Chrome)
+      if (WebSocketTransformer.isUpgradeRequest(request)) {
+        try {
+          final socket = await WebSocketTransformer.upgrade(request);
+          _handleWebSocketConnection(socket, request);
+          return;
+        } catch (e) {
+          debugPrint('[AuraLanServer] WebSocket upgrade failed: $e');
+          return;
+        }
+      }
+
       final path = request.uri.path;
 
       try {
@@ -155,6 +239,10 @@ class AuraLanServer {
           await _handleInfo(request);
         } else if (path == '/api/auradrop/v1/health' && request.method == 'GET') {
           await _handleHealth(request);
+        } else if (path == '/api/auradrop/v1/bootstrap' && request.method == 'GET') {
+          await _handleBootstrap(request);
+        } else if (path == '/api/auradrop/v1/pair' && request.method == 'POST') {
+          await _handlePair(request);
         } else if ((path == '/api/auradrop/v1/prepare-upload' || path == '/api/transfer/prepare') && request.method == 'POST') {
           await _handlePrepareUpload(request);
         } else if ((path == '/api/auradrop/v1/upload' || path == '/api/transfer/upload') && request.method == 'POST') {
@@ -194,13 +282,13 @@ class AuraLanServer {
       'upload': true,
       'version': '1.0',
       'status': 'ok',
-      'capabilities': ['lan_http_turbo', 'streaming_io', 'sha256', 'one_time_token'],
+      'capabilities': ['lan_http_turbo', 'streaming_io', 'sha256', 'one_time_token', 'local_ws_signaling'],
     }));
     await request.response.close();
   }
 
   // ---------------------------------------------------------------------------
-  // 2. HEALTH (Section 7: GET /api/auradrop/v1/health)
+  // 2. HEALTH (GET /api/auradrop/v1/health)
   // ---------------------------------------------------------------------------
   Future<void> _handleHealth(HttpRequest request) async {
     request.response.statusCode = HttpStatus.ok;
@@ -208,10 +296,167 @@ class AuraLanServer {
     request.response.write(jsonEncode({
       'status': 'ok',
       'version': '1.0',
-      'protocol': 'auradrop/1',
+      'protocol': 'AURADROP_LOCAL_V1',
       'deviceId': _deviceId,
+      'deviceName': _deviceName,
+      'ip': _localIp,
+      'port': _port,
     }));
     await request.response.close();
+  }
+
+  // ---------------------------------------------------------------------------
+  // 2b. BOOTSTRAP (GET /api/auradrop/v1/bootstrap)
+  // ---------------------------------------------------------------------------
+  Future<void> _handleBootstrap(HttpRequest request) async {
+    request.response.statusCode = HttpStatus.ok;
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode(getQrPayload()));
+    await request.response.close();
+  }
+
+  // ---------------------------------------------------------------------------
+  // 2c. PAIR (POST /api/auradrop/v1/pair)
+  // ---------------------------------------------------------------------------
+  Future<void> _handlePair(HttpRequest request) async {
+    final bodyStr = await utf8.decoder.bind(request).join();
+    final data = jsonDecode(bodyStr) as Map<String, dynamic>;
+    final clientDeviceId = data['deviceId']?.toString() ?? '';
+    final clientDeviceName = data['deviceName']?.toString() ?? 'Desktop Browser';
+    final providedToken = data['bootstrapToken']?.toString() ?? data['token']?.toString() ?? '';
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final isValidToken = providedToken.isNotEmpty &&
+        (providedToken == _activeBootstrapToken && now <= _bootstrapTokenExpiresAt);
+
+    if (!isValidToken && !_trustedDevices.contains(clientDeviceId)) {
+      request.response.statusCode = HttpStatus.unauthorized;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'error': 'Invalid or expired bootstrap token',
+        'protocol': 'AURADROP_LOCAL_V1',
+      }));
+      await request.response.close();
+      return;
+    }
+
+    final sessionToken = _generateSecureToken();
+    _activeSessionTokens[clientDeviceId] = sessionToken;
+    _trustedDevices.add(clientDeviceId);
+
+    request.response.statusCode = HttpStatus.ok;
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode({
+      'success': true,
+      'deviceId': _deviceId,
+      'deviceName': _deviceName,
+      'sessionToken': sessionToken,
+      'protocol': 'AURADROP_LOCAL_V1',
+      'port': _port,
+    }));
+    await request.response.close();
+
+    _localPeerConnectedController.add({
+      'deviceId': clientDeviceId,
+      'deviceName': clientDeviceName,
+      'platform': 'web',
+      'ip': request.connectionInfo?.remoteAddress.address ?? 'LAN',
+      'port': 0,
+      'isLocal': true,
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // 2d. LOCAL WEBSOCKET CONNECTION HANDLER
+  // ---------------------------------------------------------------------------
+  void _handleWebSocketConnection(WebSocket socket, HttpRequest request) {
+    String? authenticatedDeviceId;
+
+    socket.listen(
+      (raw) {
+        try {
+          final message = jsonDecode(raw.toString()) as Map<String, dynamic>;
+          final type = message['type']?.toString();
+
+          if (type == 'AUTH') {
+            final clientDeviceId = message['deviceId']?.toString() ?? '';
+            final clientDeviceName = message['deviceName']?.toString() ?? 'Desktop Browser';
+            final token = message['token']?.toString() ?? message['bootstrapToken']?.toString() ?? '';
+
+            final now = DateTime.now().millisecondsSinceEpoch;
+            final isBootstrapValid =
+                token.isNotEmpty && token == _activeBootstrapToken && now <= _bootstrapTokenExpiresAt;
+            final isSessionValid = token.isNotEmpty && _activeSessionTokens[clientDeviceId] == token;
+            final isTrusted = _trustedDevices.contains(clientDeviceId);
+
+            if (isBootstrapValid || isSessionValid || isTrusted) {
+              authenticatedDeviceId = clientDeviceId;
+              _trustedDevices.add(clientDeviceId);
+              _connectedLocalWebSockets[clientDeviceId] = socket;
+
+              final sessionToken = isSessionValid ? token : _generateSecureToken();
+              _activeSessionTokens[clientDeviceId] = sessionToken;
+
+              socket.add(jsonEncode({
+                'type': 'AUTH_OK',
+                'deviceId': _deviceId,
+                'deviceName': _deviceName,
+                'sessionToken': sessionToken,
+                'protocol': 'AURADROP_LOCAL_V1',
+              }));
+
+              _localPeerConnectedController.add({
+                'deviceId': clientDeviceId,
+                'deviceName': clientDeviceName,
+                'platform': 'web',
+                'ip': request.connectionInfo?.remoteAddress.address ?? 'LAN',
+                'port': 0,
+                'isLocal': true,
+              });
+              debugPrint('[AuraLanServer] Local WebSocket client authenticated: $clientDeviceId ($clientDeviceName)');
+            } else {
+              socket.add(jsonEncode({
+                'type': 'AUTH_FAIL',
+                'error': 'Invalid token or untrusted device',
+              }));
+              socket.close(WebSocketStatus.policyViolation, 'Authentication failed');
+            }
+          } else if (type == 'SIGNAL') {
+            final targetDeviceId = message['targetDeviceId']?.toString() ?? '';
+            final signal = message['signal'];
+            final senderId = authenticatedDeviceId ?? message['senderId']?.toString() ?? '';
+
+            if (signal is Map<String, dynamic> && senderId.isNotEmpty) {
+              _localSignalController.add({
+                'senderId': senderId,
+                'targetDeviceId': targetDeviceId,
+                'signal': signal,
+              });
+            }
+          } else if (type == 'PING') {
+            socket.add(jsonEncode({
+              'type': 'PONG',
+              'timestamp': DateTime.now().millisecondsSinceEpoch,
+            }));
+          }
+        } catch (e) {
+          debugPrint('[AuraLanServer] Error handling WS message: $e');
+        }
+      },
+      onDone: () {
+        if (authenticatedDeviceId != null) {
+          _connectedLocalWebSockets.remove(authenticatedDeviceId);
+          _localPeerDisconnectedController.add(authenticatedDeviceId!);
+          debugPrint('[AuraLanServer] Local WebSocket client disconnected: $authenticatedDeviceId');
+        }
+      },
+      onError: (e) {
+        if (authenticatedDeviceId != null) {
+          _connectedLocalWebSockets.remove(authenticatedDeviceId);
+          _localPeerDisconnectedController.add(authenticatedDeviceId!);
+        }
+      },
+    );
   }
 
   // ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import '../models/models.dart';
+import 'aura_lan_server.dart';
 
 class AuraSignalingService {
   static final AuraSignalingService _instance = AuraSignalingService._internal();
@@ -48,8 +49,58 @@ class AuraSignalingService {
   final Set<String> _trustedPeerIds = <String>{};
 
   Set<String> get trustedPeerIds => Set.unmodifiable(_trustedPeerIds);
+  bool _lanServerHooked = false;
+
+  void _hookLanServerEvents() {
+    if (_lanServerHooked) return;
+    _lanServerHooked = true;
+
+    // Listen to local WebSocket signals from AuraLanServer (zero-cloud local path)
+    AuraLanServer().onLocalSignal.listen((data) {
+      final senderId = data['senderId']?.toString() ?? '';
+      final signal = data['signal'];
+      if (senderId.isNotEmpty && signal is Map<String, dynamic>) {
+        debugPrint('[AuraSignaling] Dispatching inbound local signal from $senderId');
+        _signalController.add({
+          'senderId': senderId,
+          'signal': signal,
+        });
+      }
+    });
+
+    // Listen to local peers discovered or connecting via AuraLanServer
+    AuraLanServer().onLocalPeerConnected.listen((peerData) {
+      final id = peerData['deviceId']?.toString() ?? '';
+      final name = peerData['deviceName']?.toString() ?? 'Desktop Browser';
+      final ip = peerData['ip']?.toString() ?? 'LAN';
+      if (id.isNotEmpty && id != _deviceId) {
+        trustPeer(id);
+        final peer = PeerDevice(
+          id: id,
+          name: name,
+          deviceName: name,
+          platform: 'web',
+          ip: ip,
+          port: 0,
+          lastSeen: DateTime.now(),
+          isTrusted: true,
+          transport: 'Direct LAN (Local-First)',
+          connectionState: 'READY_TO_TRANSFER',
+        );
+        _knownPeerIds.add(id);
+        _peerOnlineController.add(peer);
+        debugPrint('[AuraSignaling] Local peer connected & trusted: $id ($name)');
+      }
+    });
+
+    AuraLanServer().onLocalPeerDisconnected.listen((deviceId) {
+      _peerOfflineController.add(deviceId);
+      debugPrint('[AuraSignaling] Local peer disconnected: $deviceId');
+    });
+  }
 
   Future<void> initTrustedPeers() async {
+    _hookLanServerEvents();
     try {
       final dir = await getApplicationDocumentsDirectory();
       final file = File('${dir.path}/auradrop_trusted_peers.json');
@@ -534,6 +585,14 @@ class AuraSignalingService {
     required String targetDeviceId,
     required Map<String, dynamic> signal,
   }) {
+    if (AuraLanServer().hasLocalClient(targetDeviceId)) {
+      final sent = AuraLanServer().sendLocalSignal(targetDeviceId, signal);
+      if (sent) {
+        debugPrint('[AuraSignaling] Sent signal locally to $targetDeviceId via AuraLanServer');
+        return;
+      }
+    }
+
     _send({
       'type': 'SIGNAL',
       'senderId': _deviceId,
@@ -551,7 +610,7 @@ class AuraSignalingService {
     required int totalFiles,
     required List<Map<String, dynamic>> files,
   }) {
-    _send({
+    final payload = {
       'type': 'TRANSFER_REQUEST',
       'senderId': _deviceId,
       'senderName': _displayName,
@@ -563,21 +622,33 @@ class AuraSignalingService {
       'totalFiles': totalFiles,
       'files': files,
       'timestamp': DateTime.now().millisecondsSinceEpoch,
-    });
+    };
+
+    if (AuraLanServer().hasLocalClient(targetDeviceId)) {
+      if (AuraLanServer().sendLocalMessage(targetDeviceId, payload)) return;
+    }
+
+    _send(payload);
   }
 
   void sendTransferAccept({
     required String targetDeviceId,
     required String transferId,
   }) {
-    _send({
+    final payload = {
       'type': 'TRANSFER_ACCEPT',
       'senderId': _deviceId,
       'targetDeviceId': targetDeviceId,
       'transferId': transferId,
       'accepted': true,
       'timestamp': DateTime.now().millisecondsSinceEpoch,
-    });
+    };
+
+    if (AuraLanServer().hasLocalClient(targetDeviceId)) {
+      if (AuraLanServer().sendLocalMessage(targetDeviceId, payload)) return;
+    }
+
+    _send(payload);
   }
 
   void sendTransferDecline({
@@ -585,7 +656,7 @@ class AuraSignalingService {
     required String transferId,
     String reason = 'declined_by_user',
   }) {
-    _send({
+    final payload = {
       'type': 'TRANSFER_DECLINE',
       'senderId': _deviceId,
       'targetDeviceId': targetDeviceId,
@@ -593,7 +664,13 @@ class AuraSignalingService {
       'accepted': false,
       'reason': reason,
       'timestamp': DateTime.now().millisecondsSinceEpoch,
-    });
+    };
+
+    if (AuraLanServer().hasLocalClient(targetDeviceId)) {
+      if (AuraLanServer().sendLocalMessage(targetDeviceId, payload)) return;
+    }
+
+    _send(payload);
   }
 
   void sendTransferComplete({

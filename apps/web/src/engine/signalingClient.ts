@@ -5,6 +5,7 @@
 import { DeviceIdentity } from './identity';
 import { PeerDevice } from '../types';
 import { TransferStorage } from './transferStorage';
+import { LocalSignalingClient } from './localSignalingClient';
 
 export interface SignalingEventCallbacks {
   onPeerList?: (peers: PeerDevice[]) => void;
@@ -71,6 +72,7 @@ export class SignalingClient {
     this.serverlessApiUrl = typeof window !== 'undefined' ? `${window.location.origin}/api/signaling` : '';
     this.setupNetworkLifecycleListeners();
     this.setupBroadcastMesh();
+    this.setupLocalSignaling();
   }
 
   public static getInstance(identity: DeviceIdentity): SignalingClient {
@@ -370,6 +372,85 @@ export class SignalingClient {
     }
   }
 
+  private setupLocalSignaling(): void {
+    const localClient = LocalSignalingClient.getInstance();
+    localClient.setIdentity(this.identity.deviceId, this.identity.displayName);
+    localClient.setCallbacks({
+      onConnected: (peer) => {
+        this.handleLocalPeerConnected(peer);
+      },
+      onDisconnected: (deviceId) => {
+        this.handleLocalPeerDisconnected(deviceId);
+      },
+      onSignal: (senderId, signal) => {
+        this.callbacks.onSignal?.(senderId, signal);
+      },
+      onTransferRequest: (payload) => {
+        this.callbacks.onTransferRequest?.(payload);
+      },
+      onTransferAccept: (payload) => {
+        this.callbacks.onTransferResponse?.(payload);
+      },
+      onTransferDecline: (payload) => {
+        this.callbacks.onTransferResponse?.(payload);
+      },
+      onTransferAck: (payload) => {
+        this.callbacks.onTransferAck?.(payload);
+      },
+      onChatMessage: (payload) => {
+        this.callbacks.onChatMessage?.(payload);
+      },
+    });
+
+    // Auto-discover and connect to known local trusted phones in background
+    setTimeout(() => {
+      this.reconnectLocalTrustedPeers();
+    }, 500);
+  }
+
+  public async reconnectLocalTrustedPeers(): Promise<void> {
+    const trusted = TransferStorage.getInstance().getTrustedDevices();
+    const localClient = LocalSignalingClient.getInstance();
+
+    for (const dev of trusted) {
+      if (dev.localIp && dev.localPort) {
+        try {
+          const health = await localClient.testEndpoint(dev.localIp, dev.localPort);
+          if (health.ok) {
+            console.log(`[SignalingClient] Auto-reconnecting to trusted local phone: ${dev.name} at ${dev.localIp}:${dev.localPort}`);
+            await localClient.connectWebSocket(dev.localIp, dev.localPort, dev.sessionToken);
+            break;
+          }
+        } catch {}
+      }
+    }
+  }
+
+  private handleLocalPeerConnected(peer: { deviceId: string; deviceName: string; ip: string; port: number }): void {
+    const localPeer: PeerDevice = {
+      id: peer.deviceId,
+      deviceId: peer.deviceId,
+      name: peer.deviceName,
+      deviceName: `${peer.deviceName} (Direct LAN)`,
+      platform: 'android',
+      ip: peer.ip,
+      port: peer.port,
+      localIp: peer.ip,
+      localPort: peer.port,
+      lastSeen: new Date(),
+      isTrusted: true,
+      transport: 'Direct LAN (Local-First)',
+      connectionState: 'READY_TO_TRANSFER',
+    };
+    this.localMeshPeers.set(peer.deviceId, localPeer);
+    this.emitCombinedPeers();
+  }
+
+  private handleLocalPeerDisconnected(deviceId: string): void {
+    this.localMeshPeers.delete(deviceId);
+    this.emitCombinedPeers();
+  }
+
   private handleDiscoveredPeers(peers: any[]): void {
     this.networkDiscoveredPeers = Array.isArray(peers) ? peers : [];
     this.emitCombinedPeers();
@@ -377,6 +458,13 @@ export class SignalingClient {
 
   private emitCombinedPeers(): void {
     const combined = new Map<string, PeerDevice>();
+
+    // Add local LAN peers connected directly via LocalSignalingClient
+    for (const [id, peer] of this.localMeshPeers.entries()) {
+      if (id !== this.identity.deviceId) {
+        combined.set(id, peer);
+      }
+    }
 
     // Add real network peers from Serverless API / Neon DB / WebSocket
     for (const p of this.networkDiscoveredPeers) {
@@ -574,6 +662,12 @@ export class SignalingClient {
   }
 
   public sendSignal(targetDeviceId: string, signal: any): void {
+    const localClient = LocalSignalingClient.getInstance();
+    if (localClient.isConnected() && localClient.getActivePeer()?.deviceId === targetDeviceId) {
+      localClient.sendSignal(targetDeviceId, signal);
+      return;
+    }
+
     this.send({
       type: 'SIGNAL',
       deviceId: this.identity.deviceId,
@@ -584,6 +678,26 @@ export class SignalingClient {
   }
 
   public sendTransferRequest(targetDeviceId: string, payload: any): void {
+    const localClient = LocalSignalingClient.getInstance();
+    if (localClient.isConnected() && localClient.getActivePeer()?.deviceId === targetDeviceId) {
+      localClient.sendMessage({
+        type: 'TRANSFER_REQUEST',
+        deviceId: this.identity.deviceId,
+        senderId: this.identity.deviceId,
+        senderName: this.identity.displayName,
+        senderDeviceName: this.identity.deviceName,
+        targetDeviceId,
+        transferId: payload.transferId,
+        fileName: payload.fileName,
+        totalBytes: payload.totalBytes,
+        totalFiles: payload.totalFiles,
+        files: payload.files,
+        timestamp: Date.now(),
+        payload,
+      });
+      return;
+    }
+
     this.send({
       type: 'TRANSFER_REQUEST',
       deviceId: this.identity.deviceId,
@@ -596,6 +710,21 @@ export class SignalingClient {
 
   public sendTransferResponse(targetDeviceId: string, payload: any): void {
     const isAccepted = payload.accepted === true;
+    const localClient = LocalSignalingClient.getInstance();
+    if (localClient.isConnected() && localClient.getActivePeer()?.deviceId === targetDeviceId) {
+      localClient.sendMessage({
+        type: isAccepted ? 'TRANSFER_ACCEPT' : 'TRANSFER_DECLINE',
+        deviceId: this.identity.deviceId,
+        senderId: this.identity.deviceId,
+        targetDeviceId,
+        transferId: payload.transferId,
+        accepted: isAccepted,
+        payload,
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
     this.send({
       type: isAccepted ? 'TRANSFER_ACCEPT' : 'TRANSFER_DECLINE',
       deviceId: this.identity.deviceId,
@@ -616,6 +745,20 @@ export class SignalingClient {
   }
 
   public sendTransferAck(targetDeviceId: string, payload: any): void {
+    const localClient = LocalSignalingClient.getInstance();
+    if (localClient.isConnected() && localClient.getActivePeer()?.deviceId === targetDeviceId) {
+      localClient.sendMessage({
+        type: 'TRANSFER_ACK_COMPLETE',
+        deviceId: this.identity.deviceId,
+        senderId: this.identity.deviceId,
+        targetDeviceId,
+        transferId: payload.transferId,
+        payload,
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
     this.send({
       type: 'TRANSFER_ACK_COMPLETE',
       deviceId: this.identity.deviceId,
@@ -627,6 +770,19 @@ export class SignalingClient {
   }
 
   public sendChatMessage(targetDeviceId: string, payload: any): void {
+    const localClient = LocalSignalingClient.getInstance();
+    if (localClient.isConnected() && localClient.getActivePeer()?.deviceId === targetDeviceId) {
+      localClient.sendMessage({
+        type: 'CHAT_MESSAGE',
+        deviceId: this.identity.deviceId,
+        senderId: this.identity.deviceId,
+        targetDeviceId,
+        payload,
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
     this.send({
       type: 'CHAT_MESSAGE',
       deviceId: this.identity.deviceId,

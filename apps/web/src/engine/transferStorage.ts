@@ -157,4 +157,8 @@ export interface TrustedDeviceRecord {
   lastSeen?: string;
   authSecret?: string;
   isOnline?: boolean;
+  localIp?: string;
+  localPort?: number;
+  sessionToken?: string;
+  isLocal?: boolean;
 }

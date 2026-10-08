@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 import 'models/models.dart';
 import 'theme/aura_theme.dart';
@@ -993,6 +995,155 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
     );
   }
 
+  void _showLocalQrModal(AuraTheme theme) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            final payload = AuraLanServer().getQrPayload();
+            final qrData = jsonEncode(payload);
+            final ip = AuraLanServer().localIp;
+            final port = AuraLanServer().port;
+
+            return Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: theme.cardBackground,
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                border: Border.all(color: theme.border, width: 1.0),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 36,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: theme.textSecondary.withValues(alpha: 0.3),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.qr_code_2_rounded, color: theme.textPrimary, size: 22),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Local Wi-Fi Pairing',
+                            style: TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.w800,
+                              color: theme.textPrimary,
+                            ),
+                          ),
+                        ],
+                      ),
+                      IconButton(
+                        icon: Icon(Icons.close_rounded, color: theme.textSecondary, size: 20),
+                        onPressed: () => Navigator.pop(ctx),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Scan this QR code with the AuraDrop desktop website to connect directly over local Wi-Fi. Zero cloud servers required.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: theme.textSecondary,
+                      height: 1.4,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 20),
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.15),
+                          blurRadius: 16,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: QrImageView(
+                      data: qrData,
+                      version: QrVersions.auto,
+                      size: 200.0,
+                      backgroundColor: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: theme.background,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: theme.border, width: 1.0),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: const BoxDecoration(
+                            color: Color(0xFF10B981),
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          'LAN Endpoint: $ip:$port',
+                          style: TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: theme.textPrimary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: theme.textPrimary,
+                          side: BorderSide(color: theme.border),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                        ),
+                        onPressed: () {
+                          HapticFeedback.lightImpact();
+                          AuraLanServer().generateBootstrapToken();
+                          setModalState(() {});
+                        },
+                        icon: const Icon(Icons.refresh_rounded, size: 16),
+                        label: const Text('Refresh Token', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   void _showSnackBar(String text, {required bool isSuccess}) {
     final theme = AuraTheme.of(context);
     ScaffoldMessenger.of(context).showSnackBar(
@@ -1203,6 +1354,15 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                     ],
                   ),
                 ),
+              ),
+              // Local QR Pair Button
+              MinimalIconButton(
+                icon: Icons.qr_code_2_rounded,
+                size: 32,
+                onPressed: () {
+                  HapticFeedback.lightImpact();
+                  _showLocalQrModal(theme);
+                },
               ),
               const SizedBox(width: 8),
 
