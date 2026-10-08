@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import QRCode from 'qrcode';
 import jsQR from 'jsqr';
 import { PeerDevice } from '../types';
 import { LocalSignalingClient } from '../engine/localSignalingClient';
@@ -12,7 +13,7 @@ interface DevicePairModalProps {
   peers: PeerDevice[];
 }
 
-type PairTab = 'scan_qr' | 'manual_ip' | 'cloud_sync';
+type PairTab = 'show_qr' | 'manual_ip' | 'cloud_sync' | 'webcam_scan';
 
 export const DevicePairModal: React.FC<DevicePairModalProps> = ({
   isOpen,
@@ -21,10 +22,12 @@ export const DevicePairModal: React.FC<DevicePairModalProps> = ({
   localName,
   peers,
 }) => {
-  const [activeTab, setActiveTab] = useState<PairTab>('scan_qr');
+  const [activeTab, setActiveTab] = useState<PairTab>('show_qr');
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [isCopied, setIsCopied] = useState(false);
+  const [isTokenCopied, setIsTokenCopied] = useState(false);
 
-  // Scanner state
+  // Fallback Webcam Scanner state
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [cameraActive, setCameraActive] = useState(false);
@@ -40,6 +43,39 @@ export const DevicePairModal: React.FC<DevicePairModalProps> = ({
 
   const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
   const signalingUrl = `${currentOrigin}/api/signaling`;
+
+  // Generate QR Code for Desktop whenever modal opens or localId/name changes
+  useEffect(() => {
+    if (isOpen && localId) {
+      const payload = JSON.stringify({
+        protocol: 'AURADROP_PAIR_V1',
+        desktopId: localId,
+        desktopName: localName,
+        signalingUrl,
+        origin: currentOrigin,
+        timestamp: Date.now(),
+      });
+
+      QRCode.toDataURL(payload, {
+        width: 260,
+        margin: 2,
+        color: {
+          dark: '#000000',
+          light: '#FFFFFF',
+        },
+        errorCorrectionLevel: 'M',
+      })
+        .then((url) => {
+          setQrDataUrl(url);
+        })
+        .catch((err) => {
+          console.error('[DevicePairModal] Failed to generate desktop QR code:', err);
+        });
+    }
+  }, [isOpen, localId, localName, signalingUrl, currentOrigin]);
+
+  // Check if an Android peer just connected while modal is open
+  const connectedAndroid = peers.find((p) => p.platform === 'android');
 
   useEffect(() => {
     if (!isOpen) {
@@ -64,7 +100,7 @@ export const DevicePairModal: React.FC<DevicePairModalProps> = ({
 
   const startCamera = async () => {
     setScanError(null);
-    setScanStatus('Starting camera...');
+    setScanStatus('Starting laptop camera...');
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
@@ -136,7 +172,6 @@ export const DevicePairModal: React.FC<DevicePairModalProps> = ({
     // Connect WebSocket
     const wsConnected = await localClient.connectWebSocket(payload.ip, payload.port, pairRes.sessionToken);
     if (wsConnected) {
-      // Save trusted device record
       TransferStorage.getInstance().saveTrustedDevice({
         deviceId: payload.deviceId,
         name: payload.deviceName,
@@ -220,6 +255,18 @@ export const DevicePairModal: React.FC<DevicePairModalProps> = ({
     setTimeout(() => setIsCopied(false), 2200);
   };
 
+  const handleCopyPairingToken = () => {
+    const payload = JSON.stringify({
+      protocol: 'AURADROP_PAIR_V1',
+      desktopId: localId,
+      desktopName: localName,
+      signalingUrl,
+    });
+    navigator.clipboard.writeText(payload);
+    setIsTokenCopied(true);
+    setTimeout(() => setIsTokenCopied(false), 2200);
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -227,7 +274,7 @@ export const DevicePairModal: React.FC<DevicePairModalProps> = ({
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'rgba(0, 0, 0, 0.82)',
+        background: 'rgba(0, 0, 0, 0.85)',
         backdropFilter: 'blur(20px)',
         display: 'flex',
         alignItems: 'center',
@@ -243,18 +290,24 @@ export const DevicePairModal: React.FC<DevicePairModalProps> = ({
           border: '1px solid #27272A',
           borderRadius: '24px',
           width: '100%',
-          maxWidth: '540px',
+          maxWidth: '520px',
           padding: '24px',
           boxShadow: '0 24px 60px rgba(0, 0, 0, 0.95)',
         }}
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ fontSize: '18px' }}>📱</span>
-            <h2 style={{ fontSize: '17px', fontWeight: 800, color: '#FFFFFF', margin: 0 }}>
-              Pair Android Mobile App
-            </h2>
+            <span style={{ fontSize: '20px' }}>📱</span>
+            <div>
+              <h2 style={{ fontSize: '17px', fontWeight: 800, color: '#FFFFFF', margin: 0 }}>
+                Pair Android Mobile App
+              </h2>
+              <div style={{ fontSize: '11px', color: '#71717A', marginTop: '2px' }}>
+                Scan Desktop QR with your phone camera
+              </div>
+            </div>
           </div>
           <button
             onClick={onClose}
@@ -262,39 +315,44 @@ export const DevicePairModal: React.FC<DevicePairModalProps> = ({
               background: '#18181B',
               border: '1px solid #27272A',
               borderRadius: '50%',
-              width: '30px',
-              height: '30px',
+              width: '32px',
+              height: '32px',
               color: '#A1A1AA',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              fontSize: '12px',
+              fontSize: '13px',
+              transition: 'all 0.15s ease',
             }}
           >
             ✕
           </button>
         </div>
 
-        {/* This Desktop Info */}
-        <div style={{ background: '#141418', border: '1px solid #222226', borderRadius: '16px', padding: '12px 14px', marginBottom: '14px' }}>
+        {/* This Desktop Info Card */}
+        <div style={{ background: '#141418', border: '1px solid #222226', borderRadius: '14px', padding: '12px 14px', marginBottom: '16px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
-              <div style={{ fontSize: '10px', color: '#71717A', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.4px' }}>This Desktop</div>
-              <div style={{ fontSize: '14px', fontWeight: 800, color: '#FFFFFF', marginTop: '2px' }}>{localName}</div>
+              <div style={{ fontSize: '10px', color: '#71717A', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.5px' }}>
+                This Desktop Client
+              </div>
+              <div style={{ fontSize: '14px', fontWeight: 800, color: '#FFFFFF', marginTop: '2px' }}>
+                {localName}
+              </div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#34C759', boxShadow: '0 0 8px #34C759' }} />
+              <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#34C759', boxShadow: '0 0 10px #34C759' }} />
               <span style={{ fontSize: '11px', color: '#34C759', fontWeight: 700 }}>Online & Ready</span>
             </div>
           </div>
         </div>
 
         {/* Tab Switcher */}
-        <div style={{ display: 'flex', gap: '6px', background: '#121216', padding: '4px', borderRadius: '12px', marginBottom: '16px' }}>
+        <div style={{ display: 'flex', gap: '6px', background: '#121216', padding: '4px', borderRadius: '12px', marginBottom: '18px' }}>
           <button
             onClick={() => {
-              setActiveTab('scan_qr');
+              setActiveTab('show_qr');
               stopCamera();
             }}
             style={{
@@ -302,15 +360,15 @@ export const DevicePairModal: React.FC<DevicePairModalProps> = ({
               padding: '8px 10px',
               borderRadius: '8px',
               border: 'none',
-              background: activeTab === 'scan_qr' ? '#27272A' : 'transparent',
-              color: activeTab === 'scan_qr' ? '#FFFFFF' : '#A1A1AA',
+              background: activeTab === 'show_qr' ? '#27272A' : 'transparent',
+              color: activeTab === 'show_qr' ? '#FFFFFF' : '#A1A1AA',
               fontSize: '12px',
               fontWeight: 700,
               cursor: 'pointer',
               transition: 'all 0.15s ease',
             }}
           >
-            📷 Scan QR Code
+            📱 Scan with Phone
           </button>
           <button
             onClick={() => {
@@ -352,76 +410,138 @@ export const DevicePairModal: React.FC<DevicePairModalProps> = ({
           >
             📋 Cloud Sync
           </button>
+          <button
+            onClick={() => {
+              setActiveTab('webcam_scan');
+            }}
+            style={{
+              padding: '8px 10px',
+              borderRadius: '8px',
+              border: 'none',
+              background: activeTab === 'webcam_scan' ? '#27272A' : 'transparent',
+              color: activeTab === 'webcam_scan' ? '#FFFFFF' : '#A1A1AA',
+              fontSize: '12px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+            }}
+            title="Scan using laptop webcam (optional fallback)"
+          >
+            📷 Webcam
+          </button>
         </div>
 
-        {/* TAB 1: SCAN QR CODE */}
-        {activeTab === 'scan_qr' && (
-          <div style={{ background: '#121216', border: '1px solid #1E1E24', borderRadius: '18px', padding: '16px', marginBottom: '16px' }}>
-            <div style={{ fontSize: '13px', fontWeight: 800, color: '#FFFFFF', marginBottom: '6px' }}>
-              Scan Android QR Code
+        {/* TAB 1: SHOW QR CODE (DEFAULT & PRIMARY DESKTOP UX) */}
+        {activeTab === 'show_qr' && (
+          <div
+            style={{
+              background: '#121216',
+              border: '1px solid #1E1E24',
+              borderRadius: '18px',
+              padding: '20px',
+              marginBottom: '16px',
+              textAlign: 'center',
+            }}
+          >
+            <div style={{ fontSize: '14px', fontWeight: 800, color: '#FFFFFF', marginBottom: '6px' }}>
+              Point Phone Camera Here
             </div>
-            <p style={{ fontSize: '12px', color: '#A1A1AA', lineHeight: '1.45', margin: '0 0 12px 0' }}>
-              Tap the <strong>QR icon</strong> on top of the AuraDrop Android App, then hold it up to your laptop camera to connect directly over local Wi-Fi.
+            <p style={{ fontSize: '12px', color: '#A1A1AA', lineHeight: '1.5', margin: '0 0 16px 0' }}>
+              Open <strong>AuraDrop</strong> on Android, tap the <strong>Camera / Scan icon</strong> at the top, and point at this code to connect instantly.
             </p>
 
-            <div style={{ position: 'relative', width: '100%', height: '200px', background: '#000000', borderRadius: '14px', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <video
-                ref={videoRef}
-                style={{
-                  width: '100%',
-                  height: '100%',
-                  objectFit: 'cover',
-                  display: cameraActive ? 'block' : 'none',
-                }}
-              />
-              <canvas ref={canvasRef} style={{ display: 'none' }} />
-
-              {!cameraActive && (
-                <div style={{ textAlign: 'center', padding: '20px' }}>
-                  <div style={{ fontSize: '32px', marginBottom: '10px' }}>📷</div>
-                  <button
-                    onClick={startCamera}
-                    style={{
-                      background: '#FFFFFF',
-                      border: 'none',
-                      borderRadius: '10px',
-                      padding: '10px 20px',
-                      color: '#000000',
-                      fontSize: '13px',
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Open Camera Scanner
-                  </button>
-                </div>
-              )}
-
-              {cameraActive && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    width: '140px',
-                    height: '140px',
-                    border: '2px dashed #34C759',
-                    borderRadius: '16px',
-                    pointerEvents: 'none',
-                    boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.45)',
-                  }}
+            {/* QR Code Container */}
+            <div
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '14px',
+                background: '#FFFFFF',
+                borderRadius: '18px',
+                boxShadow: '0 10px 30px rgba(0, 0, 0, 0.6), 0 0 20px rgba(52, 199, 89, 0.15)',
+                position: 'relative',
+              }}
+            >
+              {qrDataUrl ? (
+                <img
+                  src={qrDataUrl}
+                  alt="AuraDrop Desktop Pairing QR Code"
+                  style={{ width: '220px', height: '220px', display: 'block', borderRadius: '8px' }}
                 />
+              ) : (
+                <div style={{ width: '220px', height: '220px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#666' }}>
+                  Generating QR Code...
+                </div>
               )}
             </div>
 
-            {scanStatus && (
-              <div style={{ marginTop: '10px', fontSize: '12px', color: '#34C759', fontWeight: 600, textAlign: 'center' }}>
-                {scanStatus}
-              </div>
-            )}
-            {scanError && (
-              <div style={{ marginTop: '10px', fontSize: '12px', color: '#EF4444', fontWeight: 600, textAlign: 'center' }}>
-                {scanError}
-              </div>
-            )}
+            {/* Live Pairing Status */}
+            <div style={{ marginTop: '16px' }}>
+              {connectedAndroid ? (
+                <div
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    background: 'rgba(52, 199, 89, 0.15)',
+                    border: '1px solid #34C759',
+                    borderRadius: '20px',
+                    padding: '6px 14px',
+                    color: '#34C759',
+                    fontSize: '12px',
+                    fontWeight: 700,
+                  }}
+                >
+                  <span>✓</span> Connected to {connectedAndroid.name}!
+                </div>
+              ) : (
+                <div
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    background: '#1A1A20',
+                    border: '1px solid #27272A',
+                    borderRadius: '20px',
+                    padding: '6px 14px',
+                    color: '#A1A1AA',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                  }}
+                >
+                  <span
+                    style={{
+                      width: '6px',
+                      height: '6px',
+                      borderRadius: '50%',
+                      background: '#34C759',
+                      display: 'inline-block',
+                      animation: 'pulse 1.5s infinite',
+                    }}
+                  />
+                  Waiting for phone camera scan...
+                </div>
+              )}
+            </div>
+
+            {/* Quick Action: Copy Payload */}
+            <div style={{ marginTop: '12px' }}>
+              <button
+                onClick={handleCopyPairingToken}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: '#71717A',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  textDecoration: 'underline',
+                }}
+              >
+                {isTokenCopied ? 'Pairing data copied ✓' : 'Copy pairing data for manual entry'}
+              </button>
+            </div>
           </div>
         )}
 
@@ -526,10 +646,81 @@ export const DevicePairModal: React.FC<DevicePairModalProps> = ({
           </div>
         )}
 
+        {/* TAB 4: WEBCAM SCANNER (FALLBACK) */}
+        {activeTab === 'webcam_scan' && (
+          <div style={{ background: '#121216', border: '1px solid #1E1E24', borderRadius: '18px', padding: '16px', marginBottom: '16px' }}>
+            <div style={{ fontSize: '13px', fontWeight: 800, color: '#FFFFFF', marginBottom: '6px' }}>
+              Scan Android QR with Webcam
+            </div>
+            <p style={{ fontSize: '12px', color: '#A1A1AA', lineHeight: '1.45', margin: '0 0 12px 0' }}>
+              Hold your phone screen displaying the QR code up to your laptop webcam.
+            </p>
+
+            <div style={{ position: 'relative', width: '100%', height: '180px', background: '#000000', borderRadius: '14px', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <video
+                ref={videoRef}
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'cover',
+                  display: cameraActive ? 'block' : 'none',
+                }}
+              />
+              <canvas ref={canvasRef} style={{ display: 'none' }} />
+
+              {!cameraActive && (
+                <div style={{ textAlign: 'center', padding: '20px' }}>
+                  <div style={{ fontSize: '28px', marginBottom: '8px' }}>📷</div>
+                  <button
+                    onClick={startCamera}
+                    style={{
+                      background: '#FFFFFF',
+                      border: 'none',
+                      borderRadius: '10px',
+                      padding: '8px 18px',
+                      color: '#000000',
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Open Laptop Webcam
+                  </button>
+                </div>
+              )}
+
+              {cameraActive && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    width: '130px',
+                    height: '130px',
+                    border: '2px dashed #34C759',
+                    borderRadius: '14px',
+                    pointerEvents: 'none',
+                    boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.45)',
+                  }}
+                />
+              )}
+            </div>
+
+            {scanStatus && (
+              <div style={{ marginTop: '10px', fontSize: '12px', color: '#34C759', fontWeight: 600, textAlign: 'center' }}>
+                {scanStatus}
+              </div>
+            )}
+            {scanError && (
+              <div style={{ marginTop: '10px', fontSize: '12px', color: '#EF4444', fontWeight: 600, textAlign: 'center' }}>
+                {scanError}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Discovered Devices List */}
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-            <div style={{ fontSize: '12px', fontWeight: 700, color: '#A1A1AA', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+            <div style={{ fontSize: '11px', fontWeight: 700, color: '#A1A1AA', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
               Active Devices Nearby ({peers.length})
             </div>
             {peers.length > 0 && (
@@ -540,15 +731,15 @@ export const DevicePairModal: React.FC<DevicePairModalProps> = ({
           </div>
 
           {peers.length === 0 ? (
-            <div style={{ background: '#141418', border: '1px solid #222226', borderRadius: '14px', padding: '16px', textAlign: 'center' }}>
-              <div style={{ fontSize: '20px', marginBottom: '6px' }}>📡</div>
-              <div style={{ fontSize: '13px', fontWeight: 700, color: '#FFFFFF' }}>Listening for Android Phone...</div>
-              <div style={{ fontSize: '11px', color: '#71717A', marginTop: '4px' }}>
+            <div style={{ background: '#141418', border: '1px solid #222226', borderRadius: '14px', padding: '14px', textAlign: 'center' }}>
+              <div style={{ fontSize: '18px', marginBottom: '4px' }}>📡</div>
+              <div style={{ fontSize: '12px', fontWeight: 700, color: '#FFFFFF' }}>Listening for Android Phone...</div>
+              <div style={{ fontSize: '11px', color: '#71717A', marginTop: '2px' }}>
                 Devices appear on the 3D Globe automatically once paired.
               </div>
             </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '150px', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '140px', overflowY: 'auto' }}>
               {peers.map((p) => (
                 <div
                   key={p.id}

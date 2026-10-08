@@ -27,7 +27,7 @@ let testPort = 0;
 const LIVE_NEON_URL =
   process.env.NEON_DATABASE_URL ||
   process.env.DATABASE_URL ||
-  'postgresql://neondb_owner:npg_6cqMlJ7OTkEg@ep-aged-bonus-b4oq4i1b-pooler.c-6.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require';
+  '';
 
 describe('AuraDrop V25 Full-Stack Production Verification', () => {
   let db: NeonDatabaseService;

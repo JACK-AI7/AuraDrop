@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 
 import 'models/models.dart';
 import 'theme/aura_theme.dart';
@@ -995,149 +996,92 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
     );
   }
 
-  void _showLocalQrModal(AuraTheme theme) {
+  Future<void> _handleScannedQrData(String raw) async {
+    try {
+      String desktopId = '';
+      String desktopName = 'Desktop Browser';
+      String? signalingUrl;
+      String? localIp;
+      int? localPort;
+
+      final trimmed = raw.trim();
+      if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+        final data = jsonDecode(trimmed);
+        if (data is Map<String, dynamic>) {
+          if (data['protocol'] == 'AURADROP_PAIR_V1' || data.containsKey('desktopId')) {
+            desktopId = (data['desktopId'] ?? '').toString();
+            desktopName = (data['desktopName'] ?? 'Desktop Browser').toString();
+            signalingUrl = data['signalingUrl']?.toString();
+          } else if (data['protocol'] == 'AURADROP_LOCAL_V1' || data.containsKey('deviceId')) {
+            desktopId = (data['deviceId'] ?? '').toString();
+            desktopName = (data['deviceName'] ?? 'Desktop Browser').toString();
+            localIp = data['ip']?.toString();
+            if (data['port'] != null) {
+              localPort = int.tryParse(data['port'].toString());
+            }
+          }
+        }
+      } else if (trimmed.contains('pair=')) {
+        final uri = Uri.tryParse(trimmed);
+        if (uri != null) {
+          desktopId = uri.queryParameters['pair'] ?? '';
+          desktopName = uri.queryParameters['name'] ?? 'Desktop Browser';
+        }
+      }
+
+      if (desktopId.isEmpty) {
+        _showSnackBar('Could not recognize AuraDrop QR code.', isSuccess: false);
+        return;
+      }
+
+      // 1. Update signaling URL if provided
+      if (signalingUrl != null && signalingUrl.isNotEmpty) {
+        AuraSignalingService().setSignalingUrl(signalingUrl);
+      }
+
+      // 2. Trust the desktop peer permanently
+      await AuraSignalingService().trustPeer(desktopId);
+
+      // 3. Send pair handshake through signaling service
+      await AuraSignalingService().pairWithPeer(desktopId);
+
+      // 4. Instantly register in local _peers map so it pops on the Globe / Radar
+      final peer = PeerDevice(
+        id: desktopId,
+        name: desktopName,
+        deviceName: desktopName,
+        platform: 'web',
+        ip: localIp ?? 'Cloud / LAN',
+        port: localPort ?? 0,
+        lastSeen: DateTime.now(),
+        isTrusted: true,
+        transport: 'WebRTC / Direct',
+        connectionState: 'READY_TO_TRANSFER',
+      );
+
+      setState(() {
+        _peers[desktopId] = peer;
+      });
+
+      HapticFeedback.heavyImpact();
+      _showSnackBar('✓ Connected to $desktopName!', isSuccess: true);
+    } catch (e) {
+      debugPrint('[AuraDrop] Error handling scanned QR: $e');
+      _showSnackBar('Error connecting to device: $e', isSuccess: false);
+    }
+  }
+
+  void _showQrScannerModal(AuraTheme theme) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (ctx) {
-        return StatefulBuilder(
-          builder: (context, setModalState) {
-            final payload = AuraLanServer().getQrPayload();
-            final qrData = jsonEncode(payload);
-            final ip = AuraLanServer().localIp;
-            final port = AuraLanServer().port;
-
-            return Container(
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                color: theme.cardBackground,
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-                border: Border.all(color: theme.border, width: 1.0),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 36,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: theme.textSecondary.withValues(alpha: 0.3),
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(Icons.qr_code_2_rounded, color: theme.textPrimary, size: 22),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Local Wi-Fi Pairing',
-                            style: TextStyle(
-                              fontSize: 17,
-                              fontWeight: FontWeight.w800,
-                              color: theme.textPrimary,
-                            ),
-                          ),
-                        ],
-                      ),
-                      IconButton(
-                        icon: Icon(Icons.close_rounded, color: theme.textSecondary, size: 20),
-                        onPressed: () => Navigator.pop(ctx),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Scan this QR code with the AuraDrop desktop website to connect directly over local Wi-Fi. Zero cloud servers required.',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: theme.textSecondary,
-                      height: 1.4,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 20),
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.15),
-                          blurRadius: 16,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                    child: QrImageView(
-                      data: qrData,
-                      version: QrVersions.auto,
-                      size: 200.0,
-                      backgroundColor: Colors.white,
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: theme.background,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: theme.border, width: 1.0),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 8,
-                          height: 8,
-                          decoration: const BoxDecoration(
-                            color: Color(0xFF10B981),
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          'LAN Endpoint: $ip:$port',
-                          style: TextStyle(
-                            fontFamily: 'monospace',
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: theme.textPrimary,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      OutlinedButton.icon(
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: theme.textPrimary,
-                          side: BorderSide(color: theme.border),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                        ),
-                        onPressed: () {
-                          HapticFeedback.lightImpact();
-                          AuraLanServer().generateBootstrapToken();
-                          setModalState(() {});
-                        },
-                        icon: const Icon(Icons.refresh_rounded, size: 16),
-                        label: const Text('Refresh Token', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                ],
-              ),
-            );
+        return _QrScannerModalSheet(
+          theme: theme,
+          onScanned: (raw) {
+            Navigator.of(ctx).pop();
+            _handleScannedQrData(raw);
           },
         );
       },
@@ -1355,13 +1299,13 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                   ),
                 ),
               ),
-              // Local QR Pair Button
+              // QR Code Camera Scanner Button (Scan Desktop QR Code)
               MinimalIconButton(
-                icon: Icons.qr_code_2_rounded,
+                icon: Icons.qr_code_scanner_rounded,
                 size: 32,
                 onPressed: () {
                   HapticFeedback.lightImpact();
-                  _showLocalQrModal(theme);
+                  _showQrScannerModal(theme);
                 },
               ),
               const SizedBox(width: 8),
@@ -1792,6 +1736,380 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                 isSending: _isSender,
                 onCancel: _cancelTransfer,
               ),
+      ),
+    );
+  }
+}
+
+class _QrScannerModalSheet extends StatefulWidget {
+  final AuraTheme theme;
+  final Function(String code) onScanned;
+
+  const _QrScannerModalSheet({
+    required this.theme,
+    required this.onScanned,
+  });
+
+  @override
+  State<_QrScannerModalSheet> createState() => _QrScannerModalSheetState();
+}
+
+class _QrScannerModalSheetState extends State<_QrScannerModalSheet> {
+  late final MobileScannerController _scannerController;
+  int _activeTab = 0; // 0: Scan Desktop QR, 1: Show Phone QR
+  bool _hasDetected = false;
+  bool _torchOn = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _scannerController = MobileScannerController(
+      detectionSpeed: DetectionSpeed.noDuplicates,
+      facing: CameraFacing.back,
+    );
+  }
+
+  @override
+  void dispose() {
+    _scannerController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = widget.theme;
+    final payload = AuraLanServer().getQrPayload();
+    final qrData = jsonEncode(payload);
+    final ip = AuraLanServer().localIp;
+    final port = AuraLanServer().port;
+
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.76,
+      decoration: BoxDecoration(
+        color: theme.cardBackground,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        border: Border.all(color: theme.border, width: 1.0),
+      ),
+      child: Column(
+        children: [
+          const SizedBox(height: 12),
+          // Drag handle
+          Container(
+            width: 36,
+            height: 4,
+            decoration: BoxDecoration(
+              color: theme.textSecondary.withValues(alpha: 0.3),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 14),
+
+          // Header
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      _activeTab == 0 ? Icons.qr_code_scanner_rounded : Icons.qr_code_2_rounded,
+                      color: theme.textPrimary,
+                      size: 22,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      _activeTab == 0 ? 'Scan Desktop QR' : 'My Phone QR Code',
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w800,
+                        color: theme.textPrimary,
+                      ),
+                    ),
+                  ],
+                ),
+                IconButton(
+                  icon: Icon(Icons.close_rounded, color: theme.textSecondary, size: 20),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+
+          // Tab Switcher
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Container(
+              padding: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: theme.background,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: theme.border),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () {
+                        HapticFeedback.selectionClick();
+                        setState(() => _activeTab = 0);
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        decoration: BoxDecoration(
+                          color: _activeTab == 0 ? theme.actionBackground : Colors.transparent,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Center(
+                          child: Text(
+                            '📷 Scan PC Screen',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: _activeTab == 0 ? theme.actionText : theme.textSecondary,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () {
+                        HapticFeedback.selectionClick();
+                        setState(() => _activeTab = 1);
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        decoration: BoxDecoration(
+                          color: _activeTab == 1 ? theme.actionBackground : Colors.transparent,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Center(
+                          child: Text(
+                            '📱 Show Phone QR',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: _activeTab == 1 ? theme.actionText : theme.textSecondary,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+
+          // Tab 0: Native Camera Viewfinder
+          if (_activeTab == 0)
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                child: Column(
+                  children: [
+                    Text(
+                      'Point camera at the QR code displayed on the AuraDrop Vercel website.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: theme.textSecondary,
+                        height: 1.4,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 14),
+                    Expanded(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(20),
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            MobileScanner(
+                              controller: _scannerController,
+                              fit: BoxFit.cover,
+                              errorBuilder: (context, error) {
+                                return Center(
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(20),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(Icons.camera_alt_outlined, color: theme.textSecondary, size: 40),
+                                        const SizedBox(height: 12),
+                                        Text(
+                                          'Camera permission needed to scan QR code.',
+                                          style: TextStyle(color: theme.textSecondary, fontSize: 13),
+                                          textAlign: TextAlign.center,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                              onDetect: (BarcodeCapture capture) {
+                                if (_hasDetected) return;
+                                for (final barcode in capture.barcodes) {
+                                  final raw = barcode.rawValue;
+                                  if (raw != null && raw.isNotEmpty) {
+                                    _hasDetected = true;
+                                    HapticFeedback.selectionClick();
+                                    widget.onScanned(raw);
+                                    break;
+                                  }
+                                }
+                              },
+                            ),
+                            // Scanning Frame Reticle
+                            Container(
+                              width: 210,
+                              height: 210,
+                              decoration: BoxDecoration(
+                                border: Border.all(color: const Color(0xFF34C759), width: 2.5),
+                                borderRadius: BorderRadius.circular(18),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: const Color(0xFF34C759).withValues(alpha: 0.25),
+                                    blurRadius: 16,
+                                    spreadRadius: 2,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            // Torch Button
+                            Positioned(
+                              top: 12,
+                              right: 12,
+                              child: IconButton(
+                                style: IconButton.styleFrom(
+                                  backgroundColor: Colors.black.withValues(alpha: 0.6),
+                                ),
+                                icon: Icon(
+                                  _torchOn ? Icons.flash_on_rounded : Icons.flash_off_rounded,
+                                  color: _torchOn ? const Color(0xFF34C759) : Colors.white,
+                                  size: 20,
+                                ),
+                                onPressed: () async {
+                                  await _scannerController.toggleTorch();
+                                  if (mounted) setState(() => _torchOn = !_torchOn);
+                                },
+                              ),
+                            ),
+                            // Switch Camera Button
+                            Positioned(
+                              top: 12,
+                              left: 12,
+                              child: IconButton(
+                                style: IconButton.styleFrom(
+                                  backgroundColor: Colors.black.withValues(alpha: 0.6),
+                                ),
+                                icon: const Icon(Icons.cameraswitch_rounded, color: Colors.white, size: 20),
+                                onPressed: () async {
+                                  await _scannerController.switchCamera();
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+          // Tab 1: Show Phone QR (Fallback)
+          if (_activeTab == 1)
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                child: Column(
+                  children: [
+                    Text(
+                      'If pairing with another phone or webcam, display this QR code.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: theme.textSecondary,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 16),
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.15),
+                            blurRadius: 16,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: QrImageView(
+                        data: qrData,
+                        version: QrVersions.auto,
+                        size: 190.0,
+                        backgroundColor: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: theme.background,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: theme.border, width: 1.0),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 8,
+                            height: 8,
+                            decoration: const BoxDecoration(
+                              color: Color(0xFF10B981),
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'LAN Endpoint: $ip:$port',
+                            style: TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: theme.textPrimary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: theme.textPrimary,
+                        side: BorderSide(color: theme.border),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      ),
+                      onPressed: () {
+                        HapticFeedback.lightImpact();
+                        AuraLanServer().generateBootstrapToken();
+                        setState(() {});
+                      },
+                      icon: const Icon(Icons.refresh_rounded, size: 16),
+                      label: const Text('Refresh Token', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }

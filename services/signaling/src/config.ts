@@ -61,7 +61,7 @@ export const config = {
   databaseUrl:
     process.env.NEON_DATABASE_URL ||
     process.env.DATABASE_URL ||
-    'postgresql://neondb_owner:npg_6cqMlJ7OTkEg@ep-aged-bonus-b4oq4i1b-pooler.c-6.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require',
+    '',
   redisUrl: process.env.REDIS_URL || '',
   turnSecret: process.env.TURN_SECRET || 'auradrop-production-coturn-shared-secret-2026',
   turnHost: process.env.TURN_HOST || 'turn.auradrop.network',

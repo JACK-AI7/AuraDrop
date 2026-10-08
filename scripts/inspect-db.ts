@@ -26,7 +26,7 @@ try {
   };
 } catch {}
 
-let conn = 'postgresql://neondb_owner:npg_6cqMlJ7OTkEg@ep-aged-bonus-b4oq4i1b-pooler.c-6.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require';
+let conn = process.env.DATABASE_URL || '';
 try {
   const envContent = fs.readFileSync('.env', 'utf8');
   const match = envContent.match(/DATABASE_URL="?([^"\n\r]+)"?/);
