@@ -4,6 +4,24 @@
 
 @layer base {
   body {
-    @apply bg-[#0A0A0C] text-gray-100;
+    @apply bg-[#000000] text-white;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* Custom scrollbar styling in monochrome */
+  ::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.3);
   }
 }

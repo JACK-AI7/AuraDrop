@@ -78,3 +78,19 @@ impl NetworkManager {
         ("127.0.0.1".to_string(), "Loopback".to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_targets() {
+        let targets = NetworkManager::get_broadcast_targets();
+        println!("=== DISCOVERED TARGETS ===");
+        for t in &targets {
+            println!("IF: {} | IP: {} | BCAST: {}", t.interface_name, t.ip, t.broadcast);
+        }
+        let (ip, iface) = NetworkManager::get_primary_physical_ip();
+        println!("PRIMARY: {} on {}", ip, iface);
+    }
+}

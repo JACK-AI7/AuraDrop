@@ -188,7 +188,10 @@ impl TransferService {
             .map_err(|e| format!("Invalid prepare response: {}", e))?;
 
         // Step 3: Stream file bytes with progress tracking
-        let upload_url = format!("http://{}:{}/api/auradrop/v1/upload", peer_ip, peer_port);
+        let upload_url = format!(
+            "http://{}:{}/api/auradrop/v1/upload?transferId={}&token={}",
+            peer_ip, peer_port, transfer_id, prep_data.one_time_token
+        );
 
         let file_async = tokio::fs::File::open(&path).await.map_err(|e| e.to_string())?;
         let self_clone = self.clone();
@@ -257,7 +260,10 @@ impl TransferService {
             .header("x-file-name", &file_name)
             .header("x-file-size", file_size.to_string())
             .header("x-sha256", &sha256_hash)
+            .header("x-expected-sha256", &sha256_hash)
             .header("x-token", &prep_data.one_time_token)
+            .header("x-one-time-token", &prep_data.one_time_token)
+            .header("x-session-token", &prep_data.one_time_token)
             .body(reqwest::Body::wrap_stream(body.into_data_stream()))
             .send()
             .await
@@ -325,10 +331,17 @@ impl TransferService {
 // Axum Handlers
 async fn handle_ping(State(service): State<TransferService>) -> Json<serde_json::Value> {
     let id = service.identity.get_device_id().await;
+    let name = service.identity.get_device_name().await;
     Json(json!({
         "status": "ok",
         "pong": true,
-        "deviceId": id
+        "deviceId": id,
+        "deviceName": name,
+        "name": name,
+        "platform": "windows",
+        "port": TRANSFER_PORT,
+        "transferPort": TRANSFER_PORT,
+        "protocol": "AURADROP/1"
     }))
 }
 
@@ -363,6 +376,11 @@ async fn handle_prepare_upload(
         .write()
         .await
         .insert(payload.transfer_id.clone(), meta);
+
+    crate::log_debug(&format!(
+        "[AuraTransfer] Prepare-upload accepted: {} ({} bytes) from {}",
+        payload.file_name, payload.file_size, payload.sender_user_id
+    ));
 
     Ok(Json(PrepareUploadResponse {
         accepted: true,
@@ -484,6 +502,11 @@ async fn handle_upload(
 
     // Remove session
     service.sessions.write().await.remove(&transfer_id);
+
+    crate::log_debug(&format!(
+        "[AuraTransfer] Inbound upload complete: {} ({} bytes) - SHA-256: {} [Verified: {}] -> Saved to {}",
+        session.file_name, session.file_size, calculated_hash, verified, target_file_path.display()
+    ));
 
     Ok(Json(json!({
         "success": true,

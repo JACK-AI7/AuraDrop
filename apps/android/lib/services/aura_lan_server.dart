@@ -319,9 +319,11 @@ class AuraLanServer {
       'pong': true,
       'deviceId': _deviceId,
       'deviceName': _deviceName,
+      'name': _deviceName,
       'platform': Platform.operatingSystem,
       'port': _port,
-      'protocol': 'AURADROP_LOCAL_V1',
+      'transferPort': _port,
+      'protocol': 'AURADROP/1',
       'timestamp': DateTime.now().millisecondsSinceEpoch,
     }));
     await request.response.close();

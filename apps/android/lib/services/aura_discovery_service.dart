@@ -19,10 +19,15 @@ class AuraDiscoveryService {
   RawDatagramSocket? _socket;
   Timer? _broadcastTimer;
   Timer? _pruneTimer;
+  Timer? _subnetScanTimer;
   bool _isRunning = false;
   int _lastBroadcastTimeMs = 0;
   String _activeInterfaceName = 'Detecting...';
   String _activePhysicalIp = '127.0.0.1';
+
+  final HttpClient _httpClient = HttpClient()
+    ..connectionTimeout = const Duration(milliseconds: 600)
+    ..badCertificateCallback = ((cert, host, port) => true);
 
   final Map<String, PeerDevice> _discoveredPeers = {};
   final _peersController = StreamController<List<PeerDevice>>.broadcast();
@@ -67,13 +72,19 @@ class AuraDiscoveryService {
         debugPrint('[AuraDiscovery] Socket error: $e');
       });
 
-      // Broadcast immediately and every 2.0 seconds
+      // Broadcast immediately and every 2.5 seconds
       _broadcastAnnounce();
-      _broadcastTimer = Timer.periodic(const Duration(milliseconds: 2000), (_) {
+      _broadcastTimer = Timer.periodic(const Duration(milliseconds: 2500), (_) {
         _broadcastAnnounce();
       });
 
-      // Peer expiration check every 2 seconds (prune if stale > 8s)
+      // Active Subnet Sweep every 3.5 seconds to bypass AP isolation/broadcast drops
+      _scanSubnet();
+      _subnetScanTimer = Timer.periodic(const Duration(milliseconds: 3500), (_) {
+        _scanSubnet();
+      });
+
+      // Peer expiration check every 2 seconds (prune if stale > 12s)
       _pruneTimer = Timer.periodic(const Duration(seconds: 2), (_) {
         _pruneStalePeers();
       });
@@ -93,9 +104,15 @@ class AuraDiscoveryService {
         _socket!.listen(_handleDatagram);
 
         _broadcastAnnounce();
-        _broadcastTimer = Timer.periodic(const Duration(milliseconds: 2000), (_) {
+        _broadcastTimer = Timer.periodic(const Duration(milliseconds: 2500), (_) {
           _broadcastAnnounce();
         });
+
+        _scanSubnet();
+        _subnetScanTimer = Timer.periodic(const Duration(milliseconds: 3500), (_) {
+          _scanSubnet();
+        });
+
         _pruneTimer = Timer.periodic(const Duration(seconds: 2), (_) {
           _pruneStalePeers();
         });
@@ -107,6 +124,7 @@ class AuraDiscoveryService {
 
   void forceAnnounce() {
     _broadcastAnnounce();
+    _scanSubnet();
   }
 
   Future<List<Map<String, String>>> _getPhysicalBroadcastTargets() async {
@@ -207,12 +225,143 @@ class AuraDiscoveryService {
       _socket!.send(bytes, InternetAddress(multicastAddress), discoveryPort);
     } catch (_) {}
 
-    // 4. Legacy multicast & port for older or kotlin instances
+    // 4. Legacy multicast & port
     try {
       _socket!.send(bytes, InternetAddress(legacyMulticastAddress), discoveryPort);
       _socket!.send(bytes, InternetAddress(legacyMulticastAddress), 48290);
       _socket!.send(bytes, InternetAddress('255.255.255.255'), 48290);
     } catch (_) {}
+  }
+
+  /// Active Subnet Sweeper: Sends direct unicast UDP + HTTP probe to every host on the /24 subnet.
+  /// Bypasses router AP isolation and multicast drops on hostel Wi-Fi!
+  Future<void> _scanSubnet() async {
+    if (!_isRunning) return;
+    final targets = await _getPhysicalBroadcastTargets();
+    final identity = AuraIdentityService();
+    final effectivePort = AuraLanServer().port > 0 ? AuraLanServer().port : discoveryPort;
+
+    final announceBytes = utf8.encode(jsonEncode({
+      'protocol': protocolVersion,
+      'type': 'ANNOUNCE',
+      'deviceId': identity.deviceId,
+      'name': identity.deviceName,
+      'deviceName': identity.deviceName,
+      'platform': identity.platform,
+      'port': effectivePort,
+      'transferPort': effectivePort,
+      'version': '1.0.0',
+      'status': 'Nearby sharing made effortless',
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+    }));
+
+    for (final target in targets) {
+      final ip = target['ip'];
+      if (ip == null || ip.isEmpty) continue;
+      final parts = ip.split('.');
+      if (parts.length != 4) continue;
+      final prefix = '${parts[0]}.${parts[1]}.${parts[2]}';
+      final myHost = int.tryParse(parts[3]) ?? -1;
+
+      for (int h = 1; h <= 254; h++) {
+        if (h == myHost) continue; // Skip self
+        final hostIp = '$prefix.$h';
+
+        // 1. Direct UDP Announce Unicast
+        if (_socket != null) {
+          try {
+            _socket!.send(announceBytes, InternetAddress(hostIp), discoveryPort);
+          } catch (_) {}
+        }
+
+        // 2. Direct HTTP GET ping probe in background
+        _probeHostHttp(hostIp);
+      }
+    }
+  }
+
+  Future<void> _probeHostHttp(String hostIp) async {
+    try {
+      final uri = Uri.parse('http://$hostIp:$discoveryPort/api/auradrop/v1/ping');
+      final req = await _httpClient.getUrl(uri).timeout(const Duration(milliseconds: 500));
+      final resp = await req.close().timeout(const Duration(milliseconds: 500));
+      if (resp.statusCode == HttpStatus.ok) {
+        final body = await resp.transform(utf8.decoder).join();
+        final data = jsonDecode(body);
+        if (data is Map<String, dynamic>) {
+          final remoteId = data['deviceId']?.toString() ?? data['id']?.toString() ?? '';
+          final selfId = AuraIdentityService().deviceId;
+          if (remoteId.isNotEmpty && remoteId != selfId) {
+            final remoteName = data['deviceName']?.toString() ?? data['name']?.toString() ?? 'Nearby Device';
+            final remotePlatform = data['platform']?.toString() ?? 'device';
+            final remotePort = (data['transferPort'] as num?)?.toInt() ??
+                (data['port'] as num?)?.toInt() ??
+                discoveryPort;
+
+            final peer = PeerDevice(
+              id: remoteId,
+              name: remoteName,
+              deviceName: remoteName,
+              platform: remotePlatform,
+              ip: hostIp,
+              port: remotePort,
+              lastSeen: DateTime.now(),
+              isTrusted: AuraIdentityService().isDeviceTrusted(remoteId),
+              connectionState: 'AVAILABLE',
+              transport: 'Direct Wi-Fi',
+            );
+
+            _discoveredPeers[remoteId] = peer;
+            _emitPeers();
+
+            // Reply with UDP announce directly to peer
+            if (_socket != null) {
+              try {
+                final identity = AuraIdentityService();
+                final ackPacket = jsonEncode({
+                  'protocol': protocolVersion,
+                  'type': 'ANNOUNCE_ACK',
+                  'deviceId': identity.deviceId,
+                  'name': identity.deviceName,
+                  'deviceName': identity.deviceName,
+                  'platform': identity.platform,
+                  'port': AuraLanServer().port > 0 ? AuraLanServer().port : discoveryPort,
+                  'transferPort': AuraLanServer().port > 0 ? AuraLanServer().port : discoveryPort,
+                });
+                _socket!.send(utf8.encode(ackPacket), InternetAddress(hostIp), discoveryPort);
+              } catch (_) {}
+            }
+          }
+        }
+      }
+    } catch (_) {
+      // Host did not respond, ignore
+    }
+  }
+
+  /// Probe a single specific IP directly on demand
+  Future<bool> probeSpecificIp(String ip) async {
+    try {
+      await _probeHostHttp(ip);
+      if (_socket != null) {
+        final identity = AuraIdentityService();
+        final effectivePort = AuraLanServer().port > 0 ? AuraLanServer().port : discoveryPort;
+        final announceBytes = utf8.encode(jsonEncode({
+          'protocol': protocolVersion,
+          'type': 'ANNOUNCE',
+          'deviceId': identity.deviceId,
+          'name': identity.deviceName,
+          'deviceName': identity.deviceName,
+          'platform': identity.platform,
+          'port': effectivePort,
+          'transferPort': effectivePort,
+        }));
+        _socket!.send(announceBytes, InternetAddress(ip), discoveryPort);
+      }
+      return _discoveredPeers.values.any((p) => p.ip == ip);
+    } catch (_) {
+      return false;
+    }
   }
 
   void _sendUnicastAck(InternetAddress targetAddress, int targetPort) {
@@ -237,6 +386,9 @@ class AuraDiscoveryService {
 
     try {
       _socket!.send(utf8.encode(packet), targetAddress, targetPort);
+      if (targetPort != discoveryPort) {
+        _socket!.send(utf8.encode(packet), targetAddress, discoveryPort);
+      }
     } catch (e) {
       debugPrint('[AuraDiscovery] Failed to send unicast ACK: $e');
     }
@@ -261,7 +413,7 @@ class AuraDiscoveryService {
       }
 
       final selfId = AuraIdentityService().deviceId;
-      final peerId = data['deviceId']?.toString() ?? '';
+      final peerId = data['deviceId']?.toString() ?? data['id']?.toString() ?? '';
       if (peerId.isEmpty || peerId == selfId) return;
 
       final peerName = data['name']?.toString() ?? data['deviceName']?.toString() ?? 'Nearby Device';
@@ -307,7 +459,7 @@ class AuraDiscoveryService {
     bool changed = false;
 
     _discoveredPeers.removeWhere((id, peer) {
-      final isStale = now.difference(peer.lastSeen).inSeconds > 8;
+      final isStale = now.difference(peer.lastSeen).inSeconds > 12;
       if (isStale) changed = true;
       return isStale;
     });
@@ -325,6 +477,8 @@ class AuraDiscoveryService {
     _isRunning = false;
     _broadcastTimer?.cancel();
     _broadcastTimer = null;
+    _subnetScanTimer?.cancel();
+    _subnetScanTimer = null;
     _pruneTimer?.cancel();
     _pruneTimer = null;
     _socket?.close();

@@ -80,21 +80,21 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
   const activePeer = peers.find((p) => p.id === selectedPeerId) || peers[0] || null;
 
   let computedBadge = statusBadgeText;
-  let dotColor = '#71717A';
+  let dotColor = '#FFFFFF';
   let isDotPulsing = false;
 
   if (!computedBadge) {
     if (isTransferring && transferSpeed) {
       computedBadge = `${activePeer ? activePeer.name : 'Device'} — Transferring ${transferSpeed}`;
-      dotColor = '#10B981';
+      dotColor = '#FFFFFF';
       isDotPulsing = true;
     } else if (peers.length > 0 && activePeer) {
-      computedBadge = `${activePeer.name} — Direct LAN Online`;
-      dotColor = '#10B981';
+      computedBadge = `${activePeer.name} — Direct LAN Active`;
+      dotColor = '#FFFFFF';
       isDotPulsing = true;
     } else {
-      computedBadge = 'Scanning local Wi-Fi / LAN...';
-      dotColor = '#6366F1';
+      computedBadge = 'Searching LAN Subnet (UDP + HTTP)...';
+      dotColor = '#71717A';
       isDotPulsing = true;
     }
   }
@@ -142,7 +142,7 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
         const sy = center.y + rot.y * radius;
         ctx.beginPath();
         ctx.arc(sx, sy, 0.9, 0, Math.PI * 2);
-        ctx.fillStyle = '#1e1e24';
+        ctx.fillStyle = '#1A1A1E';
         ctx.fill();
       }
     }
@@ -157,8 +157,8 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
         const dotRadius = 1.0 + rot.z * 1.3;
         ctx.beginPath();
         ctx.arc(sx, sy, dotRadius, 0, Math.PI * 2);
-        const alpha = Math.min(1.0, 0.25 + rot.z * 0.75);
-        ctx.fillStyle = `rgba(220, 220, 235, ${alpha})`;
+        const alpha = Math.min(1.0, 0.20 + rot.z * 0.80);
+        ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
         ctx.fill();
       }
     }
@@ -175,18 +175,18 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
 
       ctx.beginPath();
       ctx.arc(ux, uy, 7, 0, Math.PI * 2);
-      ctx.strokeStyle = '#6366F1';
+      ctx.strokeStyle = '#FFFFFF';
       ctx.lineWidth = 1.5;
       ctx.stroke();
 
       ctx.beginPath();
       ctx.arc(ux, uy, 3.5, 0, Math.PI * 2);
-      ctx.fillStyle = '#818CF8';
+      ctx.fillStyle = '#FFFFFF';
       ctx.fill();
 
       ctx.font = '700 9px Inter, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
       ctx.fillText('YOU', ux, uy + 17);
     }
 
@@ -211,14 +211,14 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
         if (isSelected) {
           ctx.beginPath();
           ctx.arc(px, py, 13, 0, Math.PI * 2);
-          ctx.strokeStyle = '#10B981';
+          ctx.strokeStyle = '#FFFFFF';
           ctx.lineWidth = 2.0;
           ctx.stroke();
 
           if (isTransferring) {
             ctx.beginPath();
             ctx.arc(px, py, 19, 0, Math.PI * 2);
-            ctx.strokeStyle = 'rgba(16, 185, 129, 0.5)';
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
             ctx.lineWidth = 1.2;
             ctx.stroke();
           }
@@ -228,17 +228,13 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
         const isAndroid = peer.platform.toLowerCase().includes('android');
         ctx.beginPath();
         ctx.arc(px, py, isSelected ? 5.5 : 4.2, 0, Math.PI * 2);
-        ctx.fillStyle = isSelected
-          ? '#10B981'
-          : isAndroid
-          ? '#10B981'
-          : '#6366F1';
+        ctx.fillStyle = isSelected ? '#FFFFFF' : 'rgba(240, 240, 245, 0.9)';
         ctx.fill();
 
         // Label
         ctx.font = isSelected ? '700 11px Inter, sans-serif' : '600 10px Inter, sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillStyle = isSelected ? '#FFFFFF' : 'rgba(235, 235, 245, 0.9)';
+        ctx.fillStyle = '#FFFFFF';
         const displayLabel = isAndroid ? `📱 ${peer.name}` : peer.name;
         ctx.fillText(displayLabel, px, py + 19);
       }
@@ -291,13 +287,13 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
 
   return (
     <div className="flex flex-col items-center justify-center relative select-none">
-      {/* Device Status Badge */}
-      <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-[#16161D]/90 border border-white/10 backdrop-blur-md shadow-lg shadow-black/40 mb-3 text-xs font-semibold text-white">
+      {/* Minimal Black & White Status Badge */}
+      <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-neutral-900/95 border border-white/15 backdrop-blur-md shadow-lg shadow-black/80 mb-3 text-xs font-semibold text-white">
         <span
           className="w-2 h-2 rounded-full transition-all duration-300"
           style={{
             backgroundColor: dotColor,
-            boxShadow: isDotPulsing ? `0 0 10px ${dotColor}` : 'none',
+            boxShadow: isDotPulsing ? `0 0 8px ${dotColor}` : 'none',
           }}
         />
         <span>{computedBadge}</span>
@@ -316,7 +312,7 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
         onPointerUp={handlePointerUp}
       />
 
-      <div className="text-[11px] text-white/40 mt-1 font-medium tracking-wide">
+      <div className="text-[11px] text-neutral-500 mt-1 font-medium tracking-wide">
         Drag globe to rotate • Click device to select
       </div>
     </div>

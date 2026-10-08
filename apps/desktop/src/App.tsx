@@ -7,6 +7,7 @@ import { DeviceShelf } from './components/DeviceShelf';
 import { TransferModal } from './components/TransferModal';
 import { DiagnosticsModal } from './components/DiagnosticsModal';
 import { HistoryView } from './components/HistoryView';
+import { DirectIpModal } from './components/DirectIpModal';
 import {
   Send,
   FolderOpen,
@@ -14,7 +15,8 @@ import {
   History,
   Sparkles,
   Wifi,
-  FileUp,
+  RefreshCw,
+  Target,
 } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -25,7 +27,9 @@ export const App: React.FC = () => {
   const [history, setHistory] = useState<TransferProgressPayload[]>([]);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [showDirectIp, setShowDirectIp] = useState(false);
   const [isPickingFiles, setIsPickingFiles] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
 
   // Initialize Local Info and Listeners
   useEffect(() => {
@@ -44,7 +48,7 @@ export const App: React.FC = () => {
       })
       .catch((err) => console.error('Failed to get initial peers:', err));
 
-    // 3. Listen for Live Peer Updates from UDP Discovery
+    // 3. Listen for Live Peer Updates from UDP / Subnet Discovery
     const unlistenPeers = listen<PeerDevice[]>('peers-updated', (event) => {
       setPeers(event.payload);
       setSelectedPeerId((current) => {
@@ -101,6 +105,34 @@ export const App: React.FC = () => {
     }
   };
 
+  // Action: Scan Subnet Now
+  const handleScanSubnet = async () => {
+    if (isScanning) return;
+    setIsScanning(true);
+    try {
+      const updatedPeers = await invoke<PeerDevice[]>('rescan_network');
+      setPeers(updatedPeers);
+      if (updatedPeers.length > 0 && !selectedPeerId) {
+        setSelectedPeerId(updatedPeers[0].id);
+      }
+    } catch (err) {
+      console.error('Subnet scan error:', err);
+    } finally {
+      setTimeout(() => setIsScanning(false), 800);
+    }
+  };
+
+  // Action: Connect to Single IP directly
+  const handleConnectDirectIp = async (ip: string): Promise<PeerDevice> => {
+    const peer = await invoke<PeerDevice>('probe_device_ip', { ip });
+    setPeers((prev) => {
+      const next = prev.filter((p) => p.id !== peer.id);
+      return [peer, ...next];
+    });
+    setSelectedPeerId(peer.id);
+    return peer;
+  };
+
   const handleOpenDownloads = () => {
     invoke('open_downloads_folder').catch(console.error);
   };
@@ -117,17 +149,17 @@ export const App: React.FC = () => {
   const selectedPeer = peers.find((p) => p.id === selectedPeerId) || peers[0] || null;
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-[#0A0A0C] text-white overflow-hidden select-none font-sans">
-      {/* Top Navigation Bar */}
-      <header className="h-14 border-b border-white/8 px-6 flex items-center justify-between bg-[#101014]/80 backdrop-blur-md z-20 flex-shrink-0">
+    <div className="flex flex-col h-screen w-screen bg-[#000000] text-white overflow-hidden select-none font-sans">
+      {/* Top Navigation Bar - Minimal Black and White */}
+      <header className="h-14 border-b border-white/10 px-6 flex items-center justify-between bg-black/90 backdrop-blur-md z-20 flex-shrink-0">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-emerald-400 flex items-center justify-center shadow-lg shadow-indigo-500/20">
-            <Sparkles className="w-4 h-4 text-white" />
+          <div className="w-8 h-8 rounded-xl bg-white text-black flex items-center justify-center shadow-lg shadow-white/5">
+            <Sparkles className="w-4 h-4 text-black" />
           </div>
           <div>
             <h1 className="text-sm font-bold tracking-tight text-white flex items-center gap-2">
               AuraDrop
-              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-white/10 text-white/60 font-mono font-normal">
+              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border border-white/20 bg-white/5 text-white/80 font-mono font-normal">
                 v2.0 Native
               </span>
             </h1>
@@ -135,31 +167,52 @@ export const App: React.FC = () => {
         </div>
 
         {/* Network & Local Host Indicator */}
-        <div className="flex items-center gap-3">
-          <div className="hidden sm:flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 border border-white/5 text-xs text-white/70">
-            <Wifi className="w-3.5 h-3.5 text-emerald-400" />
-            <span className="font-mono text-[11px] text-white/50">{localInfo?.activeIp || '127.0.0.1'}</span>
-            <span className="text-white/30">•</span>
-            <span className="text-white/80 font-medium truncate max-w-[140px]">
+        <div className="flex items-center gap-2.5">
+          <div className="hidden sm:flex items-center gap-2 px-3 py-1 rounded-full bg-neutral-900 border border-white/10 text-xs text-neutral-300">
+            <Wifi className="w-3.5 h-3.5 text-white" />
+            <span className="font-mono text-[11px] text-neutral-400">{localInfo?.activeIp || '127.0.0.1'}</span>
+            <span className="text-neutral-600">•</span>
+            <span className="text-white font-medium truncate max-w-[140px]">
               {localInfo?.deviceName || 'This PC'}
             </span>
           </div>
 
+          {/* Subnet Scan Trigger Button */}
+          <button
+            onClick={handleScanSubnet}
+            disabled={isScanning}
+            title="Scan Wi-Fi Subnet for Devices"
+            className="px-3 py-1.5 rounded-lg border border-white/15 bg-white/5 hover:bg-white/10 text-white text-xs font-medium flex items-center gap-1.5 transition-all active:scale-95 disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isScanning ? 'animate-spin text-white' : 'text-neutral-400'}`} />
+            <span className="hidden md:inline">{isScanning ? 'Scanning...' : 'Scan Subnet'}</span>
+          </button>
+
+          {/* Direct IP Quick Connect Button */}
+          <button
+            onClick={() => setShowDirectIp(true)}
+            title="Direct IP Connect"
+            className="px-3 py-1.5 rounded-lg border border-white/15 bg-white/5 hover:bg-white/10 text-white text-xs font-medium flex items-center gap-1.5 transition-all active:scale-95"
+          >
+            <Target className="w-3.5 h-3.5 text-neutral-400" />
+            <span className="hidden md:inline">Direct IP</span>
+          </button>
+
           <button
             onClick={() => setShowHistory(true)}
             title="Transfer History"
-            className="p-2 text-white/60 hover:text-white rounded-lg hover:bg-white/5 transition-colors relative"
+            className="p-2 text-neutral-400 hover:text-white rounded-lg hover:bg-white/5 transition-colors relative"
           >
             <History className="w-4 h-4" />
             {history.length > 0 && (
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-emerald-400" />
+              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-white" />
             )}
           </button>
 
           <button
             onClick={handleOpenDownloads}
             title="Open Downloads Folder"
-            className="p-2 text-white/60 hover:text-white rounded-lg hover:bg-white/5 transition-colors"
+            className="p-2 text-neutral-400 hover:text-white rounded-lg hover:bg-white/5 transition-colors"
           >
             <FolderOpen className="w-4 h-4" />
           </button>
@@ -167,7 +220,7 @@ export const App: React.FC = () => {
           <button
             onClick={() => setShowDiagnostics(true)}
             title="Network Diagnostics & Settings"
-            className="p-2 text-white/60 hover:text-white rounded-lg hover:bg-white/5 transition-colors"
+            className="p-2 text-neutral-400 hover:text-white rounded-lg hover:bg-white/5 transition-colors"
           >
             <Settings className="w-4 h-4" />
           </button>
@@ -175,8 +228,8 @@ export const App: React.FC = () => {
       </header>
 
       {/* Main Content Area */}
-      <main className="flex-1 flex flex-col justify-between p-4 overflow-y-auto relative">
-        {/* Central 3D HeroGlobe Viewport */}
+      <main className="flex-1 flex flex-col justify-between p-4 overflow-y-auto relative bg-[#000000]">
+        {/* Central Monochromatic 3D HeroGlobe Viewport */}
         <div className="flex-1 flex flex-col items-center justify-center my-auto relative">
           <HeroGlobe
             peers={peers}
@@ -197,7 +250,7 @@ export const App: React.FC = () => {
               <button
                 onClick={() => handleSendFiles(selectedPeer)}
                 disabled={isPickingFiles}
-                className="px-6 py-2.5 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-bold flex items-center gap-2 shadow-lg shadow-emerald-500/20 hover:scale-105 active:scale-95 transition-all"
+                className="px-7 py-2.5 rounded-full bg-white hover:bg-neutral-200 text-black text-xs font-bold flex items-center gap-2 shadow-xl shadow-white/10 hover:scale-105 active:scale-95 transition-all disabled:opacity-50"
               >
                 <Send className="w-3.5 h-3.5" />
                 Send Files to {selectedPeer.name}
@@ -207,12 +260,15 @@ export const App: React.FC = () => {
         </div>
 
         {/* Bottom Nearby Devices Shelf */}
-        <div className="mt-4 pt-3 border-t border-white/5">
+        <div className="mt-4 pt-3 border-t border-white/10">
           <DeviceShelf
             peers={peers}
             selectedPeerId={selectedPeerId}
             onSelectPeer={handleSelectPeer}
             onSendFiles={handleSendFiles}
+            onScanSubnet={handleScanSubnet}
+            onAddDirectIp={() => setShowDirectIp(true)}
+            isScanning={isScanning}
           />
         </div>
       </main>
@@ -223,6 +279,16 @@ export const App: React.FC = () => {
         onDismiss={() => setActiveTransfer(null)}
         onOpenFolder={handleOpenDownloads}
       />
+
+      {showDirectIp && (
+        <DirectIpModal
+          onDismiss={() => setShowDirectIp(false)}
+          onConnect={handleConnectDirectIp}
+          onSuccess={(peer) => {
+            setSelectedPeerId(peer.id);
+          }}
+        />
+      )}
 
       {showDiagnostics && (
         <DiagnosticsModal

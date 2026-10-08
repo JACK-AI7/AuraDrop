@@ -113,7 +113,14 @@ pub async fn open_downloads_folder(state: State<'_, AppState>) -> Result<(), Str
 }
 
 #[tauri::command]
-pub async fn rescan_network(_state: State<'_, AppState>) -> Result<(), String> {
-    // Triggers network check
-    Ok(())
+pub async fn rescan_network(state: State<'_, AppState>) -> Result<Vec<PeerDevice>, String> {
+    crate::log_debug("[Commands] rescan_network invoked by user");
+    state.discovery.trigger_scan().await;
+    Ok(state.discovery.get_peers().await)
+}
+
+#[tauri::command]
+pub async fn probe_device_ip(ip: String, state: State<'_, AppState>) -> Result<PeerDevice, String> {
+    crate::log_debug(&format!("[Commands] probe_device_ip invoked for: {}", ip));
+    state.discovery.probe_single_ip(&ip).await
 }

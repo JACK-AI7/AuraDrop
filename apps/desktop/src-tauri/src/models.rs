@@ -52,15 +52,17 @@ pub struct TransferProgressPayload {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscoveryPacket {
+    #[serde(default)]
     pub protocol: String,
-    #[serde(rename = "type")]
+    #[serde(rename = "type", alias = "packetType", default)]
     pub packet_type: String,
-    #[serde(rename = "deviceId")]
+    #[serde(rename = "deviceId", alias = "id", default)]
     pub device_id: String,
     #[serde(default)]
     pub name: String,
     #[serde(rename = "deviceName", default)]
     pub device_name: String,
+    #[serde(default)]
     pub platform: String,
     #[serde(default)]
     pub port: Option<u16>,
