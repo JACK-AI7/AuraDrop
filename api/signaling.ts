@@ -13,6 +13,9 @@ interface PeerEntry {
   deviceName: string;
   platform: string;
   clientIp: string;
+  localIp?: string;
+  localPort?: number;
+  capabilities?: string[];
   lastSeen: number;
   visibility: string;
 }
@@ -58,9 +61,15 @@ async function ensureTables(pool: Pool): Promise<void> {
         device_name VARCHAR(128) NOT NULL,
         platform VARCHAR(64) NOT NULL DEFAULT 'web',
         client_ip VARCHAR(128) NOT NULL DEFAULT '127.0.0.1',
+        local_ip VARCHAR(128),
+        local_port INTEGER,
+        capabilities JSONB,
         visibility VARCHAR(32) NOT NULL DEFAULT 'everyone',
         last_seen_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
       );
+      ALTER TABLE active_peers ADD COLUMN IF NOT EXISTS local_ip VARCHAR(128);
+      ALTER TABLE active_peers ADD COLUMN IF NOT EXISTS local_port INTEGER;
+      ALTER TABLE active_peers ADD COLUMN IF NOT EXISTS capabilities JSONB;
       CREATE INDEX IF NOT EXISTS idx_active_peers_last_seen ON active_peers(last_seen_at);
 
       CREATE TABLE IF NOT EXISTS signaling_messages (
@@ -101,7 +110,7 @@ async function getActivePeers(
     try {
       await ensureTables(pool);
       const q = `
-        SELECT device_id, display_name, device_name, platform, client_ip, visibility,
+        SELECT device_id, display_name, device_name, platform, client_ip, local_ip, local_port, capabilities, visibility,
                EXTRACT(EPOCH FROM last_seen_at) * 1000 as last_seen
         FROM active_peers
         WHERE device_id != $1
@@ -120,6 +129,9 @@ async function getActivePeers(
             deviceName: r.device_name,
             platform: r.platform,
             clientIp: r.client_ip,
+            localIp: r.local_ip || undefined,
+            localPort: r.local_port ? Number(r.local_port) : undefined,
+            capabilities: r.capabilities || undefined,
             lastSeen: Number(r.last_seen),
             visibility: r.visibility,
           });
@@ -199,6 +211,9 @@ export default async function handler(req: any, res: any) {
     const deviceName = body.deviceName || displayName;
     const platform = body.platform || 'web';
     const visibility = body.visibility || 'everyone';
+    const localIp = body.localIp || url.searchParams.get('localIp') || undefined;
+    const localPort = body.localPort ? Number(body.localPort) : (url.searchParams.get('localPort') ? Number(url.searchParams.get('localPort')) : undefined);
+    const capabilities = Array.isArray(body.capabilities) ? body.capabilities : undefined;
 
     const peer: PeerEntry = {
       deviceId: regDeviceId,
@@ -206,6 +221,9 @@ export default async function handler(req: any, res: any) {
       deviceName,
       platform,
       clientIp,
+      localIp,
+      localPort,
+      capabilities,
       lastSeen: Date.now(),
       visibility,
     };
@@ -217,17 +235,20 @@ export default async function handler(req: any, res: any) {
         await ensureTables(pool);
         await pool.query(
           `
-          INSERT INTO active_peers (device_id, display_name, device_name, platform, client_ip, visibility, last_seen_at)
-          VALUES ($1, $2, $3, $4, $5, $6, NOW())
+          INSERT INTO active_peers (device_id, display_name, device_name, platform, client_ip, local_ip, local_port, capabilities, visibility, last_seen_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
           ON CONFLICT (device_id) DO UPDATE SET
             display_name = EXCLUDED.display_name,
             device_name = EXCLUDED.device_name,
             platform = EXCLUDED.platform,
             client_ip = EXCLUDED.client_ip,
+            local_ip = COALESCE(EXCLUDED.local_ip, active_peers.local_ip),
+            local_port = COALESCE(EXCLUDED.local_port, active_peers.local_port),
+            capabilities = COALESCE(EXCLUDED.capabilities, active_peers.capabilities),
             visibility = EXCLUDED.visibility,
             last_seen_at = NOW();
         `,
-          [regDeviceId, displayName, deviceName, platform, clientIp, visibility]
+          [regDeviceId, displayName, deviceName, platform, clientIp, localIp || null, localPort || null, capabilities ? JSON.stringify(capabilities) : null, visibility]
         );
       } catch (err) {
         console.warn('[Signaling] DB register notice:', err);
@@ -262,6 +283,9 @@ export default async function handler(req: any, res: any) {
     const reqPlatform = url.searchParams.get('platform') || body.platform || (globalPeers.get(deviceId)?.platform) || 'web';
     const reqDeviceName = url.searchParams.get('deviceName') || body.deviceName || name;
     const reqVisibility = url.searchParams.get('visibility') || body.visibility || 'everyone';
+    const localIp = body.localIp || url.searchParams.get('localIp') || undefined;
+    const localPort = body.localPort ? Number(body.localPort) : (url.searchParams.get('localPort') ? Number(url.searchParams.get('localPort')) : undefined);
+    const capabilities = Array.isArray(body.capabilities) ? body.capabilities : undefined;
 
     // Refresh memory lastSeen
     const current = globalPeers.get(deviceId);
@@ -270,6 +294,9 @@ export default async function handler(req: any, res: any) {
       if (reqPlatform && reqPlatform !== 'web') {
         current.platform = reqPlatform;
       }
+      if (localIp) current.localIp = localIp;
+      if (localPort) current.localPort = localPort;
+      if (capabilities) current.capabilities = capabilities;
     } else {
       globalPeers.set(deviceId, {
         deviceId,
@@ -277,6 +304,9 @@ export default async function handler(req: any, res: any) {
         deviceName: reqDeviceName,
         platform: reqPlatform,
         clientIp,
+        localIp,
+        localPort,
+        capabilities,
         lastSeen: Date.now(),
         visibility: reqVisibility,
       });
@@ -288,16 +318,19 @@ export default async function handler(req: any, res: any) {
         await ensureTables(pool);
         await pool.query(
           `
-          INSERT INTO active_peers (device_id, display_name, device_name, platform, client_ip, visibility, last_seen_at)
-          VALUES ($1, $2, $3, $4, $5, $6, NOW())
+          INSERT INTO active_peers (device_id, display_name, device_name, platform, client_ip, local_ip, local_port, capabilities, visibility, last_seen_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
           ON CONFLICT (device_id) DO UPDATE SET
             last_seen_at = NOW(),
             client_ip = EXCLUDED.client_ip,
             display_name = CASE WHEN EXCLUDED.display_name != 'AuraDrop Device' THEN EXCLUDED.display_name ELSE active_peers.display_name END,
             device_name = CASE WHEN EXCLUDED.device_name != 'AuraDrop Device' THEN EXCLUDED.device_name ELSE active_peers.device_name END,
-            platform = CASE WHEN EXCLUDED.platform != 'web' THEN EXCLUDED.platform ELSE active_peers.platform END;
+            platform = CASE WHEN EXCLUDED.platform != 'web' THEN EXCLUDED.platform ELSE active_peers.platform END,
+            local_ip = COALESCE(EXCLUDED.local_ip, active_peers.local_ip),
+            local_port = COALESCE(EXCLUDED.local_port, active_peers.local_port),
+            capabilities = COALESCE(EXCLUDED.capabilities, active_peers.capabilities);
         `,
-          [deviceId, name, reqDeviceName, reqPlatform, clientIp, reqVisibility]
+          [deviceId, name, reqDeviceName, reqPlatform, clientIp, localIp || null, localPort || null, capabilities ? JSON.stringify(capabilities) : null, reqVisibility]
         ).catch(() => {});
       } catch {}
     }

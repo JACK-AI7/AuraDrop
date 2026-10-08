@@ -21,6 +21,7 @@ import 'screens/profile_screen.dart';
 import 'screens/settings_screen.dart';
 import 'services/aura_signaling_service.dart';
 import 'services/aura_webrtc_service.dart';
+import 'services/aura_lan_server.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -220,8 +221,17 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
       _applyVisibilityMode(_visibilityMode);
       _checkSystemShare();
 
-      // Initialize AuraDrop Production Signaling & WebRTC P2P (Section 1, 10, 16)
+      // Initialize AuraDrop Production Signaling, LAN Turbo & WebRTC P2P (V20 Specification)
       await AuraSignalingService().initPersistedUrl();
+      await AuraLanServer().start(
+        deviceId: _deviceId,
+        deviceName: _deviceName,
+      );
+      AuraSignalingService().updateLanEndpoint(
+        localIp: AuraLanServer().localIp,
+        localPort: AuraLanServer().port,
+      );
+
       AuraSignalingService().configureIdentity(
         deviceId: _deviceId,
         displayName: _deviceName,
@@ -231,6 +241,43 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
       );
       AuraWebRtcService().init();
       AuraSignalingService().connect();
+
+      // Hook reactive LAN Turbo HTTP Server events (Desktop -> Android fast path)
+      AuraLanServer().onTransferProgress.listen((p) {
+        if (!mounted) return;
+        setState(() {
+          _transferredBytes = p.transferredBytes;
+          _totalTransferBytes = math.max(1, p.totalBytes);
+          _speedBytesPerSec = (p.speedMBps * 1024 * 1024).toInt();
+          _etaSeconds = p.etaSeconds;
+          _activeFileName = p.fileName;
+          if (p.state == 'TRANSFERRING') {
+            _transferState = TransferState.transferring;
+          }
+        });
+      });
+
+      AuraLanServer().onTransferComplete.listen((data) {
+        if (!mounted) return;
+        HapticFeedback.heavyImpact();
+        setState(() {
+          _transferState = TransferState.completed;
+          _lastSavedPath = data['filePath']?.toString() ?? '';
+          _lastSha256 = data['sha256']?.toString() ?? '';
+        });
+      });
+
+      AuraLanServer().onTransferRequest.listen((req) {
+        if (!mounted) return;
+        NativeBridgeService.showSystemIncomingShareNotification(
+          transferId: req['transferId']?.toString() ?? '',
+          senderName: req['senderName']?.toString() ?? 'Desktop Browser',
+          senderDeviceName: req['senderName']?.toString() ?? 'Desktop Browser',
+          totalFiles: 1,
+          totalBytes: (req['fileSize'] as num?)?.toInt() ?? 0,
+          fileName: req['fileName']?.toString() ?? 'file',
+        );
+      });
 
       // Hook reactive WebRTC & Signaling events
       AuraSignalingService().onPeerList.listen((peers) {

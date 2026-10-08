@@ -28,14 +28,17 @@ export interface PeerDevice {
   deviceId: string;
   name: string;
   deviceName: string;
-  platform: 'android' | 'ios' | 'macos' | 'windows' | 'linux' | 'web';
+  platform: 'android' | 'ios' | 'macos' | 'windows' | 'linux' | 'web' | string;
   ip: string;
   port: number;
+  localIp?: string;
+  localPort?: number;
+  capabilities?: string[];
   lastSeen: Date;
   isTrusted?: boolean;
   avatarUrl?: string | null;
   connectionState?: ConnectionState;
-  transport?: 'WebRTC Direct' | 'LAN TCP' | 'Relay';
+  transport?: 'Direct LAN' | 'Direct P2P' | 'TURN Relay' | 'WebRTC Direct' | string;
 }
 
 export interface PickedFile {

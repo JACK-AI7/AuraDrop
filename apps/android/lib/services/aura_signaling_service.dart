@@ -41,7 +41,14 @@ class AuraSignalingService {
   String _deviceName = '';
   String _visibility = 'everyone';
   int _avatarIndex = 0;
+  String _localIp = '';
+  int _localPort = 0;
   final Set<String> _knownPeerIds = <String>{};
+
+  void updateLanEndpoint({required String localIp, required int localPort}) {
+    _localIp = localIp;
+    _localPort = localPort;
+  }
 
   // Streams for reactive UI updates
   final _connectionStateController = StreamController<bool>.broadcast();
@@ -182,6 +189,9 @@ class AuraSignalingService {
       'platform': 'android',
       'visibility': _visibility,
       'avatarIndex': _avatarIndex,
+      'localIp': _localIp,
+      'localPort': _localPort,
+      'capabilities': ['lan_http_turbo', 'webrtc_direct', 'chunk_stream', 'sha256'],
     });
 
     if (regResult != null && regResult['peers'] is List) {
@@ -211,7 +221,7 @@ class AuraSignalingService {
       }
       try {
         final sep = _signalingUrl.contains('?') ? '&' : '?';
-        final pollUri = Uri.parse('$_signalingUrl${sep}action=poll&deviceId=${Uri.encodeComponent(_deviceId)}&name=${Uri.encodeComponent(_displayName)}&platform=android&deviceName=${Uri.encodeComponent(_deviceName)}');
+        final pollUri = Uri.parse('$_signalingUrl${sep}action=poll&deviceId=${Uri.encodeComponent(_deviceId)}&name=${Uri.encodeComponent(_displayName)}&platform=android&deviceName=${Uri.encodeComponent(_deviceName)}&localIp=${Uri.encodeComponent(_localIp)}&localPort=$_localPort');
         final req = await _httpClient.getUrl(pollUri);
         final resp = await req.close();
         if (resp.statusCode == 200) {
@@ -291,8 +301,10 @@ class AuraSignalingService {
       'platform': 'android',
       'visibility': _visibility,
       'avatarIndex': _avatarIndex,
-      'protocolVersion': '15.0.0',
-      'capabilities': ['webrtc_direct', 'chunk_stream', 'sha256'],
+      'localIp': _localIp,
+      'localPort': _localPort,
+      'protocolVersion': 'P2PFS/1',
+      'capabilities': ['lan_http_turbo', 'webrtc_direct', 'chunk_stream', 'sha256'],
     });
   }
 
@@ -412,6 +424,8 @@ class AuraSignalingService {
       platform: platform,
       ip: p['ip']?.toString() ?? 'WebRTC P2P',
       port: 0,
+      localIp: p['localIp']?.toString() ?? '',
+      localPort: (p['localPort'] as num?)?.toInt() ?? 0,
       lastSeen: DateTime.now(),
       avatarIndex: (p['avatarIndex'] as num?)?.toInt() ?? 0,
       transport: 'WebRTC Direct',

@@ -109,6 +109,8 @@ export class TransferEngine {
     isPaused: boolean;
   } | null = null;
 
+  private activeXhr: XMLHttpRequest | null = null;
+
   // Throttling for UI updates (10–20 updates/sec)
   private lastUiNotifyTime = 0;
 
@@ -583,6 +585,17 @@ export class TransferEngine {
       isPaused: false,
     };
 
+    // V20 Direct LAN HTTP Turbo optimization:
+    // If target peer has a localIp and port (e.g. Android running AuraLanServer),
+    // attempt direct zero-hop HTTP Turbo streaming over the local network first!
+    if (targetPeer.localIp && targetPeer.localPort) {
+      const lanSuccess = await this.tryLanHttpTurboUpload(targetPeer, transferId, file, safeName, senderSha256);
+      if (lanSuccess) {
+        return transferId;
+      }
+      console.log('[TransferEngine] Direct LAN probe unreached, falling back to WebRTC Direct...');
+    }
+
     // Dispatch Transfer Request to recipient via signaling server
     this.signaling.sendTransferRequest(targetPeer.deviceId, {
       transferId,
@@ -616,6 +629,241 @@ export class TransferEngine {
     );
 
     return transferId;
+  }
+
+  private async tryLanHttpTurboUpload(
+    targetPeer: PeerDevice,
+    transferId: string,
+    file: File,
+    safeName: string,
+    senderSha256: string
+  ): Promise<boolean> {
+    if (!targetPeer.localIp || !targetPeer.localPort) {
+      return false;
+    }
+
+    const lanUrl = `http://${targetPeer.localIp}:${targetPeer.localPort}`;
+    console.log(`[LAN HTTP Turbo] Probing target peer at ${lanUrl}...`);
+
+    // 1. Fast probe
+    try {
+      const probeController = new AbortController();
+      const probeTimer = setTimeout(() => probeController.abort(), 1200);
+      const probeRes = await fetch(`${lanUrl}/api/probe`, {
+        method: 'GET',
+        signal: probeController.signal,
+        mode: 'cors',
+      });
+      clearTimeout(probeTimer);
+
+      if (!probeRes.ok) {
+        console.log(`[LAN HTTP Turbo] Probe returned HTTP ${probeRes.status}, fallback to WebRTC.`);
+        return false;
+      }
+      const probeData = await probeRes.json();
+      if (probeData.status !== 'ok') {
+        return false;
+      }
+    } catch (err) {
+      console.log(`[LAN HTTP Turbo] Probe timed out or failed: ${err}, fallback to WebRTC.`);
+      return false;
+    }
+
+    // 2. Prepare transfer
+    try {
+      const prepRes = await fetch(`${lanUrl}/api/transfer/prepare`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          transferId,
+          fileName: safeName,
+          fileSize: file.size,
+          sha256: senderSha256,
+          senderName: this.localName,
+          senderDeviceName: this.identity.deviceName,
+        }),
+      });
+      if (!prepRes.ok) {
+        return false;
+      }
+      const prepData = await prepRes.json();
+      if (!prepData.accepted) {
+        this.notifyEvent(
+          {
+            type: 'error',
+            transferId,
+            senderName: this.localName,
+            fileName: file.name,
+            fileSize: file.size,
+            error: 'Recipient declined the transfer.',
+            state: 'CANCELLED',
+          },
+          true
+        );
+        this.activeOutgoingTransfer = null;
+        return true;
+      }
+    } catch (err) {
+      console.warn('[LAN HTTP Turbo] Prepare failed:', err);
+      return false;
+    }
+
+    // 3. Direct streaming upload via XHR with exact byte progress & live MB/s
+    return new Promise<boolean>((resolve) => {
+      const xhr = new XMLHttpRequest();
+      this.activeXhr = xhr;
+      const uploadUrl = `${lanUrl}/api/transfer/upload?transferId=${encodeURIComponent(transferId)}&fileName=${encodeURIComponent(safeName)}`;
+      xhr.open('POST', uploadUrl, true);
+      xhr.setRequestHeader('X-Transfer-Id', transferId);
+      xhr.setRequestHeader('X-File-Name', encodeURIComponent(safeName));
+      xhr.setRequestHeader('X-Expected-Sha256', senderSha256);
+
+      let lastCalcTime = performance.now();
+      let lastLoaded = 0;
+      let smoothedSpeed = 0;
+
+      if (this.activeOutgoingTransfer) {
+        this.activeOutgoingTransfer.state = 'TRANSFERRING';
+      }
+
+      this.notifyEvent(
+        {
+          type: 'progress',
+          transferId,
+          senderName: this.localName,
+          fileName: safeName,
+          fileSize: file.size,
+          transferredBytes: 0,
+          verifiedBytes: 0,
+          speedBytesPerSec: 0,
+          etaSeconds: 0,
+          state: 'TRANSFERRING',
+          transport: 'Direct LAN',
+        },
+        true
+      );
+
+      xhr.upload.onprogress = (event) => {
+        if (this.activeOutgoingTransfer?.isCancelled) {
+          xhr.abort();
+          this.activeXhr = null;
+          resolve(true);
+          return;
+        }
+
+        if (event.lengthComputable) {
+          const now = performance.now();
+          const dt = (now - lastCalcTime) / 1000;
+          if (dt > 0.08) {
+            const bytesDelta = event.loaded - lastLoaded;
+            const instantSpeed = bytesDelta / dt;
+            smoothedSpeed = smoothedSpeed === 0 ? instantSpeed : 0.75 * smoothedSpeed + 0.25 * instantSpeed;
+            lastCalcTime = now;
+            lastLoaded = event.loaded;
+          }
+
+          const remaining = Math.max(0, event.total - event.loaded);
+          const eta = smoothedSpeed > 0 ? Math.ceil(remaining / smoothedSpeed) : 0;
+
+          if (this.activeOutgoingTransfer) {
+            this.activeOutgoingTransfer.sentBytes = event.loaded;
+            this.activeOutgoingTransfer.verifiedOffset = event.loaded;
+            this.activeOutgoingTransfer.smoothedSpeed = smoothedSpeed;
+          }
+
+          this.notifyEvent({
+            type: 'progress',
+            transferId,
+            senderName: this.localName,
+            fileName: safeName,
+            fileSize: event.total,
+            transferredBytes: event.loaded,
+            verifiedBytes: event.loaded,
+            speedBytesPerSec: smoothedSpeed,
+            etaSeconds: eta,
+            state: 'TRANSFERRING',
+            transport: 'Direct LAN',
+          });
+        }
+      };
+
+      xhr.onload = () => {
+        this.activeXhr = null;
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const resp = JSON.parse(xhr.responseText);
+            const finalSha = resp.sha256 || senderSha256;
+
+            this.storage.removeCheckpoint(transferId);
+            const record: TransferRecord = {
+              id: transferId,
+              fileName: safeName,
+              fileSize: file.size,
+              senderName: this.localName,
+              receiverName: targetPeer.name,
+              status: 'COMPLETED',
+              sha256: finalSha,
+              timestamp: new Date().toISOString(),
+              speedBytesPerSec: smoothedSpeed,
+              transport: 'Direct LAN',
+              verifiedOffset: file.size,
+            };
+            this.storage.saveRecord(record);
+
+            this.notifyEvent(
+              {
+                type: 'completed',
+                transferId,
+                senderName: this.localName,
+                fileName: safeName,
+                fileSize: file.size,
+                transferredBytes: file.size,
+                verifiedBytes: file.size,
+                speedBytesPerSec: smoothedSpeed,
+                sha256: finalSha,
+                state: 'COMPLETED',
+                transport: 'Direct LAN',
+              },
+              true
+            );
+
+            this.activeOutgoingTransfer = null;
+            resolve(true);
+          } catch {
+            resolve(false);
+          }
+        } else {
+          console.warn(`[LAN HTTP Turbo] Upload failed HTTP ${xhr.status}, fallback to WebRTC.`);
+          resolve(false);
+        }
+      };
+
+      xhr.onerror = () => {
+        this.activeXhr = null;
+        console.warn('[LAN HTTP Turbo] Network error during LAN upload, fallback to WebRTC.');
+        resolve(false);
+      };
+
+      xhr.onabort = () => {
+        this.activeXhr = null;
+        this.notifyEvent(
+          {
+            type: 'error',
+            transferId,
+            senderName: this.localName,
+            fileName: file.name,
+            fileSize: file.size,
+            error: 'Transfer was cancelled.',
+            state: 'CANCELLED',
+          },
+          true
+        );
+        this.activeOutgoingTransfer = null;
+        resolve(true);
+      };
+
+      xhr.send(file);
+    });
   }
 
   private handleTransferResponseMessage(msg: any): void {
@@ -919,6 +1167,10 @@ export class TransferEngine {
   }
 
   public cancelActiveTransfer(): void {
+    if (this.activeXhr) {
+      this.activeXhr.abort();
+      this.activeXhr = null;
+    }
     if (this.activeOutgoingTransfer) {
       this.activeOutgoingTransfer.isCancelled = true;
       this.storage.removeCheckpoint(this.activeOutgoingTransfer.transferId);

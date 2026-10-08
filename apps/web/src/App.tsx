@@ -1,113 +1,83 @@
-import React, { useState, useEffect } from 'react';
-import { GitHubStarBar } from './components/GitHubStarBar';
-import { FloatingSideRail, ActiveTab } from './components/FloatingSideRail';
-import { HeroGlobe } from './components/HeroGlobe';
-import { AirDropNotification } from './components/AirDropNotification';
-import { FluidProximityAura } from './components/FluidProximityAura';
+import React, { useState, useEffect, useRef } from 'react';
+import { TransferEngine, TransferEngineEvent } from './engine/transferEngine';
+import { TransferStorage } from './engine/transferStorage';
+import { PeerDevice, PickedFile, TransferProgress, TransferRecord, VisibilityMode } from './types';
 import { ChatView } from './components/ChatView';
-import { DockedShareTray } from './components/DockedShareTray';
-import { DiagnosticsView } from './components/DiagnosticsView';
 import { DevicePairModal } from './components/DevicePairModal';
 import {
-  ChatModal,
   SettingsModal,
   ProfileModal,
   TransferHistoryModal,
   DiagnosticsModal,
 } from './components/Modals';
-import { TransferEngine, TransferEngineEvent } from './engine/transferEngine';
-import { TransferStorage } from './engine/transferStorage';
-import { PeerDevice, PickedFile, TransferProgress, TransferRecord, VisibilityMode } from './types';
 
 export const App: React.FC = () => {
   const engine = TransferEngine.getInstance();
   const storage = TransferStorage.getInstance();
 
-  // Navigation tab: 'globe' | 'transfers' | 'devices' | 'chat' | 'specs'
-  const [currentTab, setCurrentTab] = useState<ActiveTab>('globe');
-  const [visibility, setVisibility] = useState<VisibilityMode>('everyone');
-
-  // Real Discovered Peers from TransferEngine
+  // Peer State
   const [peers, setPeers] = useState<PeerDevice[]>([]);
   const [selectedPeer, setSelectedPeer] = useState<PeerDevice | null>(null);
+  const [visibility, setVisibility] = useState<VisibilityMode>('everyone');
 
-  // Staged Real Files
+  // Staged Files for Transfer
   const [stagedFiles, setStagedFiles] = useState<PickedFile[]>([]);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
 
-  // Real Incoming Request Meta for the popping AirDrop card
-  const [incomingMeta, setIncomingMeta] = useState<{
+  // Incoming Transfer Request State
+  const [incomingRequest, setIncomingRequest] = useState<{
     transferId: string;
     senderName: string;
-    senderAvatarUrl?: string | null;
     fileName: string;
     fileSize: number;
-    sizeFormatted: string;
-    isOpen: boolean;
-  }>({
-    transferId: '',
-    senderName: '',
-    senderAvatarUrl: null,
-    fileName: '',
-    fileSize: 0,
-    sizeFormatted: '',
-    isOpen: false,
-  });
+    sha256?: string;
+  } | null>(null);
 
-  // Real Transfer Progress
+  // Active Transfer Progress
   const [transferProgress, setTransferProgress] = useState<TransferProgress | null>(null);
 
-  // Real Transfer History loaded from persistent TransferStorage
+  // Transfer History
   const [transferHistory, setTransferHistory] = useState<TransferRecord[]>(() => storage.getHistory());
 
-  // Proximity shockwave ripple trigger & fluid light-ripple aura state
-  const [rippleKey, setRippleKey] = useState(0);
-  const [isAuraActive, setIsAuraActive] = useState(false);
+  // UI Panels on the same page
+  const [activeRightPanel, setActiveRightPanel] = useState<'chat' | 'history' | 'diagnostics'>('chat');
+  const [isRightPanelExpanded, setIsRightPanelExpanded] = useState(true);
 
-  // Modals (Keep experience 100% on this single page)
+  // Modals for deep settings
   const [isPairModalOpen, setIsPairModalOpen] = useState(false);
-  const [isChatOpen, setIsChatOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
-  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
-  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [isDiagnosticsModalOpen, setIsDiagnosticsModalOpen] = useState(false);
+
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // ---------------------------------------------------------------------------
-  // SUBSCRIBE TO REAL ENGINE EVENTS
+  // SUBSCRIBE TO ENGINE EVENTS (Zero-simulation real data plane)
   // ---------------------------------------------------------------------------
   useEffect(() => {
-    // 1. Peer discovery subscription (prioritize Android mobile app)
     const unsubscribePeers = engine.onPeersUpdated((updatedPeers) => {
       setPeers(updatedPeers);
       setSelectedPeer((prev) => {
-        const androidPeer = updatedPeers.find((p) => p.platform === 'android');
-        if (androidPeer) return androidPeer;
-        if (!prev) return updatedPeers[0] || null;
-        const exists = updatedPeers.find((p) => p.id === prev.id);
-        return exists || updatedPeers[0] || null;
+        if (!prev) {
+          // Default to first Android device or first device
+          const android = updatedPeers.find((p) => p.platform === 'android');
+          return android || updatedPeers[0] || null;
+        }
+        const found = updatedPeers.find((p) => p.id === prev.id);
+        return found || updatedPeers[0] || null;
       });
     });
 
-    // 2. Real transfer event subscription
     const unsubscribeEvents = engine.onEngineEvent((evt: TransferEngineEvent) => {
-      setRippleKey((prev) => prev + 1);
-
       if (evt.type === 'request') {
-        const formatted =
-          evt.fileSize < 1024 * 1024
-            ? `${(evt.fileSize / 1024).toFixed(1)} KB`
-            : `${(evt.fileSize / (1024 * 1024)).toFixed(1)} MB`;
-
-        setIncomingMeta({
+        setIncomingRequest({
           transferId: evt.transferId,
           senderName: evt.senderName,
-          senderAvatarUrl: (evt as any).senderAvatarUrl || null,
           fileName: evt.fileName,
           fileSize: evt.fileSize,
-          sizeFormatted: formatted,
-          isOpen: true,
+          sha256: evt.sha256,
         });
-        setIsAuraActive(true);
       } else if (evt.type === 'progress') {
         setTransferProgress({
           transferId: evt.transferId,
@@ -118,8 +88,10 @@ export const App: React.FC = () => {
           speedBytesPerSec: evt.speedBytesPerSec || 0,
           etaSeconds: evt.etaSeconds || 0,
           state: evt.state || 'TRANSFERRING',
-          isIncoming: true,
+          isIncoming: evt.transferredBytes !== undefined,
           peerName: evt.senderName,
+          transport: evt.transport || 'Direct LAN',
+          sha256: evt.sha256,
         });
       } else if (evt.type === 'completed') {
         setTransferProgress((prev) =>
@@ -133,11 +105,11 @@ export const App: React.FC = () => {
               }
             : null
         );
-        // Refresh transfer history ledger
+        setIncomingRequest(null);
         setTransferHistory(storage.getHistory());
       } else if (evt.type === 'error') {
-        alert(evt.error || 'Transfer error occurred');
-        setIncomingMeta((prev) => ({ ...prev, isOpen: false }));
+        alert(evt.error || 'Transfer encountered an error');
+        setIncomingRequest(null);
         setTransferProgress(null);
       }
     });
@@ -149,7 +121,7 @@ export const App: React.FC = () => {
   }, [engine, storage]);
 
   // ---------------------------------------------------------------------------
-  // REAL DRAG & DROP
+  // FILE STAGING & DRAG-AND-DROP
   // ---------------------------------------------------------------------------
   useEffect(() => {
     const handleDragOver = (e: DragEvent) => {
@@ -158,15 +130,13 @@ export const App: React.FC = () => {
     };
     const handleDragLeave = (e: DragEvent) => {
       e.preventDefault();
-      if (e.relatedTarget === null) {
-        setIsDraggingOver(false);
-      }
+      if (e.relatedTarget === null) setIsDraggingOver(false);
     };
     const handleDrop = (e: DragEvent) => {
       e.preventDefault();
       setIsDraggingOver(false);
       if (e.dataTransfer && e.dataTransfer.files.length > 0) {
-        handleRealFilesStaged(e.dataTransfer.files);
+        addFilesToStaging(e.dataTransfer.files);
       }
     };
 
@@ -180,207 +150,184 @@ export const App: React.FC = () => {
     };
   }, []);
 
-  const handleRealFilesStaged = (fileList: FileList) => {
-    const newFiles: PickedFile[] = Array.from(fileList).map((f) => ({
-      id: `${f.name}_${Date.now()}_${Math.random()}`,
+  const addFilesToStaging = (fileList: FileList) => {
+    const picked: PickedFile[] = Array.from(fileList).map((f) => ({
+      id: `${f.name}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       name: f.name,
       size: f.size,
       type: f.type || 'application/octet-stream',
       file: f,
     }));
-    setStagedFiles((prev) => [...prev, ...newFiles]);
-    setRippleKey((prev) => prev + 1);
+    setStagedFiles((prev) => [...prev, ...picked]);
   };
 
-  const handleRemoveStagedFile = (id: string) => {
+  const removeStagedFile = (id: string) => {
     setStagedFiles((prev) => prev.filter((f) => f.id !== id));
   };
 
-  // ---------------------------------------------------------------------------
-  // REAL SEND & REAL ACCEPT PIPELINES
-  // ---------------------------------------------------------------------------
-  const handleSendRealFiles = async () => {
-    if (!selectedPeer || stagedFiles.length === 0) return;
-    const fileToTransfer = stagedFiles[0]?.file;
-    if (!fileToTransfer) return;
+  const clearStagedFiles = () => {
+    setStagedFiles([]);
+  };
 
-    setRippleKey((prev) => prev + 1);
-    setIsAuraActive(true);
+  // ---------------------------------------------------------------------------
+  // REAL TRANSFER ACTIONS (Direct LAN or WebRTC)
+  // ---------------------------------------------------------------------------
+  const handleSendToPeer = async (peer: PeerDevice, fileOverride?: File) => {
+    const fileToSend = fileOverride || stagedFiles[0]?.file;
+    if (!fileToSend) {
+      fileInputRef.current?.click();
+      return;
+    }
 
     try {
-      await engine.startOutgoingTransfer(selectedPeer, fileToTransfer);
-      // Remove sent file from staging tray
-      setStagedFiles((prev) => prev.slice(1));
+      await engine.startOutgoingTransfer(peer, fileToSend);
+      if (!fileOverride) {
+        setStagedFiles((prev) => prev.slice(1));
+      }
     } catch (err: any) {
-      alert(`Transfer failed: ${err.message}`);
+      alert(`Transfer failed: ${err?.message || err}`);
     }
   };
 
-  const handleAcceptRealTransfer = () => {
+  const handleAcceptIncoming = () => {
     engine.acceptIncomingTransfer();
-    setRippleKey((prev) => prev + 1);
-    setIsAuraActive(true);
+    setIncomingRequest(null);
   };
 
-  const handleDeclineRealTransfer = () => {
+  const handleDeclineIncoming = () => {
     engine.declineIncomingTransfer();
-    setIncomingMeta((prev) => ({ ...prev, isOpen: false }));
-    setTransferProgress(null);
+    setIncomingRequest(null);
   };
 
-  const handleDoneTransfer = () => {
-    setIncomingMeta((prev) => ({ ...prev, isOpen: false }));
-    setTransferProgress(null);
+  const formatBytes = (bytes: number) => {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
+  };
+
+  const formatSpeed = (bytesPerSec: number) => {
+    const mbps = bytesPerSec / (1024 * 1024);
+    if (mbps >= 1) return `${mbps.toFixed(1)} MB/s`;
+    const kbps = bytesPerSec / 1024;
+    return `${kbps.toFixed(0)} KB/s`;
   };
 
   return (
     <div
       style={{
-        background: '#000000',
-        color: '#FFFFFF',
+        background: '#09090B',
+        color: '#FAFAFA',
+        minHeight: '100vh',
         height: '100vh',
         width: '100vw',
         display: 'flex',
         flexDirection: 'column',
-        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
         overflow: 'hidden',
-        position: 'relative',
         userSelect: 'none',
       }}
     >
-      {/* 1. TOP GITHUB STAR BANNER */}
-      <GitHubStarBar />
-
-      {/* 2. FLUID PROXIMITY LIGHT-RIPPLE AURA (Apple NameDrop Image 1 Reference) */}
-      <FluidProximityAura
-        isActive={isAuraActive}
-        onAnimationComplete={() => setIsAuraActive(false)}
+      {/* Hidden File Input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          if (e.target.files && e.target.files.length > 0) {
+            addFilesToStaging(e.target.files);
+            e.target.value = '';
+          }
+        }}
       />
 
-      {/* 3. APPLE AIRDROP DYNAMIC ISLAND FLOATING PILL (Images 2 & 3 References) */}
-      <AirDropNotification
-        isOpen={incomingMeta.isOpen}
-        senderName={incomingMeta.senderName}
-        senderAvatarUrl={incomingMeta.senderAvatarUrl}
-        filesCount={1}
-        fileName={incomingMeta.fileName}
-        totalSizeText={incomingMeta.sizeFormatted}
-        onAccept={handleAcceptRealTransfer}
-        onDecline={handleDeclineRealTransfer}
-        transferProgress={transferProgress}
-        onDone={handleDoneTransfer}
-      />
-
-      {/* 4. DRAG & DROP OVERLAY (Apple Minimal Monochrome) */}
+      {/* DRAG-AND-DROP FULL-SCREEN OVERLAY */}
       {isDraggingOver && (
         <div
           style={{
             position: 'fixed',
             inset: 0,
-            background: 'rgba(255, 255, 255, 0.08)',
-            border: '2px dashed #FFFFFF',
-            zIndex: 99999,
+            background: 'rgba(9, 9, 11, 0.88)',
+            border: '2px dashed #FAFAFA',
+            zIndex: 9999,
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
-            backdropFilter: 'blur(16px)',
+            backdropFilter: 'blur(12px)',
           }}
         >
-          <div style={{ fontSize: '54px', marginBottom: '12px' }}>📥</div>
-          <div style={{ fontSize: '22px', fontWeight: 900, color: '#FFFFFF' }}>Drop files to stage for zero-copy AuraDrop transfer</div>
-          <div style={{ fontSize: '13px', color: '#A1A1AA', marginTop: '6px' }}>Streaming directly through native WebRTC memory buffers</div>
+          <div style={{ fontSize: '48px', marginBottom: '16px' }}>📦</div>
+          <div style={{ fontSize: '20px', fontWeight: 700, color: '#FFFFFF' }}>
+            Drop files to transfer directly
+          </div>
+          <div style={{ fontSize: '13px', color: '#A1A1AA', marginTop: '6px' }}>
+            Zero cloud storage • Direct LAN & WebRTC streaming
+          </div>
         </div>
       )}
 
-      {/* 5. FLOATING 5-DOT VERTICAL PILL SIDE RAIL (Media Reference 1791373512430) */}
-      <FloatingSideRail
-        currentTab={currentTab}
-        onSelectTab={(tab) => {
-          setCurrentTab('globe');
-          if (tab === 'devices') setIsPairModalOpen(true);
-          else if (tab === 'transfers') setIsHistoryOpen(true);
-          else if (tab === 'chat') setIsChatOpen(true);
-          else if (tab === 'specs') setIsDiagnosticsOpen(true);
-        }}
-        activeTransfersCount={stagedFiles.length}
-        discoveredPeersCount={peers.length}
-      />
-
-      {/* 6. MINIMAL HEADER */}
+      {/* TOP BAR — Apple/Linear Monochrome Header */}
       <header
         style={{
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          padding: '12px 28px',
-          background: '#000000',
-          borderBottom: '1px solid #141416',
-          zIndex: 40,
+          padding: '12px 24px',
+          background: '#09090B',
+          borderBottom: '1px solid #18181B',
+          zIndex: 50,
+          flexShrink: 0,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <span style={{ fontSize: '17px', fontWeight: 900, letterSpacing: '-0.4px' }}>AuraDrop</span>
-          <span
+        {/* Brand & Client Identity */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div
             style={{
-              background: '#16161A',
-              border: '1px solid #242428',
-              fontSize: '10px',
-              fontWeight: 700,
-              padding: '2px 7px',
-              borderRadius: '6px',
-              color: '#8E8E93',
+              width: '28px',
+              height: '28px',
+              borderRadius: '8px',
+              background: '#FFFFFF',
+              color: '#000000',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontWeight: 900,
+              fontSize: '14px',
+              letterSpacing: '-0.5px',
             }}
           >
-            v11.0 Production
-          </span>
-        </div>
+            A
+          </div>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
+            <span style={{ fontSize: '16px', fontWeight: 800, letterSpacing: '-0.3px', color: '#FFFFFF' }}>
+              AuraDrop
+            </span>
+            <span
+              style={{
+                fontSize: '11px',
+                fontWeight: 600,
+                color: '#71717A',
+                letterSpacing: '0.2px',
+              }}
+            >
+              V20 DIRECT
+            </span>
+          </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          {/* Pair Mobile Device Action Pill */}
-          <button
-            onClick={() => setIsPairModalOpen(true)}
-            title="Pair with Android Mobile App"
+          <div
             style={{
-              background: '#16161A',
-              border: '1px solid #242428',
-              borderRadius: '16px',
-              padding: '6px 14px',
-              color: '#FFFFFF',
-              fontSize: '11px',
-              fontWeight: 700,
-              cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
               gap: '6px',
-              transition: 'all 0.2s ease',
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.borderColor = '#FFFFFF')}
-            onMouseLeave={(e) => (e.currentTarget.style.borderColor = '#242428')}
-          >
-            <span>📱</span>
-            Pair Mobile App
-          </button>
-
-          {/* Visibility Pill */}
-          <div
-            onClick={() => {
-              const modes: VisibilityMode[] = ['everyone', 'contacts', 'off'];
-              const next = modes[(modes.indexOf(visibility) + 1) % modes.length];
-              setVisibility(next);
-            }}
-            style={{
-              background: '#121214',
-              border: '1px solid #242428',
-              borderRadius: '16px',
-              padding: '6px 12px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '7px',
-              cursor: 'pointer',
+              background: '#18181B',
+              border: '1px solid #27272A',
+              padding: '3px 9px',
+              borderRadius: '12px',
               fontSize: '11px',
-              fontWeight: 700,
-              color: '#FFFFFF',
+              color: '#A1A1AA',
             }}
           >
             <div
@@ -388,45 +335,116 @@ export const App: React.FC = () => {
                 width: '6px',
                 height: '6px',
                 borderRadius: '50%',
-                background: visibility !== 'off' ? '#34C759' : '#8E8E93',
-                boxShadow: visibility !== 'off' ? '0 0 8px #34C759' : 'none',
+                background: peers.length > 0 ? '#22C55E' : '#71717A',
+                boxShadow: peers.length > 0 ? '0 0 6px #22C55E' : 'none',
+              }}
+            />
+            <span>{peers.length > 0 ? `${peers.length} nearby` : 'Searching Wi-Fi / P2P'}</span>
+          </div>
+        </div>
+
+        {/* Quick Actions & Profile */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          {/* Visibility Toggle */}
+          <button
+            onClick={() => {
+              const modes: VisibilityMode[] = ['everyone', 'contacts', 'off'];
+              const next = modes[(modes.indexOf(visibility) + 1) % modes.length];
+              setVisibility(next);
+            }}
+            style={{
+              background: '#18181B',
+              border: '1px solid #27272A',
+              borderRadius: '14px',
+              padding: '5px 12px',
+              color: '#D4D4D8',
+              fontSize: '11px',
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              transition: 'background 0.15s ease',
+            }}
+          >
+            <div
+              style={{
+                width: '6px',
+                height: '6px',
+                borderRadius: '50%',
+                background: visibility !== 'off' ? '#22C55E' : '#71717A',
               }}
             />
             <span style={{ textTransform: 'capitalize' }}>
               {visibility === 'everyone' ? 'Everyone Nearby' : visibility === 'contacts' ? 'Contacts' : 'Off'}
             </span>
-          </div>
+          </button>
 
-          {/* Settings Button */}
+          {/* Pair Mobile Device */}
+          <button
+            onClick={() => setIsPairModalOpen(true)}
+            style={{
+              background: '#18181B',
+              border: '1px solid #27272A',
+              borderRadius: '14px',
+              padding: '5px 12px',
+              color: '#FFFFFF',
+              fontSize: '11px',
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+            }}
+          >
+            <span>📱</span>
+            <span>Pair Mobile</span>
+          </button>
+
+          {/* Diagnostics Modal Toggle */}
+          <button
+            onClick={() => setIsDiagnosticsModalOpen(true)}
+            style={{
+              background: '#18181B',
+              border: '1px solid #27272A',
+              borderRadius: '14px',
+              padding: '5px 10px',
+              color: '#A1A1AA',
+              fontSize: '11px',
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+            title="Inspect Data Plane & ICE Candidates"
+          >
+            Diagnostics
+          </button>
+
+          {/* Settings */}
           <button
             onClick={() => setIsSettingsOpen(true)}
             style={{
-              width: '32px',
-              height: '32px',
+              width: '30px',
+              height: '30px',
               borderRadius: '50%',
-              background: '#121214',
-              border: '1px solid #242428',
+              background: '#18181B',
+              border: '1px solid #27272A',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              color: '#FFFFFF',
+              color: '#A1A1AA',
               cursor: 'pointer',
             }}
+            title="Settings"
           >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" />
-              <line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" />
-              <line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" />
-              <line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" />
-            </svg>
+            ⚙
           </button>
 
-          {/* Local Device Avatar */}
+          {/* Local User Avatar */}
           <div
             onClick={() => setIsProfileOpen(true)}
             style={{
-              width: '32px',
-              height: '32px',
+              width: '30px',
+              height: '30px',
               borderRadius: '50%',
               background: '#27272A',
               border: '1px solid #3F3F46',
@@ -434,344 +452,688 @@ export const App: React.FC = () => {
               alignItems: 'center',
               justifyContent: 'center',
               fontSize: '12px',
-              fontWeight: 800,
-              cursor: 'pointer',
+              fontWeight: 700,
               color: '#FFFFFF',
+              cursor: 'pointer',
             }}
+            title={`Local Device: ${engine.localName}`}
           >
-            {engine.localName.charAt(0)}
+            {engine.localName.charAt(0).toUpperCase()}
           </div>
         </div>
       </header>
 
-      {/* 7. DISCOVERY STATUS BAR (Section 31 & 32: Truth in Status) */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '8px 28px',
-          fontSize: '12px',
-          fontWeight: 600,
-          color: '#8E8E93',
-          borderBottom: '1px solid #141416',
-          zIndex: 30,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <div
-            style={{
-              width: '6px',
-              height: '6px',
-              borderRadius: '50%',
-              background:
-                visibility === 'off'
-                  ? '#8E8E93'
-                  : selectedPeer?.connectionState === 'READY_TO_TRANSFER'
-                  ? '#34C759'
-                  : selectedPeer?.connectionState === 'CONNECTING'
-                  ? '#FF9F0A'
-                  : peers.length > 0
-                  ? '#34C759'
-                  : '#A1A1AA',
-              boxShadow:
-                peers.length > 0
-                  ? '0 0 6px #34C759'
-                  : visibility !== 'off'
-                  ? '0 0 6px rgba(255, 255, 255, 0.4)'
-                  : 'none',
-            }}
-          />
-          <span>
-            {visibility === 'off'
-              ? 'Receiving is turned off'
-              : selectedPeer
-              ? selectedPeer.connectionState === 'READY_TO_TRANSFER'
-                ? `Connected to ${selectedPeer.name} — secure channel verified`
-                : selectedPeer.connectionState === 'CONNECTING' || selectedPeer.connectionState === 'SIGNALING'
-                ? `Connecting to ${selectedPeer.name}...`
-                : selectedPeer.connectionState === 'DATA_CHANNEL_HEALTH_CHECK'
-                ? `Verifying secure connection with ${selectedPeer.name}...`
-                : `Device discovered: ${selectedPeer.name}`
-              : peers.length === 0
-              ? 'Scanning for AuraDrop devices and Android mobile apps...'
-              : peers.length === 1
-              ? '1 device nearby'
-              : `${peers.length} devices nearby`}
-          </span>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <span style={{ fontSize: '11px', color: '#636366' }}>{engine.localName}</span>
-          <button
-            onClick={() => setIsDiagnosticsOpen(true)}
-            title="Inspect Live WebRTC Diagnostics"
-            style={{
-              background: 'transparent',
-              border: 'none',
-              fontSize: '11px',
-              fontWeight: 700,
-              cursor: 'pointer',
-              color:
-                selectedPeer?.connectionState === 'READY_TO_TRANSFER'
-                  ? '#34C759'
-                  : selectedPeer?.connectionState === 'CONNECTING'
-                  ? '#FF9F0A'
-                  : peers.length > 0
-                  ? '#34C759'
-                  : '#8E8E93',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-            }}
-          >
-            ● {selectedPeer?.connectionState === 'READY_TO_TRANSFER'
-                ? `${selectedPeer.name.toUpperCase()} • READY TO TRANSFER`
-                : selectedPeer?.connectionState === 'CONNECTING'
-                ? `CONNECTING TO ${selectedPeer.name.toUpperCase()}...`
-                : selectedPeer?.connectionState === 'DATA_CHANNEL_HEALTH_CHECK'
-                ? 'VERIFYING CHANNEL...'
-                : visibility === 'off'
-                ? 'RECEIVING OFF'
-                : 'RECEIVING ENABLED'}
-          </button>
-        </div>
-      </div>
-
-      {/* 8. MAIN VIEWPORT — DEAD CENTER GLOBE WITH LIVE DISCOVERED PEERS (SINGLE PAGE ONLY) */}
-      <main
-        style={{
-          flex: 1,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          position: 'relative',
-          overflow: 'hidden',
-          padding: '0 20px',
-        }}
-      >
+      {/* INCOMING FILE TRANSFER CARD (Apple Heads-Up Dialog on this page) */}
+      {incomingRequest && (
         <div
           style={{
+            background: '#18181B',
+            borderBottom: '1px solid #27272A',
+            padding: '14px 24px',
             display: 'flex',
-            flexDirection: 'column',
             alignItems: 'center',
-            justifyContent: 'center',
-            width: '100%',
+            justifyContent: 'space-between',
+            zIndex: 45,
+            animation: 'fadeIn 0.2s ease',
           }}
         >
-          <HeroGlobe
-            peers={peers}
-            selectedPeerId={selectedPeer?.id}
-            onSelectPeer={(p) => {
-              setSelectedPeer((prev) => {
-                const next = prev?.id === p.id ? null : p;
-                if (next) {
-                  engine.connectToPeer(next);
-                  setIsAuraActive(true);
-                }
-                return next;
-              });
-              setRippleKey((prev) => prev + 1);
-            }}
-            isTransferring={transferProgress?.state === 'TRANSFERRING'}
-            size={340}
-          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <div
+              style={{
+                width: '42px',
+                height: '42px',
+                borderRadius: '12px',
+                background: '#27272A',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '20px',
+              }}
+            >
+              📥
+            </div>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '14px', fontWeight: 700, color: '#FFFFFF' }}>
+                  Incoming file from {incomingRequest.senderName}
+                </span>
+                <span
+                  style={{
+                    background: '#22C55E1A',
+                    color: '#22C55E',
+                    border: '1px solid #22C55E33',
+                    fontSize: '10px',
+                    fontWeight: 700,
+                    padding: '1px 6px',
+                    borderRadius: '4px',
+                  }}
+                >
+                  Direct Stream
+                </span>
+              </div>
+              <div style={{ fontSize: '12px', color: '#A1A1AA', marginTop: '2px' }}>
+                {incomingRequest.fileName} • {formatBytes(incomingRequest.fileSize)}
+              </div>
+            </div>
+          </div>
 
-          {/* Active Discovered Devices Panel — Displayed directly on this same page */}
-          <div style={{ marginTop: '16px', width: '100%', maxWidth: '480px', zIndex: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <button
+              onClick={handleDeclineIncoming}
+              style={{
+                background: '#27272A',
+                border: '1px solid #3F3F46',
+                borderRadius: '10px',
+                padding: '8px 16px',
+                color: '#D4D4D8',
+                fontSize: '12px',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              Decline
+            </button>
+            <button
+              onClick={handleAcceptIncoming}
+              style={{
+                background: '#FFFFFF',
+                border: 'none',
+                borderRadius: '10px',
+                padding: '8px 20px',
+                color: '#000000',
+                fontSize: '12px',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              Accept
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ACTIVE TRANSFER PROGRESS BAR (Real byte counters & live MB/s) */}
+      {transferProgress && transferProgress.state !== 'COMPLETED' && (
+        <div
+          style={{
+            background: '#121215',
+            borderBottom: '1px solid #27272A',
+            padding: '12px 24px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '8px',
+            zIndex: 40,
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontSize: '13px', fontWeight: 700, color: '#FFFFFF' }}>
+                {transferProgress.isIncoming ? 'Receiving' : 'Sending'} {transferProgress.fileName}
+              </span>
+              <span
+                style={{
+                  fontSize: '10px',
+                  fontWeight: 700,
+                  background: '#27272A',
+                  color: '#A1A1AA',
+                  padding: '2px 8px',
+                  borderRadius: '6px',
+                }}
+              >
+                {transferProgress.transport || 'Direct LAN'}
+              </span>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', fontSize: '12px', color: '#A1A1AA' }}>
+              <span>
+                {formatBytes(transferProgress.transferredBytes)} / {formatBytes(transferProgress.fileSize)}
+              </span>
+              <span style={{ color: '#FFFFFF', fontWeight: 700 }}>
+                {formatSpeed(transferProgress.speedBytesPerSec)}
+              </span>
+              {transferProgress.etaSeconds > 0 && (
+                <span>{transferProgress.etaSeconds}s left</span>
+              )}
+              <button
+                onClick={() => engine.cancelActiveTransfer()}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: '#EF4444',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  padding: '0 4px',
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+
+          {/* Progress Track */}
+          <div
+            style={{
+              height: '4px',
+              borderRadius: '2px',
+              background: '#27272A',
+              overflow: 'hidden',
+              width: '100%',
+            }}
+          >
+            <div
+              style={{
+                height: '100%',
+                width: `${Math.min(
+                  100,
+                  (transferProgress.transferredBytes / Math.max(1, transferProgress.fileSize)) * 100
+                )}%`,
+                background: '#FFFFFF',
+                borderRadius: '2px',
+                transition: 'width 0.1s linear',
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* MAIN SINGLE-PAGE WORKSPACE (Left: Devices & Transfer Hub | Right: Integrated Real-time Chat) */}
+      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+        {/* LEFT COLUMN: DEVICES & DIRECT TRANSFER HUB */}
+        <div
+          style={{
+            flex: 1,
+            overflowY: 'auto',
+            padding: '24px 28px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '24px',
+            borderRight: '1px solid #18181B',
+          }}
+        >
+          {/* SECTION 1: NEARBY DEVICES */}
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+              <div>
+                <h2 style={{ fontSize: '15px', fontWeight: 700, margin: 0, color: '#FFFFFF', letterSpacing: '-0.2px' }}>
+                  Nearby Devices
+                </h2>
+                <p style={{ fontSize: '12px', color: '#71717A', margin: '2px 0 0 0' }}>
+                  Direct LAN HTTP Turbo & WebRTC P2P mesh
+                </p>
+              </div>
+
+              <span
+                style={{
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  color: '#71717A',
+                }}
+              >
+                {peers.length} detected
+              </span>
+            </div>
+
             {peers.length > 0 ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '12px' }}>
                 {peers.map((peer) => {
                   const isSelected = selectedPeer?.id === peer.id;
                   const isAndroid = peer.platform === 'android';
+                  const hasLan = Boolean(peer.localIp && peer.localPort);
+
                   return (
                     <div
                       key={peer.id}
-                      onClick={() => {
-                        setSelectedPeer(peer);
-                        engine.connectToPeer(peer);
-                      }}
+                      onClick={() => setSelectedPeer(peer)}
                       style={{
-                        background: isSelected ? '#16161A' : '#101014',
-                        border: isSelected ? '1.5px solid #FFFFFF' : '1px solid #242428',
-                        borderRadius: '18px',
-                        padding: '12px 18px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '12px',
+                        background: isSelected ? '#18181B' : '#121215',
+                        border: isSelected ? '1px solid #52525B' : '1px solid #27272A',
+                        borderRadius: '16px',
+                        padding: '16px',
                         cursor: 'pointer',
-                        boxShadow: isSelected
-                          ? '0 8px 30px rgba(255, 255, 255, 0.08)'
-                          : '0 4px 20px rgba(0, 0, 0, 0.6)',
-                        transition: 'all 0.2s ease',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '12px',
+                        transition: 'all 0.15s ease',
                       }}
                     >
-                      {/* Avatar / Device Icon */}
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                          <div
+                            style={{
+                              width: '40px',
+                              height: '40px',
+                              borderRadius: '12px',
+                              background: isAndroid ? '#18241C' : '#27272A',
+                              border: isAndroid ? '1px solid #22C55E4D' : '1px solid #3F3F46',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: isAndroid ? '20px' : '15px',
+                              fontWeight: 800,
+                              color: isAndroid ? '#22C55E' : '#FFFFFF',
+                            }}
+                          >
+                            {isAndroid ? '📱' : peer.name.charAt(0).toUpperCase()}
+                          </div>
+
+                          <div>
+                            <div style={{ fontSize: '14px', fontWeight: 700, color: '#FFFFFF' }}>
+                              {peer.name}
+                            </div>
+                            <div style={{ fontSize: '11px', color: '#71717A', marginTop: '2px' }}>
+                              {peer.deviceName}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Transport Badge */}
+                        <div
+                          style={{
+                            background: hasLan ? '#22C55E1A' : '#27272A',
+                            color: hasLan ? '#22C55E' : '#A1A1AA',
+                            border: hasLan ? '1px solid #22C55E33' : '1px solid #3F3F46',
+                            fontSize: '10px',
+                            fontWeight: 700,
+                            padding: '3px 8px',
+                            borderRadius: '8px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                          }}
+                        >
+                          <span>{hasLan ? '⚡ LAN Turbo' : '🔗 WebRTC P2P'}</span>
+                        </div>
+                      </div>
+
+                      {/* Endpoint Details */}
                       <div
                         style={{
-                          width: '42px',
-                          height: '42px',
-                          borderRadius: '50%',
-                          background: isAndroid ? '#152419' : '#1E1E24',
-                          border: isAndroid ? '1.5px solid #34C759' : '1.5px solid #3F3F46',
                           display: 'flex',
+                          justifyContent: 'space-between',
                           alignItems: 'center',
-                          justifyContent: 'center',
-                          fontSize: '18px',
-                          fontWeight: 800,
-                          color: isAndroid ? '#34C759' : '#FFFFFF',
-                          flexShrink: 0,
-                        }}
-                      >
-                        {isAndroid ? '📱' : peer.name.charAt(0)}
-                      </div>
-
-                      {/* Peer Details */}
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <span style={{ fontSize: '14px', fontWeight: 800, color: '#FFFFFF' }}>{peer.name}</span>
-                          {isAndroid && (
-                            <span
-                              style={{
-                                background: 'rgba(52, 199, 89, 0.15)',
-                                border: '1px solid rgba(52, 199, 89, 0.4)',
-                                color: '#34C759',
-                                fontSize: '10px',
-                                fontWeight: 700,
-                                padding: '1px 6px',
-                                borderRadius: '6px',
-                              }}
-                            >
-                              Android Phone
-                            </span>
-                          )}
-                        </div>
-                        <div style={{ fontSize: '11px', color: '#8E8E93', marginTop: '2px' }}>
-                          {peer.deviceName} • WebRTC Direct P2P
-                        </div>
-                      </div>
-
-                      {/* Quick Chat action (Opens modal over this page) */}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedPeer(peer);
-                          setIsChatOpen(true);
-                        }}
-                        title="Direct Encrypted Chat"
-                        style={{
-                          width: '34px',
-                          height: '34px',
-                          borderRadius: '50%',
-                          background: '#1C1C20',
-                          border: '1px solid #2C2C32',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          color: '#FFFFFF',
-                          cursor: 'pointer',
-                          flexShrink: 0,
-                        }}
-                      >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                        </svg>
-                      </button>
-
-                      {/* Send Files action */}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedPeer(peer);
-                          if (stagedFiles.length > 0) {
-                            handleSendRealFiles();
-                          } else {
-                            document.getElementById('docked-file-input')?.click();
-                          }
-                        }}
-                        style={{
-                          background: isSelected && stagedFiles.length > 0 ? '#FFFFFF' : '#1C1C20',
-                          border: isSelected && stagedFiles.length > 0 ? 'none' : '1px solid #2C2C32',
-                          borderRadius: '14px',
-                          padding: '7px 14px',
-                          color: isSelected && stagedFiles.length > 0 ? '#000000' : '#FFFFFF',
                           fontSize: '11px',
-                          fontWeight: 800,
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '5px',
-                          flexShrink: 0,
-                          transition: 'all 0.2s ease',
+                          color: '#71717A',
+                          borderTop: '1px solid #1F1F23',
+                          paddingTop: '10px',
                         }}
                       >
-                        <span>{stagedFiles.length > 0 ? `Send (${stagedFiles.length})` : 'Send Files'}</span>
-                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                          <line x1="12" y1="19" x2="12" y2="5" /><polyline points="5 12 12 5 19 12" />
-                        </svg>
-                      </button>
+                        <span>
+                          {hasLan ? `${peer.localIp}:${peer.localPort}` : peer.ip}
+                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <div style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#22C55E' }} />
+                          <span style={{ color: '#A1A1AA' }}>Online</span>
+                        </div>
+                      </div>
+
+                      {/* Device Action Buttons */}
+                      <div style={{ display: 'flex', gap: '8px', marginTop: '2px' }}>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedPeer(peer);
+                            handleSendToPeer(peer);
+                          }}
+                          style={{
+                            flex: 1,
+                            background: '#FFFFFF',
+                            color: '#000000',
+                            border: 'none',
+                            borderRadius: '10px',
+                            padding: '8px 12px',
+                            fontSize: '12px',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '6px',
+                          }}
+                        >
+                          <span>📤</span>
+                          <span>Send Files</span>
+                        </button>
+
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedPeer(peer);
+                            setActiveRightPanel('chat');
+                            setIsRightPanelExpanded(true);
+                          }}
+                          style={{
+                            background: '#27272A',
+                            color: '#FAFAFA',
+                            border: '1px solid #3F3F46',
+                            borderRadius: '10px',
+                            padding: '8px 14px',
+                            fontSize: '12px',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '6px',
+                          }}
+                        >
+                          <span>💬</span>
+                          <span>Chat</span>
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
               </div>
             ) : (
-              /* Listening for Android Phone */
+              /* Zero Device Discovery Guidance */
               <div
                 style={{
-                  background: '#0F0F12',
-                  border: '1px solid #222226',
-                  borderRadius: '20px',
-                  padding: '16px 20px',
+                  background: '#121215',
+                  border: '1px dashed #27272A',
+                  borderRadius: '16px',
+                  padding: '32px 24px',
                   textAlign: 'center',
-                  boxShadow: '0 8px 30px rgba(0, 0, 0, 0.7)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  gap: '12px',
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', marginBottom: '6px' }}>
-                  <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#34C759', boxShadow: '0 0 8px #34C759' }} />
-                  <span style={{ fontSize: '13px', fontWeight: 800, color: '#FFFFFF' }}>
+                <div style={{ fontSize: '32px' }}>📡</div>
+                <div>
+                  <div style={{ fontSize: '14px', fontWeight: 700, color: '#FFFFFF' }}>
                     Listening for AuraDrop Android App
-                  </span>
+                  </div>
+                  <div style={{ fontSize: '12px', color: '#71717A', marginTop: '4px', maxWidth: '380px', lineHeight: 1.5 }}>
+                    Open the AuraDrop APK on your Android phone on the same Wi-Fi. It will appear here automatically with direct LAN zero-hop transport.
+                  </div>
                 </div>
-                <p style={{ fontSize: '12px', color: '#8E8E93', margin: '0 0 12px 0', lineHeight: '1.4' }}>
-                  Open the AuraDrop Android app on your phone. Discovered devices appear here automatically with zero configuration.
-                </p>
                 <button
                   onClick={() => setIsPairModalOpen(true)}
                   style={{
-                    background: '#FFFFFF',
-                    border: 'none',
-                    borderRadius: '12px',
-                    color: '#000000',
+                    background: '#27272A',
+                    color: '#FFFFFF',
+                    border: '1px solid #3F3F46',
+                    borderRadius: '10px',
+                    padding: '8px 16px',
                     fontSize: '12px',
-                    fontWeight: 800,
-                    padding: '8px 18px',
+                    fontWeight: 600,
                     cursor: 'pointer',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    transition: 'all 0.2s ease',
+                    marginTop: '4px',
                   }}
                 >
-                  <span>📱</span>
-                  <span>Pair Android Mobile App</span>
+                  Show Mobile Pairing QR
                 </button>
               </div>
             )}
           </div>
+
+          {/* SECTION 2: QUICK DROPZONE & STAGED FILES */}
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+              <div>
+                <h2 style={{ fontSize: '15px', fontWeight: 700, margin: 0, color: '#FFFFFF', letterSpacing: '-0.2px' }}>
+                  Staged Files
+                </h2>
+                <p style={{ fontSize: '12px', color: '#71717A', margin: '2px 0 0 0' }}>
+                  Drop files to send directly to {selectedPeer ? selectedPeer.name : 'selected device'}
+                </p>
+              </div>
+
+              {stagedFiles.length > 0 && (
+                <button
+                  onClick={clearStagedFiles}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#71717A',
+                    fontSize: '11px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Clear all
+                </button>
+              )}
+            </div>
+
+            {/* Drop Target */}
+            <div
+              onClick={() => fileInputRef.current?.click()}
+              style={{
+                border: '1.5px dashed #27272A',
+                borderRadius: '16px',
+                padding: '24px',
+                textAlign: 'center',
+                cursor: 'pointer',
+                background: '#121215',
+                transition: 'border-color 0.15s ease',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.borderColor = '#52525B')}
+              onMouseLeave={(e) => (e.currentTarget.style.borderColor = '#27272A')}
+            >
+              <div style={{ fontSize: '24px', marginBottom: '8px' }}>📂</div>
+              <div style={{ fontSize: '13px', fontWeight: 600, color: '#FFFFFF' }}>
+                Click to browse or drop files here
+              </div>
+              <div style={{ fontSize: '11px', color: '#71717A', marginTop: '4px' }}>
+                Any file type or size • SHA-256 verified streaming
+              </div>
+            </div>
+
+            {/* Staged File Items */}
+            {stagedFiles.length > 0 && (
+              <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {stagedFiles.map((f) => (
+                  <div
+                    key={f.id}
+                    style={{
+                      background: '#18181B',
+                      border: '1px solid #27272A',
+                      borderRadius: '12px',
+                      padding: '10px 14px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <span style={{ fontSize: '16px' }}>📄</span>
+                      <div>
+                        <div style={{ fontSize: '13px', fontWeight: 600, color: '#FFFFFF' }}>
+                          {f.name}
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#71717A' }}>
+                          {formatBytes(f.size)}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      {selectedPeer && (
+                        <button
+                          onClick={() => handleSendToPeer(selectedPeer, f.file)}
+                          style={{
+                            background: '#FFFFFF',
+                            color: '#000000',
+                            border: 'none',
+                            borderRadius: '8px',
+                            padding: '6px 12px',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Send
+                        </button>
+                      )}
+                      <button
+                        onClick={() => removeStagedFile(f.id)}
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          color: '#71717A',
+                          cursor: 'pointer',
+                          fontSize: '14px',
+                        }}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+                ))}
+
+                {selectedPeer && (
+                  <button
+                    onClick={() => handleSendToPeer(selectedPeer)}
+                    style={{
+                      marginTop: '6px',
+                      background: '#FFFFFF',
+                      color: '#000000',
+                      border: 'none',
+                      borderRadius: '12px',
+                      padding: '12px',
+                      fontSize: '13px',
+                      fontWeight: 800,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '8px',
+                    }}
+                  >
+                    <span>Send {stagedFiles.length} {stagedFiles.length === 1 ? 'file' : 'files'} to {selectedPeer.name}</span>
+                    <span>→</span>
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* SECTION 3: RECENT TRANSFERS LEDGER */}
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+              <div>
+                <h2 style={{ fontSize: '15px', fontWeight: 700, margin: 0, color: '#FFFFFF', letterSpacing: '-0.2px' }}>
+                  Transfer History
+                </h2>
+                <p style={{ fontSize: '12px', color: '#71717A', margin: '2px 0 0 0' }}>
+                  Persistent ledger of completed zero-loss transfers
+                </p>
+              </div>
+
+              {transferHistory.length > 0 && (
+                <button
+                  onClick={() => setIsHistoryModalOpen(true)}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#71717A',
+                    fontSize: '11px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  View all ({transferHistory.length})
+                </button>
+              )}
+            </div>
+
+            {transferHistory.length > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {transferHistory.slice(0, 4).map((rec) => (
+                  <div
+                    key={rec.id}
+                    style={{
+                      background: '#121215',
+                      border: '1px solid #27272A',
+                      borderRadius: '12px',
+                      padding: '10px 14px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <span style={{ fontSize: '16px' }}>✓</span>
+                      <div>
+                        <div style={{ fontSize: '13px', fontWeight: 600, color: '#FFFFFF' }}>
+                          {rec.fileName}
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#71717A' }}>
+                          {formatBytes(rec.fileSize)} • {rec.receiverName || rec.senderName} • {rec.transport || 'Direct LAN'}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      {rec.blobUrl && (
+                        <a
+                          href={rec.blobUrl}
+                          download={rec.fileName}
+                          style={{
+                            background: '#27272A',
+                            color: '#FFFFFF',
+                            textDecoration: 'none',
+                            padding: '4px 10px',
+                            borderRadius: '6px',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                          }}
+                        >
+                          Save
+                        </a>
+                      )}
+                      <span
+                        style={{
+                          fontSize: '10px',
+                          color: '#22C55E',
+                          fontWeight: 700,
+                          background: '#22C55E1A',
+                          padding: '2px 6px',
+                          borderRadius: '4px',
+                        }}
+                      >
+                        SHA-256
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ fontSize: '12px', color: '#52525B', textAlign: 'center', padding: '16px 0' }}>
+                No completed transfers yet.
+              </div>
+            )}
+          </div>
         </div>
-      </main>
 
-      {/* 9. DOCKED SHARE TRAY AT BOTTOM */}
-      <DockedShareTray
-        files={stagedFiles}
-        onAddFiles={handleRealFilesStaged}
-        onRemoveFile={handleRemoveStagedFile}
-        selectedPeer={selectedPeer}
-        onSend={handleSendRealFiles}
-      />
+        {/* RIGHT COLUMN: INTEGRATED REAL-TIME ENCRYPTED CHAT */}
+        {isRightPanelExpanded && (
+          <div
+            style={{
+              width: '420px',
+              maxWidth: '45vw',
+              display: 'flex',
+              flexDirection: 'column',
+              background: '#09090B',
+              flexShrink: 0,
+            }}
+          >
+            {/* Embedded Chat View Component */}
+            <ChatView
+              peers={peers}
+              initialPeer={selectedPeer}
+              currentUserId={engine.localId}
+              currentUsername={engine.localName}
+              onStartFileTransfer={(peer, file) => {
+                handleSendToPeer(peer, file);
+              }}
+            />
+          </div>
+        )}
+      </div>
 
-      {/* 10. MODALS (Floating over single page) */}
+      {/* MODALS */}
       <DevicePairModal
         isOpen={isPairModalOpen}
         onClose={() => setIsPairModalOpen(false)}
@@ -779,23 +1141,30 @@ export const App: React.FC = () => {
         localName={engine.localName}
         peers={peers}
       />
-      <ChatModal isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} peer={selectedPeer} />
+
       <TransferHistoryModal
-        isOpen={isHistoryOpen}
-        onClose={() => setIsHistoryOpen(false)}
+        isOpen={isHistoryModalOpen}
+        onClose={() => setIsHistoryModalOpen(false)}
         history={transferHistory}
       />
+
       <DiagnosticsModal
-        isOpen={isDiagnosticsOpen}
-        onClose={() => setIsDiagnosticsOpen(false)}
+        isOpen={isDiagnosticsModalOpen}
+        onClose={() => setIsDiagnosticsModalOpen(false)}
       />
+
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         visibility={visibility}
         onVisibilityChange={setVisibility}
       />
-      <ProfileModal isOpen={isProfileOpen} onClose={() => setIsProfileOpen(false)} deviceName={engine.localName} />
+
+      <ProfileModal
+        isOpen={isProfileOpen}
+        onClose={() => setIsProfileOpen(false)}
+        deviceName={engine.localName}
+      />
     </div>
   );
 };

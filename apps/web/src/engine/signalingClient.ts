@@ -518,6 +518,9 @@ export class SignalingClient {
     const id = p.deviceId || p.id || '';
     const platform = p.platform || 'web';
     const rawName = p.displayName || p.name || id.substring(0, 8);
+    const localIp = p.localIp || p.local_ip || undefined;
+    const localPort = p.localPort || p.local_port ? Number(p.localPort || p.local_port) : undefined;
+    const capabilities = Array.isArray(p.capabilities) ? p.capabilities : undefined;
     const defaultDevName = platform === 'android'
       ? `${rawName} (Android Mobile App)`
       : `${platform.toUpperCase()} Device • WebRTC Direct`;
@@ -528,11 +531,14 @@ export class SignalingClient {
       deviceName: p.deviceName || defaultDevName,
       platform,
       ip: p.clientIp || p.remoteIp || p.ip || 'WebRTC P2P',
-      port: 0,
+      port: localPort || 0,
+      localIp,
+      localPort,
+      capabilities,
       lastSeen: new Date(p.lastSeen || Date.now()),
       isTrusted: p.visibility === 'trusted',
       connectionState: 'DISCOVERED' as any,
-      transport: 'WebRTC Direct',
+      transport: localIp ? 'Direct LAN' : 'Direct P2P',
     };
   }
 

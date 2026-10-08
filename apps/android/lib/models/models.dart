@@ -277,6 +277,8 @@ class PeerDevice {
   final String platform;
   final String ip;
   final int port;
+  final String localIp;
+  final int localPort;
   final DateTime lastSeen;
   final bool isTrusted;
   final int avatarIndex;
@@ -292,6 +294,8 @@ class PeerDevice {
     required this.platform,
     required this.ip,
     required this.port,
+    this.localIp = '',
+    this.localPort = 0,
     required this.lastSeen,
     this.isTrusted = false,
     this.avatarIndex = 0,
@@ -311,6 +315,8 @@ class PeerDevice {
       platform: map['platform']?.toString() ?? 'android',
       ip: map['ip']?.toString() ?? '127.0.0.1',
       port: (map['port'] as num?)?.toInt() ?? 48291,
+      localIp: map['localIp']?.toString() ?? '',
+      localPort: (map['localPort'] as num?)?.toInt() ?? 0,
       lastSeen: DateTime.now(),
       isTrusted: isTrusted,
       avatarIndex: (map['avatarIndex'] as num?)?.toInt() ?? (name.hashCode.abs() % 6),
