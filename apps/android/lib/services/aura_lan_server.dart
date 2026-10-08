@@ -723,6 +723,15 @@ class AuraLanServer {
         }
         return dir;
       }
+      if (Platform.isWindows) {
+        final userProfile = Platform.environment['USERPROFILE'] ?? '';
+        final downloads = userProfile.isNotEmpty ? '$userProfile\\Downloads\\AuraDrop' : '';
+        if (downloads.isNotEmpty) {
+          final dir = Directory(downloads);
+          if (!await dir.exists()) await dir.create(recursive: true);
+          return dir;
+        }
+      }
       final appDir = await getApplicationDocumentsDirectory();
       final dropDir = Directory('${appDir.path}/AuraDrop');
       if (!await dropDir.exists()) {

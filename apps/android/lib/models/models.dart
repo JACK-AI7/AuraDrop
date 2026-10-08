@@ -359,6 +359,7 @@ class PickedFileMeta {
   final int size;
   final String mimeType;
   final String uri;
+  final String? _path;
 
   PickedFileMeta({
     required this.id,
@@ -366,7 +367,10 @@ class PickedFileMeta {
     required this.size,
     required this.mimeType,
     required this.uri,
-  });
+    String? customPath,
+  }) : _path = customPath;
+
+  String get path => (_path != null && _path.isNotEmpty) ? _path : uri;
 
   factory PickedFileMeta.fromMap(Map<dynamic, dynamic> map) {
     return PickedFileMeta(
@@ -375,6 +379,7 @@ class PickedFileMeta {
       size: (map['size'] as num?)?.toInt() ?? 0,
       mimeType: map['mimeType']?.toString() ?? 'application/octet-stream',
       uri: map['uri']?.toString() ?? '',
+      customPath: map['path']?.toString(),
     );
   }
 

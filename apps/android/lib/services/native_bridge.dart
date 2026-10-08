@@ -1,66 +1,145 @@
 import 'dart:async';
+import 'dart:io';
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import '../models/models.dart';
+import 'aura_identity_service.dart';
 
 class NativeBridgeService {
   static const MethodChannel _channel = MethodChannel('com.auradrop.app/native');
   static const EventChannel _eventChannel = EventChannel('com.auradrop.app/events');
 
   static Stream<dynamic>? _eventsStream;
+  static final StreamController<dynamic> _desktopEventsController = StreamController<dynamic>.broadcast();
 
   static Stream<dynamic> get events {
-    _eventsStream ??= _eventChannel.receiveBroadcastStream();
-    return _eventsStream!;
+    if (!Platform.isAndroid) {
+      return _desktopEventsController.stream;
+    }
+    try {
+      _eventsStream ??= _eventChannel.receiveBroadcastStream();
+      return _eventsStream!;
+    } catch (_) {
+      return _desktopEventsController.stream;
+    }
   }
 
   // Device Info
   static Future<Map<String, dynamic>> getDeviceInfo() async {
-    final dynamic res = await _channel.invokeMethod('getDeviceInfo');
-    if (res is Map) return Map<String, dynamic>.from(res);
+    if (!Platform.isAndroid) {
+      final identity = AuraIdentityService();
+      if (identity.deviceId.isEmpty) {
+        await identity.init();
+      }
+      return {
+        'deviceId': identity.deviceId,
+        'deviceName': identity.deviceName,
+        'ipAddress': '127.0.0.1',
+        'platform': Platform.operatingSystem,
+      };
+    }
+
+    try {
+      final dynamic res = await _channel.invokeMethod('getDeviceInfo');
+      if (res is Map) return Map<String, dynamic>.from(res);
+    } catch (e) {
+      debugPrint('[NativeBridge] getDeviceInfo fallback: $e');
+      final identity = AuraIdentityService();
+      if (identity.deviceId.isEmpty) {
+        await identity.init();
+      }
+      return {
+        'deviceId': identity.deviceId,
+        'deviceName': identity.deviceName,
+        'ipAddress': '127.0.0.1',
+        'platform': 'android',
+      };
+    }
     return {};
   }
 
   static Future<void> requestPermissions() async {
-    await _channel.invokeMethod('requestPermissions');
+    if (!Platform.isAndroid) return;
+    try {
+      await _channel.invokeMethod('requestPermissions');
+    } catch (_) {}
   }
 
   static Future<List<PickedFileMeta>> getInitialShareFiles() async {
-    final dynamic res = await _channel.invokeMethod('getInitialShareFiles');
-    if (res is List) {
-      return res.whereType<Map>().map((m) => PickedFileMeta.fromMap(m)).toList();
-    }
+    if (!Platform.isAndroid) return [];
+    try {
+      final dynamic res = await _channel.invokeMethod('getInitialShareFiles');
+      if (res is List) {
+        return res.whereType<Map>().map((m) => PickedFileMeta.fromMap(m)).toList();
+      }
+    } catch (_) {}
     return [];
   }
 
   // Discovery
   static Future<void> startDiscovery() async {
-    await _channel.invokeMethod('startDiscovery');
+    if (!Platform.isAndroid) return;
+    try {
+      await _channel.invokeMethod('startDiscovery');
+    } catch (_) {}
   }
 
   static Future<void> stopDiscovery() async {
-    await _channel.invokeMethod('stopDiscovery');
+    if (!Platform.isAndroid) return;
+    try {
+      await _channel.invokeMethod('stopDiscovery');
+    } catch (_) {}
   }
 
   static Future<List<Map<String, dynamic>>> getDiscoveredPeers() async {
-    final dynamic res = await _channel.invokeMethod('getDiscoveredPeers');
-    if (res is List) {
-      return res.whereType<Map>().map((m) => Map<String, dynamic>.from(m)).toList();
-    }
+    if (!Platform.isAndroid) return [];
+    try {
+      final dynamic res = await _channel.invokeMethod('getDiscoveredPeers');
+      if (res is List) {
+        return res.whereType<Map>().map((m) => Map<String, dynamic>.from(m)).toList();
+      }
+    } catch (_) {}
     return [];
   }
 
   // File Picker
   static Future<List<PickedFileMeta>> pickFiles() async {
-    final dynamic res = await _channel.invokeMethod('pickFiles');
-    if (res is List) {
-      return res.whereType<Map>().map((m) => PickedFileMeta.fromMap(m)).toList();
+    try {
+      final result = await FilePicker.pickFiles();
+      if (result.isNotEmpty) {
+        return result.where((f) => f.path != null).map((f) {
+          final file = File(f.path!);
+          return PickedFileMeta(
+            id: 'file_${DateTime.now().millisecondsSinceEpoch}_${f.name.hashCode}',
+            name: f.name,
+            size: (file.existsSync() ? file.lengthSync() : 0),
+            customPath: f.path!,
+            mimeType: 'application/octet-stream',
+            uri: f.path!,
+          );
+        }).toList();
+      }
+    } catch (e) {
+      debugPrint('[NativeBridge] FilePicker error: $e');
+      if (Platform.isAndroid) {
+        try {
+          final dynamic res = await _channel.invokeMethod('pickFiles');
+          if (res is List) {
+            return res.whereType<Map>().map((m) => PickedFileMeta.fromMap(m)).toList();
+          }
+        } catch (_) {}
+      }
     }
     return [];
   }
 
   // Transfer Server & Client
   static Future<void> startTransferServer() async {
-    await _channel.invokeMethod('startTransferServer');
+    if (!Platform.isAndroid) return;
+    try {
+      await _channel.invokeMethod('startTransferServer');
+    } catch (_) {}
   }
 
   static Future<void> sendFiles({
@@ -68,23 +147,35 @@ class NativeBridgeService {
     required int targetPort,
     required List<PickedFileMeta> files,
   }) async {
-    await _channel.invokeMethod('sendFiles', {
-      'targetIp': targetIp,
-      'targetPort': targetPort,
-      'files': files.map((f) => f.toMap()).toList(),
-    });
+    if (!Platform.isAndroid) return;
+    try {
+      await _channel.invokeMethod('sendFiles', {
+        'targetIp': targetIp,
+        'targetPort': targetPort,
+        'files': files.map((f) => f.toMap()).toList(),
+      });
+    } catch (_) {}
   }
 
   static Future<void> acceptTransfer(String transferId) async {
-    await _channel.invokeMethod('acceptTransfer', {'transferId': transferId});
+    if (!Platform.isAndroid) return;
+    try {
+      await _channel.invokeMethod('acceptTransfer', {'transferId': transferId});
+    } catch (_) {}
   }
 
   static Future<void> declineTransfer(String transferId) async {
-    await _channel.invokeMethod('declineTransfer', {'transferId': transferId});
+    if (!Platform.isAndroid) return;
+    try {
+      await _channel.invokeMethod('declineTransfer', {'transferId': transferId});
+    } catch (_) {}
   }
 
   static Future<void> cancelTransfer(String transferId) async {
-    await _channel.invokeMethod('cancelTransfer', {'transferId': transferId});
+    if (!Platform.isAndroid) return;
+    try {
+      await _channel.invokeMethod('cancelTransfer', {'transferId': transferId});
+    } catch (_) {}
   }
 
   static Future<void> showSystemIncomingShareNotification({
@@ -95,87 +186,172 @@ class NativeBridgeService {
     required int totalBytes,
     required String fileName,
   }) async {
-    await _channel.invokeMethod('showSystemIncomingShareNotification', {
-      'transferId': transferId,
-      'senderName': senderName,
-      'senderDeviceName': senderDeviceName,
-      'totalFiles': totalFiles,
-      'totalBytes': totalBytes,
-      'fileName': fileName,
-    });
+    if (!Platform.isAndroid) return;
+    try {
+      await _channel.invokeMethod('showSystemIncomingShareNotification', {
+        'transferId': transferId,
+        'senderName': senderName,
+        'senderDeviceName': senderDeviceName,
+        'totalFiles': totalFiles,
+        'totalBytes': totalBytes,
+        'fileName': fileName,
+      });
+    } catch (_) {}
   }
 
   static Future<void> showNameDropProximityAlert({
     required String peerId,
     required String peerName,
   }) async {
-    await _channel.invokeMethod('showNameDropProximityAlert', {
-      'peerId': peerId,
-      'peerName': peerName,
-    });
+    if (!Platform.isAndroid) return;
+    try {
+      await _channel.invokeMethod('showNameDropProximityAlert', {
+        'peerId': peerId,
+        'peerName': peerName,
+      });
+    } catch (_) {}
   }
 
   static Future<bool> checkOverlayPermission() async {
-    final bool? ok = await _channel.invokeMethod<bool>('checkOverlayPermission');
-    return ok ?? false;
+    if (!Platform.isAndroid) return false;
+    try {
+      final bool? ok = await _channel.invokeMethod<bool>('checkOverlayPermission');
+      return ok ?? false;
+    } catch (_) {
+      return false;
+    }
   }
 
   static Future<bool> requestOverlayPermission() async {
-    final bool? ok = await _channel.invokeMethod<bool>('requestOverlayPermission');
-    return ok ?? false;
+    if (!Platform.isAndroid) return false;
+    try {
+      final bool? ok = await _channel.invokeMethod<bool>('requestOverlayPermission');
+      return ok ?? false;
+    } catch (_) {
+      return false;
+    }
   }
 
   static Future<bool> openFile(String filePath) async {
-    final bool? ok = await _channel.invokeMethod<bool>('openFile', {'filePath': filePath});
-    return ok ?? false;
+    if (Platform.isWindows) {
+      try {
+        await Process.run('explorer.exe', ['/select,', filePath]);
+        return true;
+      } catch (_) {
+        try {
+          await Process.run('cmd.exe', ['/c', 'start', '', filePath]);
+          return true;
+        } catch (_) {
+          return false;
+        }
+      }
+    } else if (Platform.isMacOS) {
+      try {
+        await Process.run('open', [filePath]);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    } else if (Platform.isLinux) {
+      try {
+        await Process.run('xdg-open', [filePath]);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    try {
+      final bool? ok = await _channel.invokeMethod<bool>('openFile', {'filePath': filePath});
+      return ok ?? false;
+    } catch (_) {
+      return false;
+    }
   }
 
   static Future<String?> copyUriToCache(String uri, String name) async {
-    final String? path = await _channel.invokeMethod<String>('copyUriToCache', {
-      'uri': uri,
-      'name': name,
-    });
-    return path;
+    if (!Platform.isAndroid) return uri;
+    try {
+      final String? path = await _channel.invokeMethod<String>('copyUriToCache', {
+        'uri': uri,
+        'name': name,
+      });
+      return path;
+    } catch (_) {
+      return uri;
+    }
   }
 
   // Database / History
   static Future<List<TransferHistoryItem>> getTransferHistory() async {
-    final dynamic res = await _channel.invokeMethod('getTransferHistory');
-    if (res is List) {
-      return res.whereType<Map>().map((m) => TransferHistoryItem.fromMap(m)).toList();
-    }
+    if (!Platform.isAndroid) return [];
+    try {
+      final dynamic res = await _channel.invokeMethod('getTransferHistory');
+      if (res is List) {
+        return res.whereType<Map>().map((m) => TransferHistoryItem.fromMap(m)).toList();
+      }
+    } catch (_) {}
     return [];
   }
 
   static Future<bool> deleteTransferHistory(String id) async {
-    final bool? ok = await _channel.invokeMethod<bool>('deleteTransferHistory', {'id': id});
-    return ok ?? false;
+    if (!Platform.isAndroid) return true;
+    try {
+      final bool? ok = await _channel.invokeMethod<bool>('deleteTransferHistory', {'id': id});
+      return ok ?? false;
+    } catch (_) {
+      return false;
+    }
   }
 
   static Future<bool> clearTransferHistory() async {
-    final bool? ok = await _channel.invokeMethod<bool>('clearTransferHistory');
-    return ok ?? false;
+    if (!Platform.isAndroid) return true;
+    try {
+      final bool? ok = await _channel.invokeMethod<bool>('clearTransferHistory');
+      return ok ?? false;
+    } catch (_) {
+      return false;
+    }
   }
 
   static Future<List<ReceivedFileItem>> getReceivedFiles() async {
-    final dynamic res = await _channel.invokeMethod('getReceivedFiles');
-    if (res is List) {
-      return res.whereType<Map>().map((m) => ReceivedFileItem.fromMap(m)).toList();
-    }
+    if (!Platform.isAndroid) return [];
+    try {
+      final dynamic res = await _channel.invokeMethod('getReceivedFiles');
+      if (res is List) {
+        return res.whereType<Map>().map((m) => ReceivedFileItem.fromMap(m)).toList();
+      }
+    } catch (_) {}
     return [];
   }
 
   static Future<bool> deleteReceivedFile(String path) async {
-    final bool? ok = await _channel.invokeMethod<bool>('deleteReceivedFile', {'path': path});
-    return ok ?? false;
+    if (!Platform.isAndroid) {
+      try {
+        final f = File(path);
+        if (f.existsSync()) f.deleteSync();
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+    try {
+      final bool? ok = await _channel.invokeMethod<bool>('deleteReceivedFile', {'path': path});
+      return ok ?? false;
+    } catch (_) {
+      return false;
+    }
   }
 
   // Chat
   static Future<List<ChatMessage>> getChatMessages(String peerId) async {
-    final dynamic res = await _channel.invokeMethod('getChatMessages', {'peerId': peerId});
-    if (res is List) {
-      return res.whereType<Map>().map((m) => ChatMessage.fromMap(m)).toList();
-    }
+    if (!Platform.isAndroid) return [];
+    try {
+      final dynamic res = await _channel.invokeMethod('getChatMessages', {'peerId': peerId});
+      if (res is List) {
+        return res.whereType<Map>().map((m) => ChatMessage.fromMap(m)).toList();
+      }
+    } catch (_) {}
     return [];
   }
 
@@ -185,30 +361,52 @@ class NativeBridgeService {
     required String peerName,
     required String text,
   }) async {
-    await _channel.invokeMethod('sendChatMessage', {
-      'targetIp': targetIp,
-      'peerId': peerId,
-      'peerName': peerName,
-      'text': text,
-    });
+    if (!Platform.isAndroid) return;
+    try {
+      await _channel.invokeMethod('sendChatMessage', {
+        'targetIp': targetIp,
+        'peerId': peerId,
+        'peerName': peerName,
+        'text': text,
+      });
+    } catch (_) {}
   }
 
   static Future<void> sendChatTyping({
     required String targetIp,
     required bool isTyping,
   }) async {
-    await _channel.invokeMethod('sendChatTyping', {
-      'targetIp': targetIp,
-      'isTyping': isTyping,
-    });
+    if (!Platform.isAndroid) return;
+    try {
+      await _channel.invokeMethod('sendChatTyping', {
+        'targetIp': targetIp,
+        'isTyping': isTyping,
+      });
+    } catch (_) {}
   }
 
   // Profile & Trusted
   static Future<UserProfile> getUserProfile() async {
-    final dynamic res = await _channel.invokeMethod('getUserProfile');
-    if (res is Map) {
-      return UserProfile.fromMap(res);
+    if (!Platform.isAndroid) {
+      final id = AuraIdentityService();
+      if (id.deviceId.isEmpty) {
+        await id.init();
+      }
+      return UserProfile(
+        displayName: id.deviceName.isNotEmpty ? id.deviceName : 'Desktop User',
+        avatarIndex: 0,
+        bio: 'Nearby sharing made effortless',
+        theme: 'dark',
+        accent: 'white',
+        visibility: 'everyone',
+      );
     }
+    try {
+      final dynamic res = await _channel.invokeMethod('getUserProfile');
+      if (res is Map) {
+        return UserProfile.fromMap(res);
+      }
+    } catch (_) {}
     return UserProfile(
       displayName: 'Unknown Device',
       avatarIndex: 0,
@@ -220,66 +418,119 @@ class NativeBridgeService {
   }
 
   static Future<void> saveUserProfile(String key, String value) async {
-    await _channel.invokeMethod('saveUserProfile', {'key': key, 'value': value});
+    if (!Platform.isAndroid) return;
+    try {
+      await _channel.invokeMethod('saveUserProfile', {'key': key, 'value': value});
+    } catch (_) {}
   }
 
   static Future<List<Map<String, dynamic>>> getTrustedPeers() async {
-    final dynamic res = await _channel.invokeMethod('getTrustedPeers');
-    if (res is List) {
-      return res.whereType<Map>().map((m) => Map<String, dynamic>.from(m)).toList();
+    if (!Platform.isAndroid) {
+      return AuraIdentityService().trustedDeviceIds.map((tid) => {'peerId': tid, 'peerName': tid}).toList();
     }
+    try {
+      final dynamic res = await _channel.invokeMethod('getTrustedPeers');
+      if (res is List) {
+        return res.whereType<Map>().map((m) => Map<String, dynamic>.from(m)).toList();
+      }
+    } catch (_) {}
     return [];
   }
 
   static Future<void> setPeerTrusted(String peerId, String peerName, bool trusted) async {
-    await _channel.invokeMethod('setPeerTrusted', {
-      'peerId': peerId,
-      'peerName': peerName,
-      'trusted': trusted,
-    });
+    AuraIdentityService().setDeviceTrusted(peerId, trusted);
+    if (!Platform.isAndroid) return;
+    try {
+      await _channel.invokeMethod('setPeerTrusted', {
+        'peerId': peerId,
+        'peerName': peerName,
+        'trusted': trusted,
+      });
+    } catch (_) {}
   }
 
   static Future<List<BlockedPeer>> getBlockedPeers() async {
-    final dynamic res = await _channel.invokeMethod('getBlockedPeers');
-    if (res is List) {
-      return res.whereType<Map>().map((m) => BlockedPeer.fromMap(m)).toList();
-    }
+    if (!Platform.isAndroid) return [];
+    try {
+      final dynamic res = await _channel.invokeMethod('getBlockedPeers');
+      if (res is List) {
+        return res.whereType<Map>().map((m) => BlockedPeer.fromMap(m)).toList();
+      }
+    } catch (_) {}
     return [];
   }
 
   static Future<bool> setPeerBlocked(String peerId, String peerName, bool blocked) async {
-    final bool? ok = await _channel.invokeMethod<bool>('setPeerBlocked', {
-      'peerId': peerId,
-      'peerName': peerName,
-      'blocked': blocked,
-    });
-    return ok ?? false;
+    if (!Platform.isAndroid) return true;
+    try {
+      final bool? ok = await _channel.invokeMethod<bool>('setPeerBlocked', {
+        'peerId': peerId,
+        'peerName': peerName,
+        'blocked': blocked,
+      });
+      return ok ?? false;
+    } catch (_) {
+      return false;
+    }
   }
 
   static Future<bool> updateVisibilityMode(String mode) async {
-    final bool? ok = await _channel.invokeMethod<bool>('updateVisibilityMode', {
-      'mode': mode,
-    });
-    return ok ?? false;
+    if (!Platform.isAndroid) return true;
+    try {
+      final bool? ok = await _channel.invokeMethod<bool>('updateVisibilityMode', {
+        'mode': mode,
+      });
+      return ok ?? false;
+    } catch (_) {
+      return false;
+    }
   }
 
   static Future<String?> pickAvatarImage() async {
-    return await _channel.invokeMethod<String>('pickAvatarImage');
+    if (!Platform.isAndroid) {
+      try {
+        final result = await FilePicker.pickFiles(
+          type: FileType.image,
+        );
+        if (result.isNotEmpty) {
+          return result.first.path;
+        }
+      } catch (_) {}
+      return null;
+    }
+    try {
+      return await _channel.invokeMethod<String>('pickAvatarImage');
+    } catch (_) {
+      return null;
+    }
   }
 
   static Future<bool> removeAvatarImage() async {
-    final bool? ok = await _channel.invokeMethod<bool>('removeAvatarImage');
-    return ok ?? false;
+    if (!Platform.isAndroid) return true;
+    try {
+      final bool? ok = await _channel.invokeMethod<bool>('removeAvatarImage');
+      return ok ?? false;
+    } catch (_) {
+      return false;
+    }
   }
 
   static Future<Map<String, int>> checkStorageSpace() async {
-    final dynamic res = await _channel.invokeMethod('checkStorageSpace');
-    if (res is Map) {
+    if (!Platform.isAndroid) {
       return {
-        'usable': (res['usable'] as num?)?.toInt() ?? 0,
-        'total': (res['total'] as num?)?.toInt() ?? 0,
+        'usable': 100 * 1024 * 1024 * 1024,
+        'total': 500 * 1024 * 1024 * 1024,
       };
     }
+    try {
+      final dynamic res = await _channel.invokeMethod('checkStorageSpace');
+      if (res is Map) {
+        return {
+          'usable': (res['usable'] as num?)?.toInt() ?? 0,
+          'total': (res['total'] as num?)?.toInt() ?? 0,
+        };
+      }
+    } catch (_) {}
     return {'usable': 0, 'total': 0};
   }
 }

@@ -25,6 +25,9 @@ import 'screens/settings_screen.dart';
 import 'services/aura_signaling_service.dart';
 import 'services/aura_webrtc_service.dart';
 import 'services/aura_lan_server.dart';
+import 'services/aura_identity_service.dart';
+import 'services/aura_discovery_service.dart';
+import 'services/aura_transfer_engine.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -123,6 +126,10 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
 
   // Subscriptions & Timers
   StreamSubscription? _eventSubscription;
+  StreamSubscription? _discoverySubscription;
+  StreamSubscription? _transferProgressSubscription;
+  StreamSubscription? _transferCompleteSubscription;
+  StreamSubscription? _transferErrorSubscription;
   Timer? _temporaryVisibilityTimer;
   Timer? _peerCleanupTimer;
   int _temporarySecondsRemaining = 600;
@@ -185,6 +192,11 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
     _temporaryVisibilityTimer?.cancel();
     _peerCleanupTimer?.cancel();
     _eventSubscription?.cancel();
+    _discoverySubscription?.cancel();
+    _transferProgressSubscription?.cancel();
+    _transferCompleteSubscription?.cancel();
+    _transferErrorSubscription?.cancel();
+    AuraDiscoveryService().stop();
     _rippleController.dispose();
     super.dispose();
   }
@@ -208,9 +220,18 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
           ? prof.displayName
           : realDevName;
 
+      await AuraIdentityService().init();
+      final idService = AuraIdentityService();
+      if (idService.deviceId.isNotEmpty) {
+        _deviceId = idService.deviceId;
+      }
+      if (idService.deviceName.isNotEmpty && _deviceName.isEmpty) {
+        _deviceName = idService.deviceName;
+      }
+
       setState(() {
         _deviceId = info['deviceId']?.toString() ?? _deviceId;
-        _deviceName = realDispName;
+        _deviceName = realDispName.isNotEmpty ? realDispName : _deviceName;
         _localIp = info['ipAddress']?.toString() ?? _localIp;
         _userProfile = prof;
         for (final t in trusted) {
@@ -224,7 +245,66 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
       _applyVisibilityMode(_visibilityMode);
       _checkSystemShare();
 
-      // Initialize AuraDrop Production Signaling, LAN Turbo & WebRTC P2P (V24 Persistent Architecture)
+      // Start Native UDP Auto-Discovery & Direct Transfer Engine
+      await AuraDiscoveryService().start();
+      AuraTransferEngine().init();
+
+      _discoverySubscription = AuraDiscoveryService().onPeersChanged.listen((peers) {
+        if (!mounted) return;
+        setState(() {
+          for (final p in peers) {
+            _peers[p.id] = p;
+          }
+        });
+      });
+
+      _transferProgressSubscription = AuraTransferEngine().onProgress.listen((p) {
+        if (!mounted) return;
+        setState(() {
+          _activeTransferId = p.transferId;
+          _activeFileName = p.fileName;
+          _transferredBytes = p.transferredBytes;
+          _totalTransferBytes = math.max(1, p.totalBytes);
+          _speedBytesPerSec = (p.speedMBps * 1024 * 1024).toInt();
+          _etaSeconds = p.etaSeconds;
+          _isSender = p.isSender;
+          if (p.state == 'TRANSFERRING') {
+            _transferState = TransferState.transferring;
+          } else if (p.state == 'WAITING_FOR_ACCEPT') {
+            _transferState = TransferState.waitingForAccept;
+          } else if (p.state == 'VERIFYING') {
+            _transferState = TransferState.verifying;
+          }
+        });
+      });
+
+      _transferCompleteSubscription = AuraTransferEngine().onCompleted.listen((data) {
+        if (!mounted) return;
+        HapticFeedback.heavyImpact();
+        _rippleController.triggerTransferComplete();
+        setState(() {
+          _transferState = TransferState.completed;
+          _lastSavedPath = data['filePath']?.toString() ?? '';
+          _lastSha256 = data['sha256']?.toString() ?? '';
+          _transferredBytes = _totalTransferBytes;
+          _speedBytesPerSec = 0;
+          _etaSeconds = 0;
+        });
+        _showSnackBar('✓ Transfer complete: ${data['fileName']}', isSuccess: true);
+      });
+
+      _transferErrorSubscription = AuraTransferEngine().onError.listen((err) {
+        if (!mounted) return;
+        HapticFeedback.vibrate();
+        _rippleController.triggerTransferFailed();
+        setState(() {
+          _transferState = TransferState.failed;
+          _lastErrorMessage = err;
+        });
+        _showSnackBar(err, isSuccess: false);
+      });
+
+      // Initialize AuraDrop LAN Turbo & WebRTC P2P (V24 Persistent Architecture)
       await AuraSignalingService().initPersistedUrl();
       await AuraSignalingService().initTrustedPeers();
       await AuraLanServer().start(
@@ -246,41 +326,52 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
       AuraWebRtcService().init();
       AuraSignalingService().connect();
 
-      // Hook reactive LAN Turbo HTTP Server events (Desktop -> Android fast path)
-      AuraLanServer().onTransferProgress.listen((p) {
-        if (!mounted) return;
-        setState(() {
-          _transferredBytes = p.transferredBytes;
-          _totalTransferBytes = math.max(1, p.totalBytes);
-          _speedBytesPerSec = (p.speedMBps * 1024 * 1024).toInt();
-          _etaSeconds = p.etaSeconds;
-          _activeFileName = p.fileName;
-          if (p.state == 'TRANSFERRING') {
-            _transferState = TransferState.transferring;
-          }
-        });
-      });
-
-      AuraLanServer().onTransferComplete.listen((data) {
-        if (!mounted) return;
-        HapticFeedback.heavyImpact();
-        setState(() {
-          _transferState = TransferState.completed;
-          _lastSavedPath = data['filePath']?.toString() ?? '';
-          _lastSha256 = data['sha256']?.toString() ?? '';
-        });
-      });
-
+      // Hook reactive LAN Turbo HTTP Server events
       AuraLanServer().onTransferRequest.listen((req) {
         if (!mounted) return;
+        final transferId = req['transferId']?.toString() ?? '';
+        final senderName = req['senderName']?.toString() ?? req['senderUserId']?.toString() ?? 'Nearby Peer';
+        final fileSize = (req['fileSize'] as num?)?.toInt() ?? 0;
+        final fileName = req['fileName']?.toString() ?? 'Incoming File';
+
         NativeBridgeService.showSystemIncomingShareNotification(
-          transferId: req['transferId']?.toString() ?? '',
-          senderName: req['senderName']?.toString() ?? 'Desktop Browser',
-          senderDeviceName: req['senderName']?.toString() ?? 'Desktop Browser',
+          transferId: transferId,
+          senderName: senderName,
+          senderDeviceName: senderName,
           totalFiles: 1,
-          totalBytes: (req['fileSize'] as num?)?.toInt() ?? 0,
-          fileName: req['fileName']?.toString() ?? 'file',
+          totalBytes: fileSize,
+          fileName: fileName,
         );
+
+        InAppNotificationController().showTransferRequest(
+          transferId: transferId,
+          senderName: senderName,
+          fileName: fileName,
+          fileSize: fileSize,
+          onAccept: () async {
+            _rippleController.triggerTransferStart();
+            setState(() {
+              _transferState = TransferState.transferring;
+              _activeTransferId = transferId;
+              _isSender = false;
+              _totalTransferBytes = math.max(1, fileSize);
+              _transferredBytes = 0;
+              _activeFileName = fileName;
+            });
+          },
+          onDecline: () async {
+            setState(() => _transferState = TransferState.idle);
+          },
+        );
+
+        _showIncomingTransferModal({
+          'transferId': transferId,
+          'senderName': senderName,
+          'fileName': fileName,
+          'totalBytes': fileSize,
+          'totalFiles': 1,
+          'sas': 'Direct Wi-Fi',
+        });
       });
 
       // Hook reactive WebRTC & Signaling events
@@ -674,8 +765,8 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
   Future<void> _sendFilesToPeer(PeerDevice peer) async {
     if (_selectedFiles.isEmpty) {
       _showSnackBar('Select files before picking a recipient.', isSuccess: false);
-      _pickFiles();
-      return;
+      await _pickFiles();
+      if (_selectedFiles.isEmpty) return;
     }
 
     HapticFeedback.mediumImpact();
@@ -697,7 +788,29 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
 
     _rippleController.triggerTransferStart();
 
-    // 1. WebRTC Direct Route (Vercel Desktop <-> Android APK per Section 1)
+    // 1. Direct High-Speed Wi-Fi LAN HTTP Socket streaming route (AirDrop / LocalSend class)
+    if (peer.ip.isNotEmpty && peer.ip != 'WebRTC P2P' && peer.port > 0) {
+      bool allSuccess = true;
+      for (final f in _selectedFiles) {
+        final filePath = f.path.isNotEmpty ? f.path : f.uri;
+        final success = await AuraTransferEngine().sendFile(
+          target: peer,
+          filePath: filePath,
+          fileName: f.name,
+          fileSize: f.size,
+        );
+        if (!success) {
+          allSuccess = false;
+          break;
+        }
+      }
+      if (allSuccess) {
+        _showSnackBar('✓ All files sent successfully!', isSuccess: true);
+      }
+      return;
+    }
+
+    // 2. WebRTC Direct Route (Cloud Fallback)
     if (peer.transport.contains('WebRTC') || peer.ip == 'WebRTC P2P') {
       try {
         debugPrint('[AuraDrop] Initiating WebRTC P2P transfer to ${peer.name} (${peer.id})');
@@ -718,7 +831,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
       return;
     }
 
-    // 2. LAN TCP Route (Android <-> Android LAN fallback)
+    // 3. Android MethodChannel fallback
     try {
       await NativeBridgeService.sendFiles(
         targetIp: peer.ip,
@@ -837,6 +950,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
 
   Future<void> _cancelTransfer() async {
     HapticFeedback.selectionClick();
+    AuraTransferEngine().cancelActiveTransfer();
     AuraWebRtcService().cancelTransfer();
     if (_activeTransferId.isNotEmpty) {
       await NativeBridgeService.cancelTransfer(_activeTransferId);
@@ -1755,7 +1869,7 @@ class _QrScannerModalSheet extends StatefulWidget {
 }
 
 class _QrScannerModalSheetState extends State<_QrScannerModalSheet> {
-  late final MobileScannerController _scannerController;
+  MobileScannerController? _scannerController;
   int _activeTab = 0; // 0: Scan Desktop QR, 1: Show Phone QR
   bool _hasDetected = false;
   bool _torchOn = false;
@@ -1763,15 +1877,19 @@ class _QrScannerModalSheetState extends State<_QrScannerModalSheet> {
   @override
   void initState() {
     super.initState();
-    _scannerController = MobileScannerController(
-      detectionSpeed: DetectionSpeed.noDuplicates,
-      facing: CameraFacing.back,
-    );
+    if (Platform.isAndroid || Platform.isIOS) {
+      _scannerController = MobileScannerController(
+        detectionSpeed: DetectionSpeed.noDuplicates,
+        facing: CameraFacing.back,
+      );
+    } else {
+      _activeTab = 1; // Default to Show QR on desktop
+    }
   }
 
   @override
   void dispose() {
-    _scannerController.dispose();
+    _scannerController?.dispose();
     super.dispose();
   }
 
@@ -1928,28 +2046,60 @@ class _QrScannerModalSheetState extends State<_QrScannerModalSheet> {
                         child: Stack(
                           alignment: Alignment.center,
                           children: [
-                            MobileScanner(
-                              controller: _scannerController,
-                              fit: BoxFit.cover,
-                              errorBuilder: (context, error) {
-                                return Center(
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(20),
-                                    child: Column(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(Icons.camera_alt_outlined, color: theme.textSecondary, size: 40),
-                                        const SizedBox(height: 12),
-                                        Text(
-                                          'Camera permission needed to scan QR code.',
-                                          style: TextStyle(color: theme.textSecondary, fontSize: 13),
-                                          textAlign: TextAlign.center,
+                            if (_scannerController == null)
+                              Center(
+                                child: Padding(
+                                  padding: const EdgeInsets.all(24),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.wifi_tethering_rounded, color: theme.textSecondary, size: 48),
+                                      const SizedBox(height: 12),
+                                      Text(
+                                        'Automatic Wi-Fi Discovery Active',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 14,
+                                          color: theme.textPrimary,
                                         ),
-                                      ],
-                                    ),
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        'All nearby AuraDrop devices on your local network are automatically discovered.\nNo camera scan required on desktop.',
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: theme.textSecondary,
+                                          height: 1.4,
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                );
-                              },
+                                ),
+                              )
+                            else
+                              MobileScanner(
+                                controller: _scannerController!,
+                                fit: BoxFit.cover,
+                                errorBuilder: (context, error) {
+                                  return Center(
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(20),
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(Icons.camera_alt_outlined, color: theme.textSecondary, size: 40),
+                                          const SizedBox(height: 12),
+                                          Text(
+                                            'Camera permission needed to scan QR code.',
+                                            style: TextStyle(color: theme.textSecondary, fontSize: 13),
+                                            textAlign: TextAlign.center,
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  );
+                                },
                               onDetect: (BarcodeCapture capture) {
                                 if (_hasDetected) return;
                                 for (final barcode in capture.barcodes) {
@@ -1993,7 +2143,7 @@ class _QrScannerModalSheetState extends State<_QrScannerModalSheet> {
                                   size: 20,
                                 ),
                                 onPressed: () async {
-                                  await _scannerController.toggleTorch();
+                                  await _scannerController?.toggleTorch();
                                   if (mounted) setState(() => _torchOn = !_torchOn);
                                 },
                               ),
@@ -2008,7 +2158,7 @@ class _QrScannerModalSheetState extends State<_QrScannerModalSheet> {
                                 ),
                                 icon: const Icon(Icons.cameraswitch_rounded, color: Colors.white, size: 20),
                                 onPressed: () async {
-                                  await _scannerController.switchCamera();
+                                  await _scannerController?.switchCamera();
                                 },
                               ),
                             ),
