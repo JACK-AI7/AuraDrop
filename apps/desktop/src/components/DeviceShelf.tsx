@@ -1,12 +1,13 @@
 import React from 'react';
 import { PeerDevice } from '../types';
-import { Smartphone, Monitor, Laptop, ArrowUpRight, CheckCircle2, RefreshCw, PlusCircle } from 'lucide-react';
+import { Smartphone, Monitor, Laptop, ArrowUpRight, CheckCircle2, RefreshCw, PlusCircle, MessageSquare } from 'lucide-react';
 
 interface DeviceShelfProps {
   peers: PeerDevice[];
   selectedPeerId: string | null;
   onSelectPeer: (peer: PeerDevice) => void;
   onSendFiles: (peer: PeerDevice) => void;
+  onOpenChat?: (peer: PeerDevice) => void;
   onScanSubnet?: () => void;
   onAddDirectIp?: () => void;
   isScanning?: boolean;
@@ -17,6 +18,7 @@ export const DeviceShelf: React.FC<DeviceShelfProps> = ({
   selectedPeerId,
   onSelectPeer,
   onSendFiles,
+  onOpenChat,
   onScanSubnet,
   onAddDirectIp,
   isScanning = false,
@@ -94,7 +96,9 @@ export const DeviceShelf: React.FC<DeviceShelfProps> = ({
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-        {peers.map((peer) => {
+        {peers
+          .filter((peer, index, self) => index === self.findIndex((p) => p.ip === peer.ip || p.id === peer.id))
+          .map((peer) => {
           const isSelected = selectedPeerId === peer.id;
           return (
             <div
@@ -140,15 +144,29 @@ export const DeviceShelf: React.FC<DeviceShelfProps> = ({
                 <span className="text-[10px] uppercase font-bold tracking-wider text-neutral-400">
                   {peer.platform}
                 </span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onSendFiles(peer);
-                  }}
-                  className="px-2.5 py-1 rounded-md bg-white hover:bg-neutral-200 text-black text-xs font-bold flex items-center gap-1 transition-all"
-                >
-                  Send <ArrowUpRight className="w-3.5 h-3.5" />
-                </button>
+                <div className="flex items-center gap-1.5">
+                  {onOpenChat && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpenChat(peer);
+                      }}
+                      title={`Chat with ${peer.name}`}
+                      className="px-2.5 py-1 rounded-md bg-white/10 hover:bg-white/20 text-white text-xs font-semibold flex items-center gap-1 transition-all"
+                    >
+                      <MessageSquare className="w-3.5 h-3.5" /> Chat
+                    </button>
+                  )}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onSendFiles(peer);
+                    }}
+                    className="px-2.5 py-1 rounded-md bg-white hover:bg-neutral-200 text-black text-xs font-bold flex items-center gap-1 transition-all"
+                  >
+                    Send <ArrowUpRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
             </div>
           );

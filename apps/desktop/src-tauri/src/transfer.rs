@@ -1,6 +1,6 @@
 use crate::identity::IdentityManager;
 use crate::models::{
-    PrepareUploadRequest, PrepareUploadResponse, TransferProgressPayload,
+    ChatMessage, PrepareUploadRequest, PrepareUploadResponse, TransferProgressPayload,
 };
 use axum::{
     body::Body,
@@ -13,6 +13,7 @@ use axum::{
 use chrono::Utc;
 use futures_util::StreamExt;
 use reqwest::Client;
+use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -36,12 +37,14 @@ pub struct SessionMetadata {
     pub sha256_expected: String,
     pub token: String,
     pub expires_at: i64,
+    pub sender_name: String,
 }
 
 #[derive(Clone)]
 pub struct TransferService {
     identity: IdentityManager,
     sessions: Arc<RwLock<HashMap<String, SessionMetadata>>>,
+    chat_history: Arc<RwLock<HashMap<String, Vec<ChatMessage>>>>,
     app_handle: Option<AppHandle>,
     downloads_dir: PathBuf,
 }
@@ -57,6 +60,7 @@ impl TransferService {
         Self {
             identity,
             sessions: Arc::new(RwLock::new(HashMap::new())),
+            chat_history: Arc::new(RwLock::new(HashMap::new())),
             app_handle: None,
             downloads_dir: downloads,
         }
@@ -83,6 +87,7 @@ impl TransferService {
                     "/api/auradrop/v1/upload",
                     post(handle_upload).layer(DefaultBodyLimit::max(50 * 1024 * 1024 * 1024)), // 50GB max
                 )
+                .route("/api/auradrop/v1/chat", post(handle_chat))
                 .layer(CorsLayer::permissive())
                 .with_state(service);
 
@@ -139,6 +144,7 @@ impl TransferService {
             status: "transferring".to_string(),
             peer_name: peer_name.clone(),
             error: None,
+            file_path: Some(file_path_str.clone()),
         })
         .await;
 
@@ -172,7 +178,8 @@ impl TransferService {
             file_name: file_name.clone(),
             file_size,
             sha256: sha256_hash.clone(),
-            sender_user_id: my_name,
+            sender_user_id: my_name.clone(),
+            sender_name: Some(my_name),
             receiver_user_id: None,
         };
 
@@ -205,6 +212,7 @@ impl TransferService {
         let transfer_id_clone = transfer_id.clone();
         let file_name_clone = file_name.clone();
         let peer_name_clone = peer_name.clone();
+        let file_path_clone = file_path_str.clone();
 
         let mut transferred = 0u64;
         let start_time = Instant::now();
@@ -233,6 +241,7 @@ impl TransferService {
                     let tid = transfer_id_clone.clone();
                     let fnm = file_name_clone.clone();
                     let pnm = peer_name_clone.clone();
+                    let fp = file_path_clone.clone();
 
                     tauri::async_runtime::spawn(async move {
                         s.emit_progress(TransferProgressPayload {
@@ -251,6 +260,7 @@ impl TransferService {
                             },
                             peer_name: pnm,
                             error: None,
+                            file_path: Some(fp),
                         })
                         .await;
                     });
@@ -295,6 +305,7 @@ impl TransferService {
             status: "completed".to_string(),
             peer_name,
             error: None,
+            file_path: Some(file_path_str),
         })
         .await;
 
@@ -329,9 +340,74 @@ impl TransferService {
                 status: "failed".to_string(),
                 peer_name: peer_name.to_string(),
                 error: Some(error.to_string()),
+                file_path: None,
             };
             let _ = handle.emit("transfer-progress", payload);
         }
+    }
+
+    pub async fn send_chat(
+        &self,
+        peer_ip: String,
+        peer_port: u16,
+        peer_id: String,
+        peer_name: String,
+        text: String,
+    ) -> Result<ChatMessage, String> {
+        let my_id = self.identity.get_device_id().await;
+        let my_name = self.identity.get_device_name().await;
+        let now = Utc::now().timestamp_millis();
+        let msg_id = format!("msg_{}", Uuid::new_v4().simple());
+
+        let msg = ChatMessage {
+            id: msg_id.clone(),
+            peer_id: peer_id.clone(),
+            peer_name: peer_name.clone(),
+            sender_id: my_id.clone(),
+            sender_name: my_name.clone(),
+            text: text.clone(),
+            timestamp: now,
+            is_outgoing: true,
+        };
+
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .map_err(|e| e.to_string())?;
+
+        let url = format!("http://{}:{}/api/auradrop/v1/chat", peer_ip, peer_port);
+        let res = client
+            .post(&url)
+            .json(&json!({
+                "id": msg_id,
+                "senderId": my_id,
+                "senderName": my_name,
+                "text": text,
+                "timestamp": now,
+            }))
+            .send()
+            .await
+            .map_err(|e| format!("Failed to send chat to {}: {}", url, e))?;
+
+        if !res.status().is_success() {
+            return Err(format!("Peer returned error status: {}", res.status()));
+        }
+
+        {
+            let mut hist = self.chat_history.write().await;
+            hist.entry(peer_id.clone()).or_insert_with(Vec::new).push(msg.clone());
+        }
+
+        if let Some(ref handle) = self.app_handle {
+            let _ = handle.emit("chat-message-sent", &msg);
+        }
+
+        Ok(msg)
+    }
+
+    pub async fn get_chat_history(&self, peer_id: &str) -> Vec<ChatMessage> {
+        let hist = self.chat_history.read().await;
+        hist.get(peer_id).cloned().unwrap_or_default()
     }
 }
 
@@ -369,6 +445,7 @@ async fn handle_prepare_upload(
     let token = Uuid::new_v4().to_string();
     let expires_at = Utc::now().timestamp_millis() + 60000;
 
+    let sender_name = payload.sender_name.unwrap_or(payload.sender_user_id);
     let meta = SessionMetadata {
         transfer_id: payload.transfer_id.clone(),
         file_name: payload.file_name.clone(),
@@ -376,6 +453,7 @@ async fn handle_prepare_upload(
         sha256_expected: payload.sha256.clone(),
         token: token.clone(),
         expires_at,
+        sender_name: sender_name.clone(),
     };
 
     service
@@ -386,7 +464,7 @@ async fn handle_prepare_upload(
 
     crate::log_debug(&format!(
         "[AuraTransfer] Prepare-upload accepted: {} ({} bytes) from {}",
-        payload.file_name, payload.file_size, payload.sender_user_id
+        payload.file_name, payload.file_size, sender_name
     ));
 
     Ok(Json(PrepareUploadResponse {
@@ -499,6 +577,7 @@ async fn handle_upload(
                     },
                     peer_name: "Remote Peer".to_string(),
                     error: None,
+                    file_path: None,
                 })
                 .await;
         }
@@ -515,11 +594,74 @@ async fn handle_upload(
         session.file_name, session.file_size, calculated_hash, verified, target_file_path.display()
     ));
 
+    // Emit final completed incoming transfer event to desktop UI
+    service
+        .emit_progress(TransferProgressPayload {
+            transfer_id: session.transfer_id.clone(),
+            file_name: session.file_name.clone(),
+            file_size: session.file_size,
+            bytes_transferred: session.file_size,
+            progress_percent: 100.0,
+            speed_mbps: 0.0,
+            eta_seconds: 0,
+            is_incoming: true,
+            status: "completed".to_string(),
+            peer_name: session.sender_name.clone(),
+            error: None,
+            file_path: Some(target_file_path.to_string_lossy().to_string()),
+        })
+        .await;
+
     Ok(Json(json!({
         "success": true,
         "transferId": transfer_id,
+        "verified": verified,
         "sha256Verified": verified,
         "sha256": calculated_hash,
         "savedPath": target_file_path.to_string_lossy()
     })))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IncomingChatMessage {
+    pub id: Option<String>,
+    pub sender_id: Option<String>,
+    pub sender_name: Option<String>,
+    pub text: String,
+    pub timestamp: Option<i64>,
+}
+
+async fn handle_chat(
+    State(service): State<TransferService>,
+    Json(payload): Json<IncomingChatMessage>,
+) -> Json<serde_json::Value> {
+    let now = Utc::now().timestamp_millis();
+    let id = payload.id.unwrap_or_else(|| format!("msg_{}", Uuid::new_v4().simple()));
+    let sender_id = payload.sender_id.unwrap_or_else(|| "remote_peer".to_string());
+    let sender_name = payload.sender_name.unwrap_or_else(|| "Nearby Device".to_string());
+
+    let msg = ChatMessage {
+        id,
+        peer_id: sender_id.clone(),
+        peer_name: sender_name.clone(),
+        sender_id: sender_id.clone(),
+        sender_name: sender_name.clone(),
+        text: payload.text,
+        timestamp: payload.timestamp.unwrap_or(now),
+        is_outgoing: false,
+    };
+
+    {
+        let mut hist = service.chat_history.write().await;
+        hist.entry(sender_id).or_insert_with(Vec::new).push(msg.clone());
+    }
+
+    if let Some(ref handle) = service.app_handle {
+        let _ = handle.emit("chat-message-received", &msg);
+    }
+
+    crate::log_debug(&format!("[AuraChat] Message received from {}: {}", msg.peer_name, msg.text));
+
+    Json(json!({ "status": "ok", "delivered": true }))
 }

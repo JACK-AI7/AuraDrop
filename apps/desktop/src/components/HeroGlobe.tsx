@@ -59,6 +59,23 @@ function latLonToVec3(lat: number, lon: number): Vec3 {
   };
 }
 
+function slerp(p1: Vec3, p2: Vec3, t: number): Vec3 {
+  let dot = p1.x * p2.x + p1.y * p2.y + p1.z * p2.z;
+  dot = Math.max(-1.0, Math.min(1.0, dot));
+  const theta = Math.acos(dot) * t;
+  const relX = p2.x - p1.x * dot;
+  const relY = p2.y - p1.y * dot;
+  const relZ = p2.z - p1.z * dot;
+  const len = Math.hypot(relX, relY, relZ) || 1.0;
+  const normRel = { x: relX / len, y: relY / len, z: relZ / len };
+
+  return {
+    x: p1.x * Math.cos(theta) + normRel.x * Math.sin(theta),
+    y: p1.y * Math.cos(theta) + normRel.y * Math.sin(theta),
+    z: p1.z * Math.cos(theta) + normRel.z * Math.sin(theta),
+  };
+}
+
 const SPHERE_POINTS = generateSpherePoints(380);
 
 export const HeroGlobe: React.FC<HeroGlobeProps> = ({
@@ -221,6 +238,55 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
             ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
             ctx.lineWidth = 1.2;
             ctx.stroke();
+          }
+
+          // 3D Connection Arc Beam between YOU and Selected Peer
+          const segments = 32;
+          ctx.beginPath();
+          let first = true;
+          const arcScreenPoints: { x: number; y: number }[] = [];
+
+          for (let s = 0; s <= segments; s++) {
+            const t = s / segments;
+            const interp = slerp(userSpherical, peerVec, t);
+            // Parabolic radial elevation above globe sphere
+            const lift = 1.0 + 0.22 * Math.sin(Math.PI * t);
+            const lifted: Vec3 = {
+              x: interp.x * lift,
+              y: interp.y * lift,
+              z: interp.z * lift,
+            };
+            const rot = rotateX(rotateY(lifted, yaw), pitch);
+            const sx = center.x + rot.x * radius;
+            const sy = center.y + rot.y * radius;
+            arcScreenPoints.push({ x: sx, y: sy });
+
+            if (first) {
+              ctx.moveTo(sx, sy);
+              first = false;
+            } else {
+              ctx.lineTo(sx, sy);
+            }
+          }
+
+          ctx.strokeStyle = isTransferring ? '#FFFFFF' : 'rgba(255, 255, 255, 0.75)';
+          ctx.lineWidth = isTransferring ? 2.5 : 1.8;
+          ctx.stroke();
+
+          // Animated energy particle traversing the arc beam
+          if (arcScreenPoints.length > 0) {
+            const pulsePeriod = isTransferring ? 900 : 2000;
+            const pulseT = ((Date.now() % pulsePeriod) / pulsePeriod);
+            const idx = Math.min(
+              arcScreenPoints.length - 1,
+              Math.floor(pulseT * arcScreenPoints.length)
+            );
+            const packetPos = arcScreenPoints[idx];
+
+            ctx.beginPath();
+            ctx.arc(packetPos.x, packetPos.y, isTransferring ? 4.5 : 3.0, 0, Math.PI * 2);
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fill();
           }
         }
 

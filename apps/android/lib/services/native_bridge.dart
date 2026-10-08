@@ -385,6 +385,63 @@ class NativeBridgeService {
     }
   }
 
+  static Future<void> recordTransferHistory({
+    required String id,
+    required String senderName,
+    required String receiverName,
+    required String fileName,
+    required int fileSize,
+    required String direction,
+    required String status,
+    required String sha256,
+    required String localPath,
+    required String transportType,
+    required int avgSpeed,
+  }) async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _channel.invokeMethod('recordTransferHistory', {
+        'id': id,
+        'senderName': senderName,
+        'receiverName': receiverName,
+        'fileName': fileName,
+        'fileSize': fileSize,
+        'direction': direction,
+        'status': status,
+        'sha256': sha256,
+        'localPath': localPath,
+        'transportType': transportType,
+        'avgSpeed': avgSpeed,
+      });
+    } catch (e) {
+      debugPrint('[NativeBridge] recordTransferHistory error: $e');
+    }
+  }
+
+  static Future<void> recordChatMessage({
+    required String id,
+    required String peerId,
+    required String peerName,
+    required String text,
+    required bool isOutgoing,
+    int? timestamp,
+  }) async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _channel.invokeMethod('recordChatMessage', {
+        'id': id,
+        'peerId': peerId,
+        'peerName': peerName,
+        'senderId': isOutgoing ? '' : peerId,
+        'text': text,
+        'timestamp': timestamp ?? DateTime.now().millisecondsSinceEpoch,
+        'status': isOutgoing ? 'sent' : 'received',
+      });
+    } catch (e) {
+      debugPrint('[NativeBridge] recordChatMessage error: $e');
+    }
+  }
+
   // Chat
   static Future<List<ChatMessage>> getChatMessages(String peerId) async {
     if (!Platform.isAndroid) return [];

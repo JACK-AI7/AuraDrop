@@ -5,6 +5,7 @@ import { FolderOpen, ArrowDownLeft, ArrowUpRight, CheckCircle2, AlertCircle, Tra
 interface HistoryViewProps {
   history: TransferProgressPayload[];
   onOpenFolder: () => void;
+  onOpenFile?: (fileName: string) => void;
   onClearHistory: () => void;
   onClose: () => void;
 }
@@ -12,6 +13,7 @@ interface HistoryViewProps {
 export const HistoryView: React.FC<HistoryViewProps> = ({
   history,
   onOpenFolder,
+  onOpenFile,
   onClearHistory,
   onClose,
 }) => {
@@ -23,7 +25,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md select-none">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md select-none animate-fade-in">
       <div className="w-full max-w-lg bg-[#0E0E12] border border-white/20 rounded-2xl shadow-2xl p-6 relative flex flex-col max-h-[80vh]">
         <button
           onClick={onClose}
@@ -35,7 +37,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         <div className="flex items-center justify-between mb-5 pr-8">
           <div>
             <h3 className="text-base font-bold text-white">Transfer History</h3>
-            <p className="text-xs text-neutral-400">Recent direct peer-to-peer transfers</p>
+            <p className="text-xs text-neutral-400">Click any transferred file to open it directly</p>
           </div>
           <button
             onClick={onOpenFolder}
@@ -55,7 +57,9 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
             history.map((item, idx) => (
               <div
                 key={`${item.transferId}-${idx}`}
-                className="flex items-center gap-3 p-3 rounded-xl bg-black border border-white/10"
+                onClick={() => onOpenFile && onOpenFile(item.filePath || item.fileName)}
+                title="Click to open file"
+                className="flex items-center gap-3 p-3 rounded-xl bg-black border border-white/10 hover:border-white/40 hover:bg-white/5 transition-all cursor-pointer group"
               >
                 <div
                   className={`p-2 rounded-lg ${
@@ -70,15 +74,17 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                 </div>
 
                 <div className="min-w-0 flex-1">
-                  <h4 className="text-xs font-semibold text-white truncate">{item.fileName}</h4>
+                  <h4 className="text-xs font-semibold text-white group-hover:underline truncate">
+                    {item.fileName}
+                  </h4>
                   <p className="text-[11px] text-neutral-400">
                     {formatBytes(item.fileSize)} • {item.isIncoming ? 'From' : 'To'} {item.peerName}
                   </p>
                 </div>
 
                 {item.status === 'completed' ? (
-                  <span className="text-[11px] text-white font-semibold flex items-center gap-1">
-                    <CheckCircle2 className="w-3.5 h-3.5" /> Done
+                  <span className="text-[11px] text-white font-semibold flex items-center gap-1 group-hover:bg-white group-hover:text-black px-2 py-1 rounded transition-colors">
+                    <CheckCircle2 className="w-3.5 h-3.5" /> Open
                   </span>
                 ) : (
                   <span className="text-[11px] text-neutral-400 font-semibold flex items-center gap-1">

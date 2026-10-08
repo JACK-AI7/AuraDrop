@@ -39,4 +39,17 @@ export interface TransferProgressPayload {
   status: 'transferring' | 'completed' | 'failed' | 'canceled';
   peerName: string;
   error?: string | null;
+  filePath?: string | null;
 }
+
+export interface ChatMessage {
+  id: string;
+  peerId: string;
+  peerName: string;
+  senderId: string;
+  senderName: string;
+  text: string;
+  timestamp: number;
+  isOutgoing: boolean;
+}
+

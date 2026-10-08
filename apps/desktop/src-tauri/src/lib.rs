@@ -6,8 +6,9 @@ pub mod network;
 pub mod transfer;
 
 use commands::{
-    get_local_info, get_nearby_peers, open_downloads_folder, pick_files, probe_device_ip,
-    rescan_network, send_files_to_peer, set_device_name, AppState,
+    get_chat_history, get_local_info, get_nearby_peers, open_downloads_folder, open_file,
+    pick_files, probe_device_ip, rescan_network, send_chat_message, send_files_to_peer,
+    set_device_name, show_file_in_folder, AppState,
 };
 use discovery::DiscoveryService;
 use identity::IdentityManager;
@@ -70,7 +71,11 @@ pub fn run() {
             send_files_to_peer,
             open_downloads_folder,
             rescan_network,
-            probe_device_ip
+            probe_device_ip,
+            send_chat_message,
+            get_chat_history,
+            show_file_in_folder,
+            open_file
         ])
         .run(tauri::generate_context!());
 

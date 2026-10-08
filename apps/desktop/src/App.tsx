@@ -8,6 +8,7 @@ import { TransferModal } from './components/TransferModal';
 import { DiagnosticsModal } from './components/DiagnosticsModal';
 import { HistoryView } from './components/HistoryView';
 import { DirectIpModal } from './components/DirectIpModal';
+import { ChatModal } from './components/ChatModal';
 import {
   Send,
   FolderOpen,
@@ -17,12 +18,14 @@ import {
   Wifi,
   RefreshCw,
   Target,
+  MessageSquare,
 } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [localInfo, setLocalInfo] = useState<LocalDeviceInfo | null>(null);
   const [peers, setPeers] = useState<PeerDevice[]>([]);
   const [selectedPeerId, setSelectedPeerId] = useState<string | null>(null);
+  const [chatPeer, setChatPeer] = useState<PeerDevice | null>(null);
   const [activeTransfer, setActiveTransfer] = useState<TransferProgressPayload | null>(null);
   const [history, setHistory] = useState<TransferProgressPayload[]>([]);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
@@ -38,24 +41,29 @@ export const App: React.FC = () => {
       .then((info) => setLocalInfo(info))
       .catch((err) => console.error('Failed to get local info:', err));
 
+    const dedupePeers = (list: PeerDevice[]) =>
+      list.filter((peer, idx, arr) => idx === arr.findIndex((p) => p.ip === peer.ip || p.id === peer.id));
+
     // 2. Fetch Initial Peers
     invoke<PeerDevice[]>('get_nearby_peers')
       .then((p) => {
-        setPeers(p);
-        if (p.length > 0 && !selectedPeerId) {
-          setSelectedPeerId(p[0].id);
+        const unique = dedupePeers(p);
+        setPeers(unique);
+        if (unique.length > 0 && !selectedPeerId) {
+          setSelectedPeerId(unique[0].id);
         }
       })
       .catch((err) => console.error('Failed to get initial peers:', err));
 
     // 3. Listen for Live Peer Updates from UDP / Subnet Discovery
     const unlistenPeers = listen<PeerDevice[]>('peers-updated', (event) => {
-      setPeers(event.payload);
+      const unique = dedupePeers(event.payload);
+      setPeers(unique);
       setSelectedPeerId((current) => {
-        if (current && event.payload.some((p) => p.id === current)) {
+        if (current && unique.some((p) => p.id === current)) {
           return current;
         }
-        return event.payload.length > 0 ? event.payload[0].id : null;
+        return unique.length > 0 ? unique[0].id : null;
       });
     });
 
@@ -135,6 +143,10 @@ export const App: React.FC = () => {
 
   const handleOpenDownloads = () => {
     invoke('open_downloads_folder').catch(console.error);
+  };
+
+  const handleOpenFile = (fileName: string) => {
+    invoke('open_file', { fileName }).catch(console.error);
   };
 
   const handleSaveDeviceName = (name: string) => {
@@ -250,10 +262,18 @@ export const App: React.FC = () => {
               <button
                 onClick={() => handleSendFiles(selectedPeer)}
                 disabled={isPickingFiles}
-                className="px-7 py-2.5 rounded-full bg-white hover:bg-neutral-200 text-black text-xs font-bold flex items-center gap-2 shadow-xl shadow-white/10 hover:scale-105 active:scale-95 transition-all disabled:opacity-50"
+                className="px-6 py-2.5 rounded-full bg-white hover:bg-neutral-200 text-black text-xs font-bold flex items-center gap-2 shadow-xl shadow-white/10 hover:scale-105 active:scale-95 transition-all disabled:opacity-50"
               >
                 <Send className="w-3.5 h-3.5" />
                 Send Files to {selectedPeer.name}
+              </button>
+
+              <button
+                onClick={() => setChatPeer(selectedPeer)}
+                className="px-5 py-2.5 rounded-full bg-neutral-900 hover:bg-neutral-800 text-white border border-white/20 text-xs font-semibold flex items-center gap-2 shadow-xl shadow-black hover:scale-105 active:scale-95 transition-all"
+              >
+                <MessageSquare className="w-3.5 h-3.5 text-white" />
+                Chat
               </button>
             </div>
           )}
@@ -266,6 +286,7 @@ export const App: React.FC = () => {
             selectedPeerId={selectedPeerId}
             onSelectPeer={handleSelectPeer}
             onSendFiles={handleSendFiles}
+            onOpenChat={(peer) => setChatPeer(peer)}
             onScanSubnet={handleScanSubnet}
             onAddDirectIp={() => setShowDirectIp(true)}
             isScanning={isScanning}
@@ -278,7 +299,16 @@ export const App: React.FC = () => {
         transfer={activeTransfer}
         onDismiss={() => setActiveTransfer(null)}
         onOpenFolder={handleOpenDownloads}
+        onOpenFile={handleOpenFile}
       />
+
+      {chatPeer && (
+        <ChatModal
+          peer={chatPeer}
+          onClose={() => setChatPeer(null)}
+          onSendFile={(peer) => handleSendFiles(peer)}
+        />
+      )}
 
       {showDirectIp && (
         <DirectIpModal
@@ -302,6 +332,7 @@ export const App: React.FC = () => {
         <HistoryView
           history={history}
           onOpenFolder={handleOpenDownloads}
+          onOpenFile={handleOpenFile}
           onClearHistory={() => setHistory([])}
           onClose={() => setShowHistory(false)}
         />

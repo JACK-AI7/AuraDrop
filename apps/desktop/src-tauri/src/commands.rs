@@ -1,6 +1,6 @@
 use crate::discovery::DiscoveryService;
 use crate::identity::IdentityManager;
-use crate::models::{LocalDeviceInfo, PeerDevice, SelectedFileInfo};
+use crate::models::{ChatMessage, LocalDeviceInfo, PeerDevice, SelectedFileInfo};
 use crate::network::NetworkManager;
 use crate::transfer::{TransferService, TRANSFER_PORT};
 use std::fs;
@@ -124,3 +124,99 @@ pub async fn probe_device_ip(ip: String, state: State<'_, AppState>) -> Result<P
     crate::log_debug(&format!("[Commands] probe_device_ip invoked for: {}", ip));
     state.discovery.probe_single_ip(&ip).await
 }
+
+#[tauri::command]
+pub async fn send_chat_message(
+    peer_id: String,
+    text: String,
+    state: State<'_, AppState>,
+) -> Result<ChatMessage, String> {
+    let peers = state.discovery.get_peers().await;
+    let peer = peers
+        .into_iter()
+        .find(|p| p.id == peer_id)
+        .ok_or_else(|| "Peer device not found".to_string())?;
+
+    state
+        .transfer
+        .send_chat(peer.ip, peer.port, peer.id, peer.name, text)
+        .await
+}
+
+#[tauri::command]
+pub async fn get_chat_history(
+    peer_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<ChatMessage>, String> {
+    Ok(state.transfer.get_chat_history(&peer_id).await)
+}
+
+#[tauri::command]
+pub async fn show_file_in_folder(
+    file_name: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let downloads = state.transfer.get_downloads_dir();
+    let p = std::path::Path::new(&file_name);
+    let target = if p.is_absolute() && p.exists() {
+        p.to_path_buf()
+    } else {
+        std::path::Path::new(&downloads).join(&file_name)
+    };
+
+    #[cfg(target_os = "windows")]
+    {
+        if target.exists() {
+            let _ = std::process::Command::new("explorer")
+                .args(["/select,", &target.to_string_lossy()])
+                .spawn();
+        } else {
+            let _ = std::process::Command::new("explorer").arg(&downloads).spawn();
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg("-R").arg(&target).spawn();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(&downloads).spawn();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn open_file(
+    file_name: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let downloads = state.transfer.get_downloads_dir();
+    let p = std::path::Path::new(&file_name);
+    let target = if p.is_absolute() && p.exists() {
+        p.to_path_buf()
+    } else {
+        std::path::Path::new(&downloads).join(&file_name)
+    };
+
+    #[cfg(target_os = "windows")]
+    {
+        let path_str = if target.exists() {
+            target.to_string_lossy().to_string()
+        } else {
+            downloads
+        };
+        let _ = std::process::Command::new("cmd")
+            .args(["/c", "start", "", &path_str])
+            .spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg(&target).spawn();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(&target).spawn();
+    }
+    Ok(())
+}
+

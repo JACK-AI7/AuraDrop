@@ -5,6 +5,7 @@ import android.app.Activity
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -17,6 +18,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
 import android.util.Log
+import android.webkit.MimeTypeMap
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -382,6 +384,73 @@ class MainActivity : FlutterActivity() {
                     val path = call.argument<String>("path") ?: ""
                     val deleted = File(path).delete()
                     result.success(deleted)
+                }
+                "recordTransferHistory" -> {
+                    try {
+                        val id = call.argument<String>("id") ?: UUID.randomUUID().toString()
+                        val senderName = call.argument<String>("senderName") ?: "Nearby Device"
+                        val receiverName = call.argument<String>("receiverName") ?: deviceName
+                        val fileName = call.argument<String>("fileName") ?: "file"
+                        val fileSize = (call.argument<Number>("fileSize"))?.toLong() ?: 0L
+                        val direction = call.argument<String>("direction") ?: "received"
+                        val status = call.argument<String>("status") ?: "completed"
+                        val sha256 = call.argument<String>("sha256") ?: ""
+                        val localPath = call.argument<String>("localPath") ?: ""
+                        val transportType = call.argument<String>("transportType") ?: "LAN_DIRECT"
+                        val avgSpeed = (call.argument<Number>("avgSpeed"))?.toLong() ?: 0L
+
+                        dbHelper.insertTransfer(mapOf(
+                            "id" to id,
+                            "timestamp" to System.currentTimeMillis(),
+                            "senderName" to senderName,
+                            "receiverName" to receiverName,
+                            "fileName" to fileName,
+                            "fileType" to "",
+                            "fileSize" to fileSize,
+                            "direction" to direction,
+                            "status" to status,
+                            "durationMs" to 1000L,
+                            "avgSpeed" to avgSpeed,
+                            "sha256" to sha256,
+                            "localPath" to localPath,
+                            "transportType" to transportType
+                        ))
+
+                        if (localPath.isNotEmpty()) {
+                            try {
+                                MediaScannerConnection.scanFile(applicationContext, arrayOf(localPath), null, null)
+                            } catch (_: Exception) {}
+                        }
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("DB_ERROR", e.message, null)
+                    }
+                }
+                "recordChatMessage" -> {
+                    try {
+                        val msgId = call.argument<String>("id") ?: ("msg_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8))
+                        val peerId = call.argument<String>("peerId") ?: ""
+                        val peerName = call.argument<String>("peerName") ?: "Nearby Device"
+                        val senderId = call.argument<String>("senderId") ?: ""
+                        val text = call.argument<String>("text") ?: ""
+                        val timestamp = (call.argument<Number>("timestamp"))?.toLong() ?: System.currentTimeMillis()
+                        val status = call.argument<String>("status") ?: "received"
+
+                        val msgMap = mapOf(
+                            "id" to msgId,
+                            "peerId" to peerId,
+                            "peerName" to peerName,
+                            "senderId" to senderId,
+                            "text" to text,
+                            "timestamp" to timestamp,
+                            "status" to status
+                        )
+                        dbHelper.insertChatMessage(msgMap)
+                        sendEvent("chatMessageReceived", msgMap)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("CHAT_ERROR", e.message, null)
+                    }
                 }
                 // Offline P2P Chat Handlers
                 "getChatMessages" -> {
@@ -1733,61 +1802,93 @@ class MainActivity : FlutterActivity() {
         sendEvent("chatMessageSent", msgMap)
 
         scope.launch(Dispatchers.IO) {
-            var chatSocket: Socket? = null
+            var delivered = false
             try {
-                chatSocket = Socket().apply {
-                    tcpNoDelay = true
-                    connect(InetSocketAddress(targetIp, DEFAULT_PORT), 4000)
+                val url = URL("http://$targetIp:$DEFAULT_PORT/api/auradrop/v1/chat")
+                val conn = (url.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = 3000
+                    readTimeout = 4000
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json")
                 }
-                val output = BufferedOutputStream(chatSocket.getOutputStream(), 4096)
-                val input = BufferedInputStream(chatSocket.getInputStream(), 4096)
-
-                // Send Handshake Init
-                val initJson = JSONObject().apply {
-                    put("protocolVersion", "P2PFS/1")
-                    put("deviceId", deviceId)
-                    put("deviceName", deviceName)
-                    put("platform", "android")
-                    put("nonce", UUID.randomUUID().toString())
-                }
-                output.write(buildFrame(0x01, initJson.toString().toByteArray()))
-                output.flush()
-
-                // Read Handshake Resp
-                val header = ByteArray(20)
-                input.readFully(header)
-                val respLen = header.readUInt32BE(8)
-                val respBytes = ByteArray(respLen)
-                input.readFully(respBytes)
-
-                // Send CHAT_MESSAGE frame (0x30)
-                val chatPayload = JSONObject().apply {
+                val payload = JSONObject().apply {
                     put("id", messageId)
                     put("senderId", deviceId)
                     put("senderName", deviceName)
                     put("text", text)
                     put("timestamp", timestamp)
                 }
-                output.write(buildFrame(0x30, chatPayload.toString().toByteArray()))
-                output.flush()
-
-                // Read CHAT_ACK
-                input.readFully(header)
-                val ackLen = header.readUInt32BE(8)
-                val ackBytes = ByteArray(ackLen)
-                input.readFully(ackBytes)
-                val ackJson = JSONObject(String(ackBytes, Charsets.UTF_8))
-
-                val status = ackJson.optString("status", "delivered")
-                dbHelper.updateChatMessageStatus(messageId, status)
-                sendEvent("chatMessageStatusUpdated", mapOf("id" to messageId, "status" to status))
+                conn.outputStream.use { os ->
+                    os.write(payload.toString().toByteArray(Charsets.UTF_8))
+                    os.flush()
+                }
+                if (conn.responseCode in 200..299) {
+                    delivered = true
+                }
+                conn.disconnect()
             } catch (e: Exception) {
-                Log.e(TAG, "Chat sending error: ${e.message}")
-                dbHelper.updateChatMessageStatus(messageId, "failed")
-                sendEvent("chatMessageStatusUpdated", mapOf("id" to messageId, "status" to "failed"))
-            } finally {
-                chatSocket?.close()
+                Log.d(TAG, "HTTP chat send failed, attempting socket fallback: ${e.message}")
             }
+
+            if (!delivered) {
+                var chatSocket: Socket? = null
+                try {
+                    chatSocket = Socket().apply {
+                        tcpNoDelay = true
+                        connect(InetSocketAddress(targetIp, DEFAULT_PORT), 3000)
+                    }
+                    val output = BufferedOutputStream(chatSocket.getOutputStream(), 4096)
+                    val input = BufferedInputStream(chatSocket.getInputStream(), 4096)
+
+                    // Send Handshake Init
+                    val initJson = JSONObject().apply {
+                        put("protocolVersion", "P2PFS/1")
+                        put("deviceId", deviceId)
+                        put("deviceName", deviceName)
+                        put("platform", "android")
+                        put("nonce", UUID.randomUUID().toString())
+                    }
+                    output.write(buildFrame(0x01, initJson.toString().toByteArray()))
+                    output.flush()
+
+                    // Read Handshake Resp
+                    val header = ByteArray(20)
+                    input.readFully(header)
+                    val respLen = header.readUInt32BE(8)
+                    val respBytes = ByteArray(respLen)
+                    input.readFully(respBytes)
+
+                    // Send CHAT_MESSAGE frame (0x30)
+                    val chatPayload = JSONObject().apply {
+                        put("id", messageId)
+                        put("senderId", deviceId)
+                        put("senderName", deviceName)
+                        put("text", text)
+                        put("timestamp", timestamp)
+                    }
+                    output.write(buildFrame(0x30, chatPayload.toString().toByteArray()))
+                    output.flush()
+
+                    // Read CHAT_ACK
+                    input.readFully(header)
+                    val ackLen = header.readUInt32BE(8)
+                    val ackBytes = ByteArray(ackLen)
+                    input.readFully(ackBytes)
+                    val ackJson = JSONObject(String(ackBytes, Charsets.UTF_8))
+
+                    val status = ackJson.optString("status", "delivered")
+                    delivered = (status == "delivered" || status == "ok")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Raw socket chat error: ${e.message}")
+                } finally {
+                    try { chatSocket?.close() } catch (_: Exception) {}
+                }
+            }
+
+            val finalStatus = if (delivered) "delivered" else "failed"
+            dbHelper.updateChatMessageStatus(messageId, finalStatus)
+            sendEvent("chatMessageStatusUpdated", mapOf("id" to messageId, "status" to finalStatus))
         }
     }
 
@@ -1961,16 +2062,41 @@ class MainActivity : FlutterActivity() {
     private fun openFileWithSystemViewer(filePath: String): Boolean {
         return try {
             val file = File(filePath)
-            if (!file.exists()) return false
+            if (!file.exists()) {
+                Log.e(TAG, "File does not exist: $filePath")
+                return false
+            }
 
             val uri = FileProvider.getUriForFile(this, "${applicationContext.packageName}.fileprovider", file)
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, contentResolver.getType(uri) ?: "*/*")
+            val extension = file.extension.lowercase()
+            val mimeType = if (extension.isNotEmpty()) {
+                MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "*/*"
+            } else {
+                "*/*"
+            }
+
+            val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mimeType)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            startActivity(intent)
-            true
+
+            try {
+                startActivity(viewIntent)
+                true
+            } catch (e: ActivityNotFoundException) {
+                // Fallback to chooser with generic */*
+                val fallbackIntent = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, "*/*")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                val chooser = Intent.createChooser(fallbackIntent, "Open with").apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                startActivity(chooser)
+                true
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error opening file: ${e.message}")
             false

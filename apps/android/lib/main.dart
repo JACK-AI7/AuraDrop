@@ -289,19 +289,53 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
         });
       });
 
-      _transferCompleteSubscription = AuraTransferEngine().onCompleted.listen((data) {
+      _transferCompleteSubscription = AuraTransferEngine().onCompleted.listen((data) async {
         if (!mounted) return;
         HapticFeedback.heavyImpact();
         _rippleController.triggerTransferComplete();
+        final path = data['filePath']?.toString() ?? _lastSavedPath;
+        final fName = data['fileName']?.toString() ?? _activeFileName;
+        final fSize = (data['fileSize'] as num?)?.toInt() ?? _totalTransferBytes;
+        final sha = data['sha256']?.toString() ?? '';
+        final isSender = data['isSender'] == true;
+        final peerName = _activePeer?.name ?? 'Nearby Peer';
+
+        // 1. Record in native SQLite database and trigger MediaScanner
+        await NativeBridgeService.recordTransferHistory(
+          id: data['transferId']?.toString() ?? 'xfer_${DateTime.now().millisecondsSinceEpoch}',
+          senderName: isSender ? _deviceName : peerName,
+          receiverName: isSender ? peerName : _deviceName,
+          fileName: fName,
+          fileSize: fSize,
+          direction: isSender ? 'sent' : 'received',
+          status: 'completed',
+          sha256: sha,
+          localPath: path,
+          transportType: 'LAN_TURBO_DIRECT',
+          avgSpeed: _speedBytesPerSec,
+        );
+
+        // 2. Show in-app notification with tap-to-open
+        InAppNotificationController().showTransferComplete(
+          fileName: fName,
+          onOpen: () async {
+            if (path.isNotEmpty) {
+              await NativeBridgeService.openFile(path);
+            }
+          },
+        );
+
         setState(() {
           _transferState = TransferState.completed;
-          _lastSavedPath = data['filePath']?.toString() ?? '';
-          _lastSha256 = data['sha256']?.toString() ?? '';
-          _transferredBytes = _totalTransferBytes;
+          _activeFileName = fName;
+          _lastSavedPath = path;
+          _lastSha256 = sha;
+          _transferredBytes = fSize;
+          _totalTransferBytes = math.max(1, fSize);
           _speedBytesPerSec = 0;
           _etaSeconds = 0;
         });
-        _showSnackBar('✓ Transfer complete: ${data['fileName']}', isSuccess: true);
+        _showSnackBar('✓ Transfer complete: $fName', isSuccess: true);
       });
 
       _transferErrorSubscription = AuraTransferEngine().onError.listen((err) {

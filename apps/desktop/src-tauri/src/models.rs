@@ -48,6 +48,8 @@ pub struct TransferProgressPayload {
     pub status: String, // "transferring", "completed", "failed", "canceled"
     pub peer_name: String,
     pub error: Option<String>,
+    #[serde(default)]
+    pub file_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +87,8 @@ pub struct PrepareUploadRequest {
     pub file_size: u64,
     pub sha256: String,
     pub sender_user_id: String,
+    #[serde(default, alias = "senderName")]
+    pub sender_name: Option<String>,
     pub receiver_user_id: Option<String>,
 }
 
@@ -98,3 +102,17 @@ pub struct PrepareUploadResponse {
     pub expires_at: i64,
     pub protocol: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatMessage {
+    pub id: String,
+    pub peer_id: String,
+    pub peer_name: String,
+    pub sender_id: String,
+    pub sender_name: String,
+    pub text: String,
+    pub timestamp: i64,
+    pub is_outgoing: bool,
+}
+

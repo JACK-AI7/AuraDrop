@@ -311,6 +311,7 @@ class AuraDiscoveryService {
               transport: 'Direct Wi-Fi',
             );
 
+            _discoveredPeers.removeWhere((key, existing) => existing.ip == hostIp && existing.id != remoteId);
             _discoveredPeers[remoteId] = peer;
             _emitPeers();
 
@@ -442,6 +443,7 @@ class AuraDiscoveryService {
         transport: 'Direct Wi-Fi',
       );
 
+      _discoveredPeers.removeWhere((key, existing) => existing.ip == peerIp && existing.id != peerId);
       _discoveredPeers[peerId] = peer;
       _emitPeers();
 

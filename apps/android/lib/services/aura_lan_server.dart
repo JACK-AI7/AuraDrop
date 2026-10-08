@@ -6,6 +6,7 @@ import 'package:convert/convert.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
+import 'native_bridge.dart';
 
 class AuraLanServerProgress {
   final String transferId;
@@ -290,6 +291,8 @@ class AuraLanServer {
           await _handleUpload(request);
         } else if ((path == '/api/auradrop/v1/cancel' || path == '/api/transfer/cancel') && request.method == 'POST') {
           await _handleCancel(request);
+        } else if (path == '/api/auradrop/v1/chat' && request.method == 'POST') {
+          await _handleChat(request);
         } else {
           request.response.statusCode = HttpStatus.notFound;
           request.response.headers.contentType = ContentType.json;
@@ -773,6 +776,35 @@ class AuraLanServer {
     request.response.statusCode = HttpStatus.ok;
     request.response.headers.contentType = ContentType.json;
     request.response.write(jsonEncode({'status': 'cancelled', 'transferId': transferId}));
+    await request.response.close();
+  }
+
+  // ---------------------------------------------------------------------------
+  // 6. CHAT (POST /api/auradrop/v1/chat)
+  // Direct offline peer-to-peer messaging
+  // ---------------------------------------------------------------------------
+  Future<void> _handleChat(HttpRequest request) async {
+    final bodyStr = await utf8.decoder.bind(request).join();
+    final data = jsonDecode(bodyStr) as Map<String, dynamic>;
+    final id = data['id']?.toString() ?? 'msg_${DateTime.now().millisecondsSinceEpoch}';
+    final senderId = data['senderId']?.toString() ?? data['sender_id']?.toString() ?? '';
+    final senderName = data['senderName']?.toString() ?? data['sender_name']?.toString() ?? 'Nearby Peer';
+    final text = data['text']?.toString() ?? data['content']?.toString() ?? '';
+    final timestamp = (data['timestamp'] as num?)?.toInt() ?? DateTime.now().millisecondsSinceEpoch;
+
+    // Record into native SQLite and notify app
+    await NativeBridgeService.recordChatMessage(
+      id: id,
+      peerId: senderId,
+      peerName: senderName,
+      text: text,
+      isOutgoing: false,
+      timestamp: timestamp,
+    );
+
+    request.response.statusCode = HttpStatus.ok;
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode({'status': 'delivered', 'id': id}));
     await request.response.close();
   }
 

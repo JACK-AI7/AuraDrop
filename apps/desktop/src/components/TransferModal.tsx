@@ -6,12 +6,14 @@ interface TransferModalProps {
   transfer: TransferProgressPayload | null;
   onDismiss: () => void;
   onOpenFolder: () => void;
+  onOpenFile?: (fileName: string) => void;
 }
 
 export const TransferModal: React.FC<TransferModalProps> = ({
   transfer,
   onDismiss,
   onOpenFolder,
+  onOpenFile,
 }) => {
   if (!transfer) return null;
 
@@ -73,7 +75,13 @@ export const TransferModal: React.FC<TransferModalProps> = ({
         </div>
 
         {/* File Card */}
-        <div className="flex items-center gap-3 p-3.5 rounded-xl bg-black border border-white/10 mb-5">
+        <div
+          onClick={() => isCompleted && onOpenFile && onOpenFile(transfer.filePath || transfer.fileName)}
+          className={`flex items-center gap-3 p-3.5 rounded-xl bg-black border border-white/10 mb-5 ${
+            isCompleted ? 'hover:border-white/40 cursor-pointer transition-colors' : ''
+          }`}
+          title={isCompleted ? 'Click to open file' : undefined}
+        >
           <FileText className="w-6 h-6 text-white flex-shrink-0" />
           <div className="min-w-0 flex-1">
             <h4 className="text-sm font-semibold text-white truncate">{transfer.fileName}</h4>
@@ -118,22 +126,28 @@ export const TransferModal: React.FC<TransferModalProps> = ({
         )}
 
         {/* Action Buttons */}
-        <div className="flex items-center gap-3">
-          {isCompleted && transfer.isIncoming && (
-            <button
-              onClick={onOpenFolder}
-              className="flex-1 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white text-xs font-semibold transition-all"
-            >
-              Open Downloads Folder
-            </button>
+        <div className="flex items-center gap-2">
+          {isCompleted && (
+            <>
+              <button
+                onClick={() => onOpenFile && onOpenFile(transfer.filePath || transfer.fileName)}
+                className="flex-1 py-2.5 rounded-xl bg-white hover:bg-neutral-200 text-black text-xs font-bold transition-all shadow-md"
+              >
+                Open File
+              </button>
+              <button
+                onClick={onOpenFolder}
+                className="py-2.5 px-3 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-white text-xs font-semibold transition-all"
+              >
+                Folder
+              </button>
+            </>
           )}
           <button
             onClick={onDismiss}
-            className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all shadow-md ${
-              isCompleted
-                ? 'bg-white hover:bg-neutral-200 text-black'
-                : 'bg-white/10 hover:bg-white/15 text-white'
-            }`}
+            className={`${
+              isCompleted ? 'px-4' : 'flex-1'
+            } py-2.5 rounded-xl text-xs font-semibold transition-all bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border border-white/15`}
           >
             {isCompleted ? 'Done' : 'Close'}
           </button>
