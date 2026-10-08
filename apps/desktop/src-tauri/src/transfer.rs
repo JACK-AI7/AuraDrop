@@ -74,6 +74,7 @@ impl TransferService {
         let service = self.clone();
 
         tauri::async_runtime::spawn(async move {
+            crate::log_debug("[TransferServer] spawn task entered");
             let app = Router::new()
                 .route("/api/auradrop/v1/ping", get(handle_ping))
                 .route("/api/auradrop/v1/info", get(handle_info))
@@ -85,16 +86,22 @@ impl TransferService {
                 .layer(CorsLayer::permissive())
                 .with_state(service);
 
+            crate::log_debug(&format!("[TransferServer] Attempting to bind TCP 0.0.0.0:{}", TRANSFER_PORT));
             let listener = match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", TRANSFER_PORT)).await {
-                Ok(l) => l,
+                Ok(l) => {
+                    crate::log_debug(&format!("[TransferServer] Successfully bound TCP on 0.0.0.0:{}", TRANSFER_PORT));
+                    l
+                }
                 Err(e) => {
-                    eprintln!("[TransferServer] Port {} bind failed: {}. Transfers may use fallback.", TRANSFER_PORT, e);
+                    crate::log_debug(&format!("[TransferServer] Port {} bind failed: {}", TRANSFER_PORT, e));
                     return;
                 }
             };
 
-            println!("[TransferServer] Listening on http://0.0.0.0:{}", TRANSFER_PORT);
-            let _ = axum::serve(listener, app).await;
+            crate::log_debug(&format!("[TransferServer] Starting axum::serve on {}", TRANSFER_PORT));
+            if let Err(e) = axum::serve(listener, app).await {
+                crate::log_debug(&format!("[TransferServer] axum::serve error: {}", e));
+            }
         });
     }
 
