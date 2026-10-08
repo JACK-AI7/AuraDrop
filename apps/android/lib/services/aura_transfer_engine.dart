@@ -83,6 +83,19 @@ class AuraTransferEngine {
     _activeSendRequest = null;
   }
 
+  Future<int?> pingPeer(PeerDevice target) async {
+    final sw = Stopwatch()..start();
+    try {
+      final pingUrl = Uri.parse('http://${target.ip}:${target.port}/api/auradrop/v1/ping');
+      final req = await _httpClient.getUrl(pingUrl).timeout(const Duration(seconds: 2));
+      final resp = await req.close().timeout(const Duration(seconds: 2));
+      if (resp.statusCode == HttpStatus.ok) {
+        return sw.elapsedMilliseconds;
+      }
+    } catch (_) {}
+    return null;
+  }
+
   Future<bool> sendFile({
     required PeerDevice target,
     required String filePath,
@@ -103,6 +116,11 @@ class AuraTransferEngine {
 
     final resolvedFileSize = fileSize ?? await localFile.length();
     final transferId = 'tr_${DateTime.now().millisecondsSinceEpoch}_${math.Random().nextInt(9999)}';
+
+    final latencyMs = await pingPeer(target);
+    if (latencyMs != null) {
+      debugPrint('[AuraTransfer] Peer ${target.name} pre-flight ping OK (${latencyMs}ms)');
+    }
 
     debugPrint('[AuraTransfer] Preparing transfer of $fileName ($resolvedFileSize bytes) to ${target.name} (${target.ip}:${target.port})');
 

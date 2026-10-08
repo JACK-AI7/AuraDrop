@@ -5,6 +5,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import '../models/models.dart';
 import 'aura_identity_service.dart';
+import 'aura_discovery_service.dart';
+import 'aura_lan_server.dart';
+import 'aura_transfer_engine.dart';
 
 class NativeBridgeService {
   static const MethodChannel _channel = MethodChannel('com.auradrop.app/native');
@@ -35,8 +38,9 @@ class NativeBridgeService {
       return {
         'deviceId': identity.deviceId,
         'deviceName': identity.deviceName,
-        'ipAddress': '127.0.0.1',
+        'ipAddress': AuraLanServer().localIp,
         'platform': Platform.operatingSystem,
+        'port': AuraLanServer().port,
       };
     }
 
@@ -52,8 +56,9 @@ class NativeBridgeService {
       return {
         'deviceId': identity.deviceId,
         'deviceName': identity.deviceName,
-        'ipAddress': '127.0.0.1',
+        'ipAddress': AuraLanServer().localIp,
         'platform': 'android',
+        'port': AuraLanServer().port,
       };
     }
     return {};
@@ -79,21 +84,29 @@ class NativeBridgeService {
 
   // Discovery
   static Future<void> startDiscovery() async {
-    if (!Platform.isAndroid) return;
+    if (!Platform.isAndroid) {
+      await AuraDiscoveryService().start();
+      return;
+    }
     try {
       await _channel.invokeMethod('startDiscovery');
     } catch (_) {}
   }
 
   static Future<void> stopDiscovery() async {
-    if (!Platform.isAndroid) return;
+    if (!Platform.isAndroid) {
+      AuraDiscoveryService().stop();
+      return;
+    }
     try {
       await _channel.invokeMethod('stopDiscovery');
     } catch (_) {}
   }
 
   static Future<List<Map<String, dynamic>>> getDiscoveredPeers() async {
-    if (!Platform.isAndroid) return [];
+    if (!Platform.isAndroid) {
+      return AuraDiscoveryService().currentPeers.map((p) => p.toMap()).toList();
+    }
     try {
       final dynamic res = await _channel.invokeMethod('getDiscoveredPeers');
       if (res is List) {
@@ -136,7 +149,17 @@ class NativeBridgeService {
 
   // Transfer Server & Client
   static Future<void> startTransferServer() async {
-    if (!Platform.isAndroid) return;
+    if (!Platform.isAndroid) {
+      final identity = AuraIdentityService();
+      if (identity.deviceId.isEmpty) {
+        await identity.init();
+      }
+      await AuraLanServer().start(
+        deviceId: identity.deviceId,
+        deviceName: identity.deviceName,
+      );
+      return;
+    }
     try {
       await _channel.invokeMethod('startTransferServer');
     } catch (_) {}
@@ -147,7 +170,26 @@ class NativeBridgeService {
     required int targetPort,
     required List<PickedFileMeta> files,
   }) async {
-    if (!Platform.isAndroid) return;
+    if (!Platform.isAndroid) {
+      final peer = PeerDevice(
+        id: targetIp,
+        name: 'Nearby Device',
+        deviceName: 'Nearby Device',
+        platform: 'device',
+        ip: targetIp,
+        port: targetPort,
+        lastSeen: DateTime.now(),
+      );
+      for (final f in files) {
+        await AuraTransferEngine().sendFile(
+          target: peer,
+          filePath: f.path,
+          fileName: f.name,
+          fileSize: f.size,
+        );
+      }
+      return;
+    }
     try {
       await _channel.invokeMethod('sendFiles', {
         'targetIp': targetIp,

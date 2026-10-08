@@ -4,6 +4,8 @@ import '../models/models.dart';
 import '../services/native_bridge.dart';
 import '../services/profile_repository.dart';
 import '../services/aura_signaling_service.dart';
+import '../services/aura_discovery_service.dart';
+import '../services/aura_lan_server.dart';
 import '../theme/aura_theme.dart';
 import '../components/minimal_components.dart';
 
@@ -42,7 +44,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isLoadingPeers = true;
   bool _backgroundDiscovery = true;
   bool _allowNearbyRequests = true;
-  Map<String, dynamic> _deviceInfo = {};
   late final TextEditingController _signalingUrlController;
 
   @override
@@ -64,14 +65,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _loadAllData() async {
     final trusted = await NativeBridgeService.getTrustedPeers();
     final blocked = await NativeBridgeService.getBlockedPeers();
-    final info = await NativeBridgeService.getDeviceInfo();
     final profile = await ProfileRepository().loadProfile();
 
     if (mounted) {
       setState(() {
         _trustedPeers = trusted;
         _blockedPeers = blocked;
-        _deviceInfo = info;
         _isLoadingPeers = false;
         if (profile.theme.isNotEmpty) {
           _selectedThemeMode = profile.theme;
@@ -649,15 +648,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ],
                   ),
                   Divider(color: theme.border, height: 20),
-                  _buildAboutRow('Local IP', _deviceInfo['ip']?.toString() ?? '127.0.0.1', theme),
+                  _buildAboutRow('Physical LAN IP', AuraLanServer().localIp, theme),
                   Divider(color: theme.border, height: 16),
-                  _buildAboutRow('Transport Port', '${_deviceInfo['port'] ?? 48291}', theme),
+                  _buildAboutRow('HTTP Turbo Port', '${AuraLanServer().port}', theme),
                   Divider(color: theme.border, height: 16),
-                  _buildAboutRow('Data Protocol', 'AuraDrop P2PFS/1 (Binary Frame)', theme),
+                  _buildAboutRow('UDP Discovery Port', '${AuraDiscoveryService.discoveryPort}', theme),
+                  Divider(color: theme.border, height: 16),
+                  _buildAboutRow('Local Transport', 'AuraDrop Direct LAN HTTP + UDP', theme),
                   Divider(color: theme.border, height: 16),
                   _buildAboutRow('WebRTC Transport', 'RTCDataChannel (Direct P2P)', theme),
                   Divider(color: theme.border, height: 16),
                   _buildAboutRow('Integrity Check', 'SHA-256 Stream Finalize', theme),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        HapticFeedback.lightImpact();
+                        _showDiagnosticsDialog(context, theme);
+                      },
+                      icon: const Icon(Icons.network_check_rounded, size: 16),
+                      label: const Text('Network Diagnostics & Subnet Ping', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: theme.textPrimary,
+                        side: BorderSide(color: theme.border),
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -858,6 +877,135 @@ class _SettingsScreenState extends State<SettingsScreen> {
         Text(label, style: TextStyle(fontSize: 12, color: theme.textSecondary)),
         Text(value, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: theme.textPrimary)),
       ],
+    );
+  }
+
+  void _showDiagnosticsDialog(BuildContext context, AuraTheme theme) async {
+    final diag = await AuraDiscoveryService().getDiagnostics();
+    if (!context.mounted) return;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: theme.cardBackground,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setModalState) {
+            final peers = AuraDiscoveryService().currentPeers;
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.hub_rounded, color: theme.textPrimary, size: 22),
+                          const SizedBox(width: 10),
+                          Text(
+                            'LAN Network Diagnostics',
+                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: theme.textPrimary),
+                          ),
+                          const Spacer(),
+                          IconButton(
+                            icon: const Icon(Icons.close_rounded, size: 20),
+                            onPressed: () => Navigator.pop(ctx),
+                            color: theme.textSecondary,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: theme.background,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: theme.border),
+                        ),
+                        child: Column(
+                          children: [
+                            _buildAboutRow('Active Adapter', diag['activeInterface']?.toString() ?? 'Detecting...', theme),
+                            Divider(color: theme.border, height: 16),
+                            _buildAboutRow('Physical IPv4', AuraLanServer().localIp, theme),
+                            Divider(color: theme.border, height: 16),
+                            _buildAboutRow('HTTP Server', 'Port ${AuraLanServer().port} (ACTIVE)', theme),
+                            Divider(color: theme.border, height: 16),
+                            _buildAboutRow('UDP Multicast Group', '224.0.0.167:53317', theme),
+                            Divider(color: theme.border, height: 16),
+                            _buildAboutRow('Discovered Peers', '${peers.length} online', theme),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      if (peers.isNotEmpty) ...[
+                        Text(
+                          'Online LAN Peers:',
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: theme.textSecondary),
+                        ),
+                        const SizedBox(height: 8),
+                        ...peers.map((p) => Container(
+                          margin: const EdgeInsets.only(bottom: 6),
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: theme.background,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: theme.border),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                p.platform.toLowerCase().contains('android') ? Icons.android_rounded : Icons.desktop_windows_rounded,
+                                size: 16,
+                                color: const Color(0xFF10B981),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  '${p.name} (${p.ip}:${p.port})',
+                                  style: TextStyle(fontSize: 11, fontFamily: 'monospace', color: theme.textPrimary),
+                                ),
+                              ),
+                            ],
+                          ),
+                        )),
+                        const SizedBox(height: 12),
+                      ],
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: () {
+                            HapticFeedback.mediumImpact();
+                            AuraDiscoveryService().forceAnnounce();
+                            setModalState(() {});
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('✓ UDP Discovery beacon broadcasted to subnet & multicast!'),
+                                duration: Duration(seconds: 2),
+                              ),
+                            );
+                          },
+                          icon: const Icon(Icons.wifi_tethering_rounded, size: 16),
+                          label: const Text('Force Subnet Announce / Ping Now', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: theme.textPrimary,
+                            foregroundColor: theme.background,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
     );
   }
 }

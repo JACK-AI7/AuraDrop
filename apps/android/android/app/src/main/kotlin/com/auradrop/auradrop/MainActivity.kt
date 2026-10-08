@@ -106,9 +106,12 @@ class MainActivity : FlutterActivity() {
         private const val EVENT_CHANNEL = "com.auradrop.app/events"
         private const val FILE_PICK_CODE = 48291
         private const val AVATAR_PICK_CODE = 48292
-        private const val DEFAULT_PORT = 48291
-        private const val DISCOVERY_GROUP = "239.255.48.29"
-        private const val DISCOVERY_PORT = 48290
+        private const val DEFAULT_PORT = 53317
+        private const val DISCOVERY_GROUP = "224.0.0.167"
+        private const val DISCOVERY_PORT = 53317
+        private const val LEGACY_DISCOVERY_GROUP = "239.255.48.29"
+        private const val LEGACY_DISCOVERY_PORT = 48290
+        private const val LEGACY_TRANSFER_PORT = 48291
         private const val SOCKET_BUFFER_SIZE = 2 * 1024 * 1024 // 2 MB buffer for max wire throughput
         private const val PROGRESS_EVENT_INTERVAL_MS = 90L // ~11 UI updates/sec to avoid IPC bottleneck
         const val INCOMING_REQUEST_CHANNEL_ID = "auradrop_incoming_requests"
@@ -667,8 +670,26 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun getDirectedBroadcastAddress(): InetAddress? {
+        try {
+            val interfaces = NetworkInterface.getNetworkInterfaces()
+            while (interfaces.hasMoreElements()) {
+                val iface = interfaces.nextElement()
+                if (iface.isLoopback || !iface.isUp) continue
+                for (ia in iface.interfaceAddresses) {
+                    val bcast = ia.broadcast
+                    if (bcast != null && bcast is Inet4Address) {
+                        return bcast
+                    }
+                }
+            }
+        } catch (e: Exception) {}
+        return null
+    }
+
     private suspend fun runUdpBroadcaster() = withContext(Dispatchers.IO) {
         val group = InetAddress.getByName(DISCOVERY_GROUP)
+        val legacyGroup = InetAddress.getByName(LEGACY_DISCOVERY_GROUP)
         val broadcastAddr = InetAddress.getByName("255.255.255.255")
         var socket: DatagramSocket? = null
         try {
@@ -684,11 +705,12 @@ class MainActivity : FlutterActivity() {
                     }
                     val beacon = JSONObject().apply {
                         put("type", "AURADROP_BEACON")
-                        put("protocol", "P2PFS/1")
+                        put("protocol", "AURADROP/1")
                         put("deviceId", deviceId)
                         put("name", resolvedDisplayName)
                         put("deviceName", deviceName)
                         put("platform", "android")
+                        put("port", DEFAULT_PORT)
                         put("transferPort", DEFAULT_PORT)
                         put("avatarIndex", prof["avatar_index"]?.toIntOrNull() ?: 0)
                         put("avatarPath", prof["avatar_path"] ?: "")
@@ -696,8 +718,22 @@ class MainActivity : FlutterActivity() {
                         put("timestamp", System.currentTimeMillis())
                     }
                     val bytes = beacon.toString().toByteArray(Charsets.UTF_8)
+
+                    // 1. Multicast to standard group 224.0.0.167
                     socket.send(DatagramPacket(bytes, bytes.size, group, DISCOVERY_PORT))
+
+                    // 2. Global broadcast
                     socket.send(DatagramPacket(bytes, bytes.size, broadcastAddr, DISCOVERY_PORT))
+
+                    // 3. Directed subnet broadcast (e.g. 192.168.0.255)
+                    val directedBcast = getDirectedBroadcastAddress()
+                    if (directedBcast != null) {
+                        socket.send(DatagramPacket(bytes, bytes.size, directedBcast, DISCOVERY_PORT))
+                    }
+
+                    // 4. Legacy multicast & port for older nodes
+                    socket.send(DatagramPacket(bytes, bytes.size, legacyGroup, LEGACY_DISCOVERY_PORT))
+                    socket.send(DatagramPacket(bytes, bytes.size, broadcastAddr, LEGACY_DISCOVERY_PORT))
                 } catch (e: Exception) {
                     // Transient network jitter
                 }
@@ -713,7 +749,8 @@ class MainActivity : FlutterActivity() {
         try {
             socket = MulticastSocket(DISCOVERY_PORT).apply {
                 reuseAddress = true
-                joinGroup(InetAddress.getByName(DISCOVERY_GROUP))
+                try { joinGroup(InetAddress.getByName(DISCOVERY_GROUP)) } catch (_: Exception) {}
+                try { joinGroup(InetAddress.getByName(LEGACY_DISCOVERY_GROUP)) } catch (_: Exception) {}
             }
             val buffer = ByteArray(4096)
 
@@ -723,6 +760,11 @@ class MainActivity : FlutterActivity() {
                 val raw = String(packet.data, 0, packet.length, Charsets.UTF_8)
                 try {
                     val json = JSONObject(raw)
+                    val proto = json.optString("protocol")
+                    if (proto != "AURADROP/1" && proto != "P2PFS/1" && proto != "AURADROP_LOCAL_V1") {
+                        continue
+                    }
+
                     val remoteDeviceId = json.optString("deviceId")
                     val remoteIp = packet.address.hostAddress ?: ""
                     val localIp = getLocalIpAddress()
@@ -730,13 +772,14 @@ class MainActivity : FlutterActivity() {
                         val peerName = json.optString("name", "Unknown Device")
                         val peerDevName = json.optString("deviceName", peerName)
                         val resolvedName = if (peerName.isNotBlank() && peerName != "AuraDrop User") peerName else peerDevName
+                        val transferPort = json.optInt("transferPort", json.optInt("port", DEFAULT_PORT))
                         val peer = PeerInfo(
                             deviceId = remoteDeviceId,
                             displayName = resolvedName,
                             deviceName = peerDevName,
                             platform = json.optString("platform", "android"),
                             ip = remoteIp,
-                            port = json.optInt("transferPort", DEFAULT_PORT),
+                            port = transferPort,
                             avatarIndex = json.optInt("avatarIndex", 0),
                             avatarPath = json.optString("avatarPath", ""),
                             status = json.optString("status", ""),
@@ -770,7 +813,7 @@ class MainActivity : FlutterActivity() {
         if (transferServer != null) return
         serverJob = scope.launch(Dispatchers.IO) {
             try {
-                transferServer = ServerSocket(DEFAULT_PORT, 50).apply {
+                transferServer = ServerSocket(LEGACY_TRANSFER_PORT, 50).apply {
                     receiveBufferSize = SOCKET_BUFFER_SIZE
                     reuseAddress = true
                 }

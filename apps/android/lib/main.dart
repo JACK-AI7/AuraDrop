@@ -251,9 +251,18 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
 
       _discoverySubscription = AuraDiscoveryService().onPeersChanged.listen((peers) {
         if (!mounted) return;
+        final currentPeerIds = peers.map((p) => p.id).toSet();
         setState(() {
           for (final p in peers) {
+            final isNew = !_peers.containsKey(p.id);
             _peers[p.id] = p;
+            if (isNew) {
+              _rippleController.triggerPeerDiscovered();
+            }
+          }
+          _peers.removeWhere((id, p) => p.transport.contains('Wi-Fi') && !currentPeerIds.contains(id));
+          if (_selectedPeer != null && !_peers.containsKey(_selectedPeer!.id)) {
+            _selectedPeer = null;
           }
         });
       });

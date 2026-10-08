@@ -176,20 +176,59 @@ class AuraLanServer {
   }
 
   Future<void> _resolveLocalIp() async {
+    final virtualKeywords = [
+      'vethernet',
+      'wsl',
+      'hyper-v',
+      'virtualbox',
+      'vmware',
+      'docker',
+      'tap',
+      'tun',
+      'tailscale',
+      'zerotier',
+      'loopback'
+    ];
+
     try {
       final interfaces = await NetworkInterface.list(
         includeLoopback: false,
         type: InternetAddressType.IPv4,
       );
+
+      // 1. First pass: Only physical interfaces prioritizing 192.168.x or 10.x
       for (final iface in interfaces) {
+        final lower = iface.name.toLowerCase();
+        final isVirtual = virtualKeywords.any((kw) => lower.contains(kw));
+        if (isVirtual) continue;
+
         for (final addr in iface.addresses) {
           final ip = addr.address;
-          if (ip.startsWith('192.168.') || ip.startsWith('10.') || ip.startsWith('172.')) {
+          if (ip == '127.0.0.1' || ip.startsWith('169.254.')) continue;
+          if (ip.startsWith('192.168.') || ip.startsWith('10.')) {
             _localIp = ip;
+            debugPrint('[AuraLanServer] Selected physical IP: $_localIp on ${iface.name}');
             return;
           }
         }
       }
+
+      // 2. Second pass: Any non-virtual interface IPv4
+      for (final iface in interfaces) {
+        final lower = iface.name.toLowerCase();
+        final isVirtual = virtualKeywords.any((kw) => lower.contains(kw));
+        if (isVirtual) continue;
+
+        for (final addr in iface.addresses) {
+          final ip = addr.address;
+          if (ip != '127.0.0.1' && !ip.startsWith('169.254.')) {
+            _localIp = ip;
+            debugPrint('[AuraLanServer] Fallback non-virtual IP: $_localIp on ${iface.name}');
+            return;
+          }
+        }
+      }
+
       if (interfaces.isNotEmpty && interfaces.first.addresses.isNotEmpty) {
         _localIp = interfaces.first.addresses.first.address;
       }
@@ -235,7 +274,9 @@ class AuraLanServer {
       final path = request.uri.path;
 
       try {
-        if ((path == '/api/auradrop/v1/info' || path == '/api/probe') && request.method == 'GET') {
+        if ((path == '/api/auradrop/v1/ping' || path == '/ping') && request.method == 'GET') {
+          await _handlePing(request);
+        } else if ((path == '/api/auradrop/v1/info' || path == '/api/probe') && request.method == 'GET') {
           await _handleInfo(request);
         } else if (path == '/api/auradrop/v1/health' && request.method == 'GET') {
           await _handleHealth(request);
@@ -265,6 +306,25 @@ class AuraLanServer {
         } catch (_) {}
       }
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // 0. PING (Pre-flight TCP & HTTP Ping: GET /api/auradrop/v1/ping)
+  // ---------------------------------------------------------------------------
+  Future<void> _handlePing(HttpRequest request) async {
+    request.response.statusCode = HttpStatus.ok;
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(jsonEncode({
+      'status': 'ok',
+      'pong': true,
+      'deviceId': _deviceId,
+      'deviceName': _deviceName,
+      'platform': Platform.operatingSystem,
+      'port': _port,
+      'protocol': 'AURADROP_LOCAL_V1',
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+    }));
+    await request.response.close();
   }
 
   // ---------------------------------------------------------------------------

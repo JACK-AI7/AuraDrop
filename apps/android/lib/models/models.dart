@@ -351,6 +351,26 @@ class PeerDevice {
       transport: transport ?? this.transport,
     );
   }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'name': name,
+      'deviceName': deviceName,
+      'platform': platform,
+      'ip': ip,
+      'port': port,
+      'localIp': localIp,
+      'localPort': localPort,
+      'isTrusted': isTrusted,
+      'avatarIndex': avatarIndex,
+      'avatarPath': avatarPath,
+      'status': status,
+      'connectionState': connectionState,
+      'transport': transport,
+      'lastSeen': lastSeen.millisecondsSinceEpoch,
+    };
+  }
 }
 
 class PickedFileMeta {
