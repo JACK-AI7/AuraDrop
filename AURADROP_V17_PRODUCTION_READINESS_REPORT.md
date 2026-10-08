@@ -25,7 +25,7 @@ Under this directive, the system was subjected to strict full-stack verification
 ## 2. NEON POSTGRESQL ARCHITECTURE & LIVE VERIFICATION
 
 ### 2.1 Connection Topology
-- **Cluster Endpoint:** `ep-aged-bonus-b4oq4i1b-pooler.c-6.us-east-2.aws.neon.tech` (AWS us-east-2)
+- **Cluster Endpoint:** `ep-placeholder.us-east-2.aws.neon.tech` (AWS us-east-2)
 - **Database Engine:** PostgreSQL 18.6 with PgBouncer connection pooling (`sslmode=require&channel_binding=require`)
 - **DNS Resolution Fix:** Windows dual-stack IPv6 routing bug addressed by wrapping `dns.lookup` with IPv4 precedence (`family: 4`) in `packages/database/src/neon-client.ts`.
 

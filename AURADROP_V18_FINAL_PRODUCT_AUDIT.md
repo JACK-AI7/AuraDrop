@@ -1,7 +1,7 @@
 # AURADROP V18 — FINAL PRODUCT & ARCHITECTURE AUDIT
 **Date:** October 7, 2026  
 **Status:** PRODUCTION READY  
-**Database:** Neon PostgreSQL Cluster (`ep-aged-bonus-b4oq4i1b-pooler.c-6.us-east-2.aws.neon.tech/neondb`)  
+**Database:** Neon PostgreSQL Cluster (`ep-placeholder.us-east-2.aws.neon.tech/neondb`)  
 **Architecture Topology:** Vercel Web Desktop + Native Android Flutter APK + Signaling Clustering + Neon Database + P2PFS/1 WebRTC Direct  
 
 ---
