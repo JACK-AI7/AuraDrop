@@ -26,11 +26,14 @@ bool FlutterWindow::OnCreate() {
   }
   RegisterPlugins(flutter_controller_->engine());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
-  this->Show();
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
+    ::KillTimer(this->GetHandle(), 1);
     this->Show();
   });
+
+  // Safety fallback: ensure window is visible after 500ms even if frame callback is delayed
+  ::SetTimer(GetHandle(), 1, 500, nullptr);
 
   // Flutter can complete the first frame before the "show window" callback is
   // registered. The following call ensures a frame is pending to ensure the
@@ -52,6 +55,12 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  if (message == WM_TIMER && wparam == 1) {
+    ::KillTimer(hwnd, 1);
+    this->Show();
+    return 0;
+  }
+
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_) {
     std::optional<LRESULT> result =
@@ -60,12 +69,12 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     if (result) {
       return *result;
     }
-  }
 
-  switch (message) {
-    case WM_FONTCHANGE:
-      flutter_controller_->engine()->ReloadSystemFonts();
-      break;
+    switch (message) {
+      case WM_FONTCHANGE:
+        flutter_controller_->engine()->ReloadSystemFonts();
+        break;
+    }
   }
 
   return Win32Window::MessageHandler(hwnd, message, wparam, lparam);

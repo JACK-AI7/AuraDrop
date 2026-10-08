@@ -135,7 +135,7 @@ bool Win32Window::Create(const std::wstring& title,
   double scale_factor = dpi / 96.0;
 
   HWND window = CreateWindow(
-      window_class, title.c_str(), WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+      window_class, title.c_str(), WS_OVERLAPPEDWINDOW,
       Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
       Scale(size.width, scale_factor), Scale(size.height, scale_factor),
       nullptr, nullptr, GetModuleHandle(nullptr), this);
@@ -150,10 +150,10 @@ bool Win32Window::Create(const std::wstring& title,
 }
 
 bool Win32Window::Show() {
-  ShowWindow(window_handle_, SW_SHOWNORMAL);
-  UpdateWindow(window_handle_);
-  SetForegroundWindow(window_handle_);
-  return true;
+  if (window_handle_ == nullptr) {
+    return false;
+  }
+  return ShowWindow(window_handle_, SW_SHOWNORMAL) != FALSE;
 }
 
 // static
@@ -221,7 +221,7 @@ Win32Window::MessageHandler(HWND hwnd,
       return 0;
   }
 
-  return DefWindowProc(window_handle_, message, wparam, lparam);
+  return DefWindowProc(hwnd, message, wparam, lparam);
 }
 
 void Win32Window::Destroy() {
@@ -249,7 +249,6 @@ void Win32Window::SetChildContent(HWND content) {
   MoveWindow(content, frame.left, frame.top, frame.right - frame.left,
              frame.bottom - frame.top, true);
 
-  ShowWindow(content, SW_SHOW);
   SetFocus(child_content_);
 }
 

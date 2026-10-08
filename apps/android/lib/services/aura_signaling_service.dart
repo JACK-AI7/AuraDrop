@@ -325,7 +325,7 @@ class AuraSignalingService {
 
     // 2. Start polling
     _httpPollTimer?.cancel();
-    _httpPollTimer = Timer.periodic(const Duration(milliseconds: 1200), (timer) async {
+    _httpPollTimer = Timer.periodic(const Duration(seconds: 6), (timer) async {
       if (!_shouldReconnect || !_isHttpSignaling) {
         timer.cancel();
         return;
