@@ -225,7 +225,12 @@ class _ChatScreenState extends State<ChatScreen> {
       final msg = ChatMessage.fromMap(event);
       if (msg.peerId == widget.peer.id || msg.senderId == widget.peer.id) {
         setState(() {
-          _messages.add(msg);
+          final existingIdx = _messages.indexWhere((m) => m.id == msg.id || (m.text == msg.text && (m.timestamp.difference(msg.timestamp).inSeconds.abs() < 5)));
+          if (existingIdx != -1) {
+            _messages[existingIdx] = msg;
+          } else {
+            _messages.add(msg);
+          }
         });
         _scrollToBottom();
       }
@@ -280,8 +285,24 @@ class _ChatScreenState extends State<ChatScreen> {
     _textController.clear();
     HapticFeedback.lightImpact();
 
+    final msgId = 'msg_${DateTime.now().millisecondsSinceEpoch}';
+    final optimisticMsg = ChatMessage(
+      id: msgId,
+      peerId: widget.peer.id,
+      peerName: widget.peer.name,
+      senderId: 'me',
+      text: text,
+      timestamp: DateTime.now(),
+      status: 'sending',
+    );
+    setState(() {
+      _messages.add(optimisticMsg);
+    });
+    _scrollToBottom();
+
     await NativeBridgeService.sendChatMessage(
       targetIp: widget.peer.ip,
+      targetPort: widget.peer.port,
       peerId: widget.peer.id,
       peerName: widget.peer.name,
       text: text,

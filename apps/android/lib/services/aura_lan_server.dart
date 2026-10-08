@@ -668,7 +668,8 @@ class AuraLanServer {
         transferredBytes += chunk.length;
 
         final nowMs = stopwatch.elapsedMilliseconds;
-        if (nowMs - lastEmitTime >= 100 || transferredBytes == fileSize) {
+        if (nowMs - lastEmitTime >= 200 || transferredBytes == fileSize) {
+          lastEmitTime = nowMs;
           final elapsedSeconds = math.max(0.001, nowMs / 1000.0);
           final speedMBps = (transferredBytes / (1024 * 1024)) / elapsedSeconds;
           final remainingBytes = math.max(0, fileSize - transferredBytes);
@@ -790,7 +791,13 @@ class AuraLanServer {
     final senderId = data['senderId']?.toString() ?? data['sender_id']?.toString() ?? '';
     final senderName = data['senderName']?.toString() ?? data['sender_name']?.toString() ?? 'Nearby Peer';
     final text = data['text']?.toString() ?? data['content']?.toString() ?? '';
-    final timestamp = (data['timestamp'] as num?)?.toInt() ?? DateTime.now().millisecondsSinceEpoch;
+    int timestamp = DateTime.now().millisecondsSinceEpoch;
+    final rawTs = data['timestamp'];
+    if (rawTs is num) {
+      timestamp = rawTs.toInt();
+    } else if (rawTs is String) {
+      timestamp = int.tryParse(rawTs) ?? (DateTime.tryParse(rawTs)?.millisecondsSinceEpoch ?? timestamp);
+    }
 
     // Record into native SQLite and notify app
     await NativeBridgeService.recordChatMessage(

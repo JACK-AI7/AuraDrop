@@ -456,6 +456,7 @@ class NativeBridgeService {
 
   static Future<void> sendChatMessage({
     required String targetIp,
+    int? targetPort,
     required String peerId,
     required String peerName,
     required String text,
@@ -464,6 +465,7 @@ class NativeBridgeService {
     try {
       await _channel.invokeMethod('sendChatMessage', {
         'targetIp': targetIp,
+        'targetPort': targetPort ?? 53317,
         'peerId': peerId,
         'peerName': peerName,
         'text': text,

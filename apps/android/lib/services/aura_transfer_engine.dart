@@ -227,10 +227,11 @@ class AuraTransferEngine {
       uploadReq.contentLength = resolvedFileSize;
 
       int bytesSent = 0;
+      uploadReq.bufferOutput = false;
       final stopwatch = Stopwatch()..start();
       int lastEmit = 0;
 
-      // Stream file in 64KB chunks directly into HTTP socket
+      // Stream file directly into HTTP socket
       final fileStream = localFile.openRead();
       await for (final chunk in fileStream) {
         if (_isCancelled) {
@@ -242,7 +243,8 @@ class AuraTransferEngine {
         bytesSent += chunk.length;
 
         final nowMs = stopwatch.elapsedMilliseconds;
-        if (nowMs - lastEmit >= 100 || bytesSent == resolvedFileSize) {
+        if (nowMs - lastEmit >= 200 || bytesSent == resolvedFileSize) {
+          lastEmit = nowMs;
           final elapsedSeconds = math.max(0.001, nowMs / 1000.0);
           final speedMBps = (bytesSent / (1024 * 1024)) / elapsedSeconds;
           final remainingBytes = math.max(0, resolvedFileSize - bytesSent);

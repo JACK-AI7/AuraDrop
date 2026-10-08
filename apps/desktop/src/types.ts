@@ -53,3 +53,12 @@ export interface ChatMessage {
   isOutgoing: boolean;
 }
 
+export interface UpdateInfo {
+  hasUpdate: boolean;
+  currentVersion: string;
+  latestVersion: string;
+  releaseNotes: string;
+  downloadUrl?: string | null;
+  pubDate: string;
+}
+

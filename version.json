@@ -1,0 +1,15 @@
+{
+  "version": "2.0.1",
+  "version_code": 4,
+  "published_at": "2026-10-09T00:00:00Z",
+  "release_notes": "AuraDrop v2.0.1: Ultra-fast 100+ MB/s transfers, pure black minimal UI, 24/7 real peer proximity detection, zero QR dependencies, cross-platform P2P Chat Hub, and enlarged 3D Globe.",
+  "windows": {
+    "version": "2.0.1",
+    "download_url": "https://github.com/JACK-AI7/AuraDrop/releases/download/v2.0.1/AuraDrop-Setup.exe"
+  },
+  "android": {
+    "version": "2.0.1",
+    "version_code": 4,
+    "download_url": "https://github.com/JACK-AI7/AuraDrop/releases/download/v2.0.1/AuraDrop-Android.apk"
+  }
+}

@@ -1,6 +1,6 @@
 [package]
 name = "auradrop"
-version = "2.0.0"
+version = "2.0.1"
 description = "AuraDrop Desktop Native File Sharing"
 authors = ["AuraDrop Team"]
 edition = "2021"

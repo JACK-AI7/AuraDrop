@@ -207,8 +207,74 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
       ctx.fillText('YOU', ux, uy + 17);
     }
 
-    // 4. Discovered Peer Markers
+    // 4. Dedicated 3D Connection Beam Pass for Selected Peer
     const angleStep = (2 * Math.PI) / Math.max(1, peers.length);
+    const selectedPeer = peers.find((p) => p.id === selectedPeerId);
+    if (selectedPeer) {
+      const sIdx = peers.indexOf(selectedPeer);
+      const sHash = selectedPeer.id.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0);
+      const sLat = ((sHash % 50) / 100.0) - 0.2;
+      const sLon = sIdx * angleStep + 0.6;
+      const sPeerVec = latLonToVec3(sLat, sLon);
+
+      const segments = 40;
+      ctx.beginPath();
+      let first = true;
+      const arcScreenPoints: { x: number; y: number; z: number }[] = [];
+
+      for (let s = 0; s <= segments; s++) {
+        const t = s / segments;
+        const interp = slerp(userSpherical, sPeerVec, t);
+        // Parabolic radial elevation above globe sphere
+        const lift = 1.0 + 0.28 * Math.sin(Math.PI * t);
+        const lifted: Vec3 = {
+          x: interp.x * lift,
+          y: interp.y * lift,
+          z: interp.z * lift,
+        };
+        const rot = rotateX(rotateY(lifted, yaw), pitch);
+        const sx = center.x + rot.x * radius;
+        const sy = center.y + rot.y * radius;
+        arcScreenPoints.push({ x: sx, y: sy, z: rot.z });
+
+        if (first) {
+          ctx.moveTo(sx, sy);
+          first = false;
+        } else {
+          ctx.lineTo(sx, sy);
+        }
+      }
+
+      ctx.save();
+      ctx.strokeStyle = isTransferring ? '#FFFFFF' : 'rgba(255, 255, 255, 0.85)';
+      ctx.lineWidth = isTransferring ? 2.5 : 1.8;
+      ctx.shadowColor = 'rgba(255, 255, 255, 0.7)';
+      ctx.shadowBlur = isTransferring ? 12 : 6;
+      ctx.stroke();
+      ctx.restore();
+
+      // Animated energy particle traversing the arc beam
+      if (arcScreenPoints.length > 0) {
+        const pulsePeriod = isTransferring ? 750 : 1600;
+        const pulseT = ((Date.now() % pulsePeriod) / pulsePeriod);
+        const idx = Math.min(
+          arcScreenPoints.length - 1,
+          Math.floor(pulseT * arcScreenPoints.length)
+        );
+        const packetPos = arcScreenPoints[idx];
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(packetPos.x, packetPos.y, isTransferring ? 4.5 : 3.5, 0, Math.PI * 2);
+        ctx.fillStyle = '#FFFFFF';
+        ctx.shadowColor = '#FFFFFF';
+        ctx.shadowBlur = 10;
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    // 5. Discovered Peer Markers
     peers.forEach((peer, i) => {
       const hash = peer.id.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0);
       const lat = ((hash % 50) / 100.0) - 0.2;
@@ -216,11 +282,13 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
 
       const peerVec = latLonToVec3(lat, lon);
       const peerRot = rotateX(rotateY(peerVec, yaw), pitch);
+      const isSelected = selectedPeerId === peer.id;
 
-      if (peerRot.z > -0.15) {
+      // Front hemisphere or selected peer (which stays visible with subtle back-fade)
+      if (peerRot.z > -0.15 || isSelected) {
         const px = center.x + peerRot.x * radius;
         const py = center.y + peerRot.y * radius;
-        const isSelected = selectedPeerId === peer.id;
+        const opacity = peerRot.z > -0.15 ? 1.0 : 0.55;
 
         visiblePeerPositionsRef.current.set(peer.id, { x: px, y: py, peer });
 
@@ -228,65 +296,16 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
         if (isSelected) {
           ctx.beginPath();
           ctx.arc(px, py, 13, 0, Math.PI * 2);
-          ctx.strokeStyle = '#FFFFFF';
+          ctx.strokeStyle = `rgba(255, 255, 255, ${opacity})`;
           ctx.lineWidth = 2.0;
           ctx.stroke();
 
           if (isTransferring) {
             ctx.beginPath();
             ctx.arc(px, py, 19, 0, Math.PI * 2);
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+            ctx.strokeStyle = `rgba(255, 255, 255, ${opacity * 0.6})`;
             ctx.lineWidth = 1.2;
             ctx.stroke();
-          }
-
-          // 3D Connection Arc Beam between YOU and Selected Peer
-          const segments = 32;
-          ctx.beginPath();
-          let first = true;
-          const arcScreenPoints: { x: number; y: number }[] = [];
-
-          for (let s = 0; s <= segments; s++) {
-            const t = s / segments;
-            const interp = slerp(userSpherical, peerVec, t);
-            // Parabolic radial elevation above globe sphere
-            const lift = 1.0 + 0.22 * Math.sin(Math.PI * t);
-            const lifted: Vec3 = {
-              x: interp.x * lift,
-              y: interp.y * lift,
-              z: interp.z * lift,
-            };
-            const rot = rotateX(rotateY(lifted, yaw), pitch);
-            const sx = center.x + rot.x * radius;
-            const sy = center.y + rot.y * radius;
-            arcScreenPoints.push({ x: sx, y: sy });
-
-            if (first) {
-              ctx.moveTo(sx, sy);
-              first = false;
-            } else {
-              ctx.lineTo(sx, sy);
-            }
-          }
-
-          ctx.strokeStyle = isTransferring ? '#FFFFFF' : 'rgba(255, 255, 255, 0.75)';
-          ctx.lineWidth = isTransferring ? 2.5 : 1.8;
-          ctx.stroke();
-
-          // Animated energy particle traversing the arc beam
-          if (arcScreenPoints.length > 0) {
-            const pulsePeriod = isTransferring ? 900 : 2000;
-            const pulseT = ((Date.now() % pulsePeriod) / pulsePeriod);
-            const idx = Math.min(
-              arcScreenPoints.length - 1,
-              Math.floor(pulseT * arcScreenPoints.length)
-            );
-            const packetPos = arcScreenPoints[idx];
-
-            ctx.beginPath();
-            ctx.arc(packetPos.x, packetPos.y, isTransferring ? 4.5 : 3.0, 0, Math.PI * 2);
-            ctx.fillStyle = '#FFFFFF';
-            ctx.fill();
           }
         }
 
@@ -294,13 +313,15 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
         const isAndroid = peer.platform.toLowerCase().includes('android');
         ctx.beginPath();
         ctx.arc(px, py, isSelected ? 5.5 : 4.2, 0, Math.PI * 2);
-        ctx.fillStyle = isSelected ? '#FFFFFF' : 'rgba(240, 240, 245, 0.9)';
+        ctx.fillStyle = isSelected
+          ? `rgba(255, 255, 255, ${opacity})`
+          : `rgba(240, 240, 245, ${opacity * 0.9})`;
         ctx.fill();
 
         // Label
         ctx.font = isSelected ? '700 11px Inter, sans-serif' : '600 10px Inter, sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillStyle = '#FFFFFF';
+        ctx.fillStyle = `rgba(255, 255, 255, ${opacity})`;
         const displayLabel = isAndroid ? `📱 ${peer.name}` : peer.name;
         ctx.fillText(displayLabel, px, py + 19);
       }

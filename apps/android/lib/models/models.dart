@@ -496,17 +496,33 @@ class ChatMessage {
   });
 
   factory ChatMessage.fromMap(Map<dynamic, dynamic> map) {
+    int ts = 0;
+    final rawTs = map['timestamp'];
+    if (rawTs is num) {
+      ts = rawTs.toInt();
+    } else if (rawTs is String) {
+      ts = int.tryParse(rawTs) ?? (DateTime.tryParse(rawTs)?.millisecondsSinceEpoch ?? 0);
+    }
+
+    int? fSize;
+    final rawFSize = map['fileSize'];
+    if (rawFSize is num) {
+      fSize = rawFSize.toInt();
+    } else if (rawFSize is String) {
+      fSize = int.tryParse(rawFSize);
+    }
+
     return ChatMessage(
       id: map['id']?.toString() ?? '',
       peerId: map['peerId']?.toString() ?? '',
       peerName: map['peerName']?.toString() ?? '',
       senderId: map['senderId']?.toString() ?? '',
       text: map['text']?.toString() ?? '',
-      timestamp: DateTime.fromMillisecondsSinceEpoch((map['timestamp'] as num?)?.toInt() ?? 0),
+      timestamp: DateTime.fromMillisecondsSinceEpoch(ts > 0 ? ts : DateTime.now().millisecondsSinceEpoch),
       status: map['status']?.toString() ?? 'sent',
       messageType: map['messageType']?.toString() ?? 'text',
       fileName: map['fileName']?.toString(),
-      fileSize: (map['fileSize'] as num?)?.toInt(),
+      fileSize: fSize,
     );
   }
 }

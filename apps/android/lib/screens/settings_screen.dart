@@ -3,9 +3,9 @@ import 'package:flutter/services.dart';
 import '../models/models.dart';
 import '../services/native_bridge.dart';
 import '../services/profile_repository.dart';
-import '../services/aura_signaling_service.dart';
 import '../services/aura_discovery_service.dart';
 import '../services/aura_lan_server.dart';
+import '../services/aura_update_service.dart';
 import '../theme/aura_theme.dart';
 import '../components/minimal_components.dart';
 
@@ -44,7 +44,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isLoadingPeers = true;
   bool _backgroundDiscovery = true;
   bool _allowNearbyRequests = true;
-  late final TextEditingController _signalingUrlController;
+  bool _isCheckingUpdate = false;
 
   @override
   void initState() {
@@ -52,14 +52,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _selectedThemeMode = widget.currentThemeMode;
     _selectedVisibilityMode = widget.currentVisibility;
     _selectedAnimationSettings = widget.animationSettings;
-    _signalingUrlController = TextEditingController(text: AuraSignalingService().currentUrl);
     _loadAllData();
-  }
-
-  @override
-  void dispose() {
-    _signalingUrlController.dispose();
-    super.dispose();
   }
 
   Future<void> _loadAllData() async {
@@ -478,8 +471,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 24),
 
-            // Diagnostics & Network Section
-            _buildSectionHeader('Diagnostics & Network', theme),
+            // Network Engine & Architecture Section
+            _buildSectionHeader('Network Engine & Architecture', theme),
             const SizedBox(height: 8),
             MinimalCard(
               padding: const EdgeInsets.all(14),
@@ -491,174 +484,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       Container(
                         width: 8,
                         height: 8,
-                        decoration: BoxDecoration(
-                          color: AuraSignalingService().isConnected ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+                        decoration: const BoxDecoration(
+                          color: Color(0xFF10B981),
                           shape: BoxShape.circle,
                         ),
                       ),
                       const SizedBox(width: 8),
                       Text(
-                        'Signaling Infrastructure',
+                        'Direct LAN Offline Socket',
                         style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: theme.textPrimary),
                       ),
                       const Spacer(),
                       Text(
-                        AuraSignalingService().isConnected ? 'CONNECTED' : 'DISCONNECTED',
+                        'ACTIVE',
                         style: TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.w700,
-                          color: AuraSignalingService().isConnected ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+                          color: const Color(0xFF10B981),
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Active Endpoint: ${AuraSignalingService().currentUrl}',
-                    style: TextStyle(fontSize: 11, color: theme.textSecondary, fontFamily: 'monospace'),
-                  ),
-                  const SizedBox(height: 10),
-                  Container(
-                    decoration: BoxDecoration(
-                      color: theme.cardBackground,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: theme.border, width: 1.0),
-                    ),
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _signalingUrlController,
-                            style: TextStyle(fontSize: 12, color: theme.textPrimary, fontFamily: 'monospace'),
-                            decoration: InputDecoration(
-                              hintText: 'http://192.168.0.8:5173/api/signaling',
-                              hintStyle: TextStyle(fontSize: 11, color: theme.textSecondary),
-                              border: InputBorder.none,
-                              isDense: true,
-                              contentPadding: const EdgeInsets.symmetric(vertical: 8),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        ElevatedButton(
-                          onPressed: () {
-                            final val = _signalingUrlController.text.trim();
-                            if (val.isNotEmpty) {
-                              HapticFeedback.mediumImpact();
-                              AuraSignalingService().setSignalingUrl(val);
-                              _signalingUrlController.text = AuraSignalingService().currentUrl;
-                              setState(() {});
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text('Connected: ${AuraSignalingService().currentUrl}'), duration: const Duration(seconds: 2)),
-                              );
-                            }
-                          },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: theme.textPrimary,
-                            foregroundColor: theme.background,
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                            minimumSize: Size.zero,
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                          ),
-                          child: const Text('Connect', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700)),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 6,
-                    children: [
-                      ActionChip(
-                        label: Text('📋 Paste & Connect', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: theme.textPrimary)),
-                        backgroundColor: theme.cardBackground,
-                        side: BorderSide(color: theme.border, width: 1.0),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        onPressed: () async {
-                          HapticFeedback.lightImpact();
-                          final clipboardData = await Clipboard.getData('text/plain');
-                          if (!context.mounted) return;
-                          final text = clipboardData?.text?.trim() ?? '';
-                          if (text.isNotEmpty) {
-                            final normalized = AuraSignalingService.normalizeUrl(text);
-                            _signalingUrlController.text = normalized;
-                            AuraSignalingService().setSignalingUrl(normalized);
-                            setState(() {});
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('Connected to: $normalized'), duration: const Duration(seconds: 2)),
-                            );
-                          } else {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('Clipboard is empty'), duration: Duration(seconds: 1)),
-                            );
-                          }
-                        },
-                      ),
-                      ActionChip(
-                        label: Text('💻 PC Wi-Fi (5173)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: theme.textPrimary)),
-                        backgroundColor: theme.cardBackground,
-                        side: BorderSide(color: theme.border, width: 1.0),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        onPressed: () {
-                          HapticFeedback.lightImpact();
-                          const url = 'http://192.168.0.8:5173/api/signaling';
-                          _signalingUrlController.text = url;
-                          AuraSignalingService().setSignalingUrl(url);
-                          setState(() {});
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Switched to PC Wi-Fi (Port 5173)'), duration: Duration(seconds: 2)),
-                          );
-                        },
-                      ),
-                      ActionChip(
-                        label: Text('🏠 Backend (48280)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: theme.textPrimary)),
-                        backgroundColor: theme.cardBackground,
-                        side: BorderSide(color: theme.border, width: 1.0),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        onPressed: () {
-                          HapticFeedback.lightImpact();
-                          const url = 'ws://192.168.0.8:48280';
-                          _signalingUrlController.text = url;
-                          AuraSignalingService().setSignalingUrl(url);
-                          setState(() {});
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Switched to Backend LAN (Port 48280)'), duration: Duration(seconds: 2)),
-                          );
-                        },
-                      ),
-                      ActionChip(
-                        label: Text('📱 Emulator', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: theme.textPrimary)),
-                        backgroundColor: theme.cardBackground,
-                        side: BorderSide(color: theme.border, width: 1.0),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        onPressed: () {
-                          HapticFeedback.lightImpact();
-                          const url = 'http://10.0.2.2:5173/api/signaling';
-                          _signalingUrlController.text = url;
-                          AuraSignalingService().setSignalingUrl(url);
-                          setState(() {});
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Switched to Emulator Signaling'), duration: Duration(seconds: 2)),
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-                  Divider(color: theme.border, height: 20),
+                  const SizedBox(height: 12),
                   _buildAboutRow('Physical LAN IP', AuraLanServer().localIp, theme),
                   Divider(color: theme.border, height: 16),
-                  _buildAboutRow('HTTP Turbo Port', '${AuraLanServer().port}', theme),
+                  _buildAboutRow('Turbo Transfer Port', '${AuraLanServer().port}', theme),
                   Divider(color: theme.border, height: 16),
-                  _buildAboutRow('UDP Discovery Port', '${AuraDiscoveryService.discoveryPort}', theme),
+                  _buildAboutRow('Discovery Port', '${AuraDiscoveryService.discoveryPort}', theme),
                   Divider(color: theme.border, height: 16),
-                  _buildAboutRow('Local Transport', 'AuraDrop Direct LAN HTTP + UDP', theme),
+                  _buildAboutRow('Discovery Protocol', 'AURADROP/1 (UDP Multicast)', theme),
                   Divider(color: theme.border, height: 16),
-                  _buildAboutRow('WebRTC Transport', 'RTCDataChannel (Direct P2P)', theme),
+                  _buildAboutRow('Transfer Mode', 'Direct Streaming Socket (Zero Cloud)', theme),
                   Divider(color: theme.border, height: 16),
-                  _buildAboutRow('Integrity Check', 'SHA-256 Stream Finalize', theme),
+                  _buildAboutRow('File Integrity', 'Hardware-Accelerated SHA-256', theme),
                   const SizedBox(height: 14),
                   SizedBox(
                     width: double.infinity,
@@ -680,8 +538,144 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ],
               ),
             ),
+            const SizedBox(height: 24),
+
+            // Over-The-Air (OTA) Software Updates Section
+            _buildSectionHeader('Over-The-Air (OTA) Updates', theme),
+            const SizedBox(height: 8),
+            MinimalCard(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.system_update_rounded, color: theme.textPrimary, size: 18),
+                      const SizedBox(width: 8),
+                      Text(
+                        'AuraDrop OTA Software',
+                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: theme.textPrimary),
+                      ),
+                      const Spacer(),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: theme.subtleHighlight,
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: theme.border, width: 0.8),
+                        ),
+                        child: Text(
+                          'v${AuraUpdateService.currentVersion}',
+                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: theme.textPrimary),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Direct wireless updates over the air from official GitHub Releases.',
+                    style: TextStyle(fontSize: 12, color: theme.textSecondary),
+                  ),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    width: double.infinity,
+                    child: MinimalButton(
+                      text: _isCheckingUpdate ? 'Checking for Updates...' : 'Check for Updates Now',
+                      icon: _isCheckingUpdate ? null : Icons.refresh_rounded,
+                      onPressed: _isCheckingUpdate ? () {} : () => _checkForOtaUpdates(context, theme),
+                    ),
+                  ),
+                ],
+              ),
+            ),
             const SizedBox(height: 32),
           ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _checkForOtaUpdates(BuildContext context, AuraTheme theme) async {
+    setState(() => _isCheckingUpdate = true);
+    final info = await AuraUpdateService().checkForUpdate();
+    if (!mounted || !context.mounted) return;
+    setState(() => _isCheckingUpdate = false);
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: theme.cardBackground,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          border: Border.all(color: theme.border, width: 1.0),
+        ),
+        child: SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    info.hasUpdate ? Icons.system_update_rounded : Icons.check_circle_rounded,
+                    color: info.hasUpdate ? const Color(0xFF10B981) : theme.textPrimary,
+                    size: 24,
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    info.hasUpdate ? 'Update Available!' : 'Up to Date',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: theme.textPrimary,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text(
+                info.hasUpdate
+                    ? 'A newer version of AuraDrop (v${info.latestVersion}) is available. Current installed: v${info.currentVersion}.'
+                    : 'AuraDrop v${info.currentVersion} is currently the latest production version.',
+                style: TextStyle(fontSize: 13, color: theme.textSecondary, height: 1.4),
+              ),
+              const SizedBox(height: 12),
+              if (info.releaseNotes.isNotEmpty) ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: theme.subtleHighlight,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: theme.border, width: 0.8),
+                  ),
+                  child: Text(
+                    info.releaseNotes,
+                    style: TextStyle(fontSize: 12, color: theme.textPrimary, height: 1.3),
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
+              if (info.hasUpdate && info.downloadUrl.isNotEmpty) ...[
+                MinimalButton(
+                  text: 'Download & Install v${info.latestVersion}',
+                  icon: Icons.download_rounded,
+                  onPressed: () async {
+                    Navigator.pop(ctx);
+                    await NativeBridgeService.openFile(info.downloadUrl);
+                  },
+                ),
+              ] else ...[
+                MinimalButton(
+                  text: 'Close',
+                  isPrimary: false,
+                  onPressed: () => Navigator.pop(ctx),
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );

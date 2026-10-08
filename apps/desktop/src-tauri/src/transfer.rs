@@ -148,11 +148,11 @@ impl TransferService {
         })
         .await;
 
-        // Step 1: Compute SHA-256
+        // Step 1: Compute SHA-256 (optimized 1MB read chunks)
         let sha256_hash = {
             let mut file = File::open(&path).map_err(|e| e.to_string())?;
             let mut hasher = Sha256::new();
-            let mut buffer = [0u8; 65536];
+            let mut buffer = vec![0u8; 1024 * 1024];
             loop {
                 let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
                 if n == 0 {
@@ -166,6 +166,8 @@ impl TransferService {
         // Step 2: Prepare upload
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(3600))
+            .tcp_nodelay(true)
+            .pool_max_idle_per_host(10)
             .build()
             .map_err(|e| e.to_string())?;
 
@@ -201,7 +203,7 @@ impl TransferService {
             .await
             .map_err(|e| format!("Invalid prepare response: {}", e))?;
 
-        // Step 3: Stream file bytes with progress tracking
+        // Step 3: Stream file bytes with high-speed 1MB chunk pipeline
         let upload_url = format!(
             "http://{}:{}/api/auradrop/v1/upload?transferId={}&token={}",
             peer_ip, peer_port, transfer_id, prep_data.one_time_token
@@ -218,7 +220,7 @@ impl TransferService {
         let start_time = Instant::now();
         let mut last_emit = Instant::now();
 
-        let reader_stream = tokio_util::io::ReaderStream::new(file_async).map(move |item| {
+        let reader_stream = tokio_util::io::ReaderStream::with_capacity(file_async, 1024 * 1024).map(move |item| {
             if let Ok(ref bytes) = item {
                 transferred += bytes.len() as u64;
                 if last_emit.elapsed().as_millis() >= 200 || transferred == file_size {
@@ -409,6 +411,16 @@ impl TransferService {
         let hist = self.chat_history.read().await;
         hist.get(peer_id).cloned().unwrap_or_default()
     }
+
+    pub async fn get_all_chat_messages(&self) -> Vec<ChatMessage> {
+        let hist = self.chat_history.read().await;
+        let mut all: Vec<ChatMessage> = Vec::new();
+        for (_, msgs) in hist.iter() {
+            all.extend(msgs.clone());
+        }
+        all.sort_by_key(|m| m.timestamp);
+        all
+    }
 }
 
 // Axum Handlers
@@ -504,7 +516,7 @@ async fn handle_upload(
     };
 
     let target_file_path = service.downloads_dir.join(&session.file_name);
-    let mut file = match File::create(&target_file_path) {
+    let raw_file = match File::create(&target_file_path) {
         Ok(f) => f,
         Err(e) => {
             return Err((
@@ -513,6 +525,7 @@ async fn handle_upload(
             ));
         }
     };
+    let mut file = std::io::BufWriter::with_capacity(1024 * 1024, raw_file);
 
     let mut hasher = Sha256::new();
     let mut transferred = 0u64;
@@ -581,6 +594,14 @@ async fn handle_upload(
                 })
                 .await;
         }
+    }
+
+    if let Err(e) = file.flush() {
+        let _ = fs::remove_file(&target_file_path);
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("Disk write flush error: {}", e)})),
+        ));
     }
 
     let calculated_hash = hex::encode(hasher.finalize());

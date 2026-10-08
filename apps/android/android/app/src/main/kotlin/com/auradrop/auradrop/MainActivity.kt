@@ -460,10 +460,11 @@ class MainActivity : FlutterActivity() {
                 }
                 "sendChatMessage" -> {
                     val targetIp = call.argument<String>("targetIp") ?: ""
+                    val targetPort = (call.argument<Number>("targetPort"))?.toInt() ?: DEFAULT_PORT
                     val peerId = call.argument<String>("peerId") ?: ""
                     val peerName = call.argument<String>("peerName") ?: "Nearby Peer"
                     val text = call.argument<String>("text") ?: ""
-                    sendOfflineChatMessage(targetIp, peerId, peerName, text)
+                    sendOfflineChatMessage(targetIp, targetPort, peerId, peerName, text)
                     result.success(true)
                 }
                 "sendChatTyping" -> {
@@ -1785,7 +1786,7 @@ class MainActivity : FlutterActivity() {
     // ----------------------------------------------------
     // Offline P2P Chat Client Socket
     // ----------------------------------------------------
-    private fun sendOfflineChatMessage(targetIp: String, peerId: String, peerName: String, text: String) {
+    private fun sendOfflineChatMessage(targetIp: String, targetPort: Int = DEFAULT_PORT, peerId: String, peerName: String, text: String) {
         val messageId = "msg_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8)
         val timestamp = System.currentTimeMillis()
 
@@ -1804,7 +1805,8 @@ class MainActivity : FlutterActivity() {
         scope.launch(Dispatchers.IO) {
             var delivered = false
             try {
-                val url = URL("http://$targetIp:$DEFAULT_PORT/api/auradrop/v1/chat")
+                val effectivePort = if (targetPort > 0) targetPort else DEFAULT_PORT
+                val url = URL("http://$targetIp:$effectivePort/api/auradrop/v1/chat")
                 val conn = (url.openConnection() as HttpURLConnection).apply {
                     requestMethod = "POST"
                     connectTimeout = 3000

@@ -1,12 +1,8 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:qr_flutter/qr_flutter.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
-
 import 'models/models.dart';
 import 'theme/aura_theme.dart';
 import 'components/hero_globe.dart';
@@ -14,7 +10,6 @@ import 'components/minimal_navigation.dart';
 import 'components/minimal_components.dart';
 import 'components/aura_data_stream.dart';
 import 'components/aura_completion_burst.dart';
-import 'components/aura_proximity_ripple.dart';
 import 'components/notification_host.dart';
 import 'services/native_bridge.dart';
 import 'screens/transfers_screen.dart';
@@ -161,9 +156,6 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
   final Set<String> _trustedPeerIds = {};
   PeerDevice? _selectedPeer;
 
-  // Animation & Ripple Controller
-  final AuraProximityRippleController _rippleController = AuraProximityRippleController();
-
   // Selected Files Tray
   final List<PickedFileMeta> _selectedFiles = [];
 
@@ -199,7 +191,6 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
     _transferCompleteSubscription?.cancel();
     _transferErrorSubscription?.cancel();
     AuraDiscoveryService().stop();
-    _rippleController.dispose();
     super.dispose();
   }
 
@@ -256,11 +247,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
         final currentPeerIds = peers.map((p) => p.id).toSet();
         setState(() {
           for (final p in peers) {
-            final isNew = !_peers.containsKey(p.id);
             _peers[p.id] = p;
-            if (isNew) {
-              _rippleController.triggerPeerDiscovered();
-            }
           }
           _peers.removeWhere((id, p) => p.transport.contains('Wi-Fi') && !currentPeerIds.contains(id));
           if (_selectedPeer != null && !_peers.containsKey(_selectedPeer!.id)) {
@@ -292,7 +279,6 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
       _transferCompleteSubscription = AuraTransferEngine().onCompleted.listen((data) async {
         if (!mounted) return;
         HapticFeedback.heavyImpact();
-        _rippleController.triggerTransferComplete();
         final path = data['filePath']?.toString() ?? _lastSavedPath;
         final fName = data['fileName']?.toString() ?? _activeFileName;
         final fSize = (data['fileSize'] as num?)?.toInt() ?? _totalTransferBytes;
@@ -341,7 +327,6 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
       _transferErrorSubscription = AuraTransferEngine().onError.listen((err) {
         if (!mounted) return;
         HapticFeedback.vibrate();
-        _rippleController.triggerTransferFailed();
         setState(() {
           _transferState = TransferState.failed;
           _lastErrorMessage = err;
@@ -394,7 +379,6 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
           fileName: fileName,
           fileSize: fileSize,
           onAccept: () async {
-            _rippleController.triggerTransferStart();
             setState(() {
               _transferState = TransferState.transferring;
               _activeTransferId = transferId;
@@ -436,7 +420,6 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
           _peers[peer.id] = peer;
         });
         if (isNew) {
-          _rippleController.triggerPeerDiscovered();
           NativeBridgeService.showNameDropProximityAlert(
             peerId: peer.id,
             peerName: peer.name,
@@ -483,7 +466,6 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
       AuraWebRtcService().onTransferComplete.listen((data) {
         if (!mounted) return;
         HapticFeedback.heavyImpact();
-        _rippleController.triggerTransferComplete();
         setState(() {
           _transferState = TransferState.completed;
           _lastSavedPath = data['filePath']?.toString() ?? '';
@@ -494,7 +476,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
       AuraWebRtcService().onConnectionState.listen((st) {
         if (!mounted) return;
         if (st == 'READY_TO_TRANSFER') {
-          _rippleController.triggerConnectionEstablished();
+          // Connected
         } else if (st == 'FAILED') {
           setState(() => _transferState = TransferState.failed);
         }
@@ -570,7 +552,6 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
             _peers[peer.id] = peer;
           });
           if (isNew) {
-            _rippleController.triggerPeerDiscovered();
             NativeBridgeService.showNameDropProximityAlert(
               peerId: peer.id,
               peerName: peer.name,
@@ -590,7 +571,6 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
         final st = event['state']?.toString();
         setState(() {
           if (st == 'READY_TO_TRANSFER') {
-            _rippleController.triggerConnectionEstablished();
             if (_selectedPeer != null) {
               _selectedPeer = _selectedPeer!.copyWith(connectionState: 'READY_TO_TRANSFER');
             }
@@ -613,7 +593,6 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
           fileName: fileName,
           fileSize: totalBytes,
           onAccept: () async {
-            _rippleController.triggerTransferStart();
             setState(() {
               _transferState = TransferState.transferring;
               _activeTransferId = transferId;
@@ -651,7 +630,6 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
         break;
 
       case 'chatMessageReceived':
-        _rippleController.triggerChatReceived();
         final pId = event['peerId']?.toString() ?? '';
         final sName = event['senderName']?.toString() ?? 'Unknown Device';
         final text = event['text']?.toString() ?? '';
@@ -692,7 +670,6 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
 
       case 'transferCompleted':
         HapticFeedback.mediumImpact();
-        _rippleController.triggerTransferComplete();
         final path = event['savedPath']?.toString() ?? '';
         final finalFileName = event['fileName']?.toString() ?? _activeFileName;
         final finalTotal = (event['totalBytes'] as num?)?.toInt() ?? _totalTransferBytes;
@@ -724,7 +701,6 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
       case 'notificationAccept':
         final tId = event['transferId']?.toString() ?? '';
         if (tId == _activeTransferId && _activePeer != null) {
-          _rippleController.triggerTransferStart();
           setState(() {
             _transferState = TransferState.transferring;
             _transferredBytes = 0;
@@ -752,7 +728,6 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
 
       case 'transferError':
         HapticFeedback.vibrate();
-        _rippleController.triggerTransferFailed();
         final err = event['error']?.toString() ?? 'Transfer failed';
         setState(() {
           _transferState = TransferState.failed;
@@ -830,8 +805,6 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
       _etaSeconds = 0;
       _transferState = TransferState.waitingForAccept;
     });
-
-    _rippleController.triggerTransferStart();
 
     // 1. Direct High-Speed Wi-Fi LAN HTTP Socket streaming route (AirDrop / LocalSend class)
     if (peer.ip.isNotEmpty && peer.ip != 'WebRTC P2P' && peer.port > 0) {
@@ -927,7 +900,6 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
       fileName: fileName,
       fileSize: totalBytes,
       onAccept: () async {
-        _rippleController.triggerTransferStart();
         setState(() {
           _transferState = TransferState.transferring;
           _activeTransferId = transferId;
@@ -1123,7 +1095,6 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                         onPressed: () async {
                           Navigator.pop(ctx);
                           InAppNotificationController().dismissById('req_$transferId');
-                          _rippleController.triggerTransferStart();
                           setState(() {
                             _transferState = TransferState.transferring;
                             _activeTransferId = transferId;
@@ -1155,97 +1126,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
     );
   }
 
-  Future<void> _handleScannedQrData(String raw) async {
-    try {
-      String desktopId = '';
-      String desktopName = 'Desktop Browser';
-      String? signalingUrl;
-      String? localIp;
-      int? localPort;
 
-      final trimmed = raw.trim();
-      if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-        final data = jsonDecode(trimmed);
-        if (data is Map<String, dynamic>) {
-          if (data['protocol'] == 'AURADROP_PAIR_V1' || data.containsKey('desktopId')) {
-            desktopId = (data['desktopId'] ?? '').toString();
-            desktopName = (data['desktopName'] ?? 'Desktop Browser').toString();
-            signalingUrl = data['signalingUrl']?.toString();
-          } else if (data['protocol'] == 'AURADROP_LOCAL_V1' || data.containsKey('deviceId')) {
-            desktopId = (data['deviceId'] ?? '').toString();
-            desktopName = (data['deviceName'] ?? 'Desktop Browser').toString();
-            localIp = data['ip']?.toString();
-            if (data['port'] != null) {
-              localPort = int.tryParse(data['port'].toString());
-            }
-          }
-        }
-      } else if (trimmed.contains('pair=')) {
-        final uri = Uri.tryParse(trimmed);
-        if (uri != null) {
-          desktopId = uri.queryParameters['pair'] ?? '';
-          desktopName = uri.queryParameters['name'] ?? 'Desktop Browser';
-        }
-      }
-
-      if (desktopId.isEmpty) {
-        _showSnackBar('Could not recognize AuraDrop QR code.', isSuccess: false);
-        return;
-      }
-
-      // 1. Update signaling URL if provided
-      if (signalingUrl != null && signalingUrl.isNotEmpty) {
-        AuraSignalingService().setSignalingUrl(signalingUrl);
-      }
-
-      // 2. Trust the desktop peer permanently
-      await AuraSignalingService().trustPeer(desktopId);
-
-      // 3. Send pair handshake through signaling service
-      await AuraSignalingService().pairWithPeer(desktopId);
-
-      // 4. Instantly register in local _peers map so it pops on the Globe / Radar
-      final peer = PeerDevice(
-        id: desktopId,
-        name: desktopName,
-        deviceName: desktopName,
-        platform: 'web',
-        ip: localIp ?? 'Cloud / LAN',
-        port: localPort ?? 0,
-        lastSeen: DateTime.now(),
-        isTrusted: true,
-        transport: 'WebRTC / Direct',
-        connectionState: 'READY_TO_TRANSFER',
-      );
-
-      setState(() {
-        _peers[desktopId] = peer;
-      });
-
-      HapticFeedback.heavyImpact();
-      _showSnackBar('✓ Connected to $desktopName!', isSuccess: true);
-    } catch (e) {
-      debugPrint('[AuraDrop] Error handling scanned QR: $e');
-      _showSnackBar('Error connecting to device: $e', isSuccess: false);
-    }
-  }
-
-  void _showQrScannerModal(AuraTheme theme) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) {
-        return _QrScannerModalSheet(
-          theme: theme,
-          onScanned: (raw) {
-            Navigator.of(ctx).pop();
-            _handleScannedQrData(raw);
-          },
-        );
-      },
-    );
-  }
 
   void _showSnackBar(String text, {required bool isSuccess}) {
     final theme = AuraTheme.of(context);
@@ -1283,80 +1164,77 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
     return InAppNotificationHost(
       child: Scaffold(
         backgroundColor: theme.background,
-        body: AuraProximityRipple(
-          controller: _rippleController,
-          child: SafeArea(
-            child: Stack(
-              children: [
-                Column(
-                  children: [
-                    _buildHeader(theme),
-                    Expanded(
-                      child: IndexedStack(
-                        index: _currentTabIndex,
-                        children: [
-                          _buildHomeScreen(theme),
-                          TransfersScreen(
-                            selectedFiles: _selectedFiles,
-                            onPickFiles: _pickFiles,
-                            onRemoveFile: (f) => setState(() => _selectedFiles.remove(f)),
-                            onClearFiles: () => setState(() => _selectedFiles.clear()),
-                            transferState: _transferState,
-                            activeFileName: _activeFileName,
-                            transferredBytes: _transferredBytes,
-                            totalTransferBytes: _totalTransferBytes,
-                            speedBytesPerSec: _speedBytesPerSec,
-                            etaSeconds: _etaSeconds,
-                            onCancelTransfer: _cancelTransfer,
-                            isIncoming: !_isSender,
-                          ),
-                          ChatHubScreen(peers: _peers),
-                          const HistoryScreen(),
-                          ProfileScreen(
-                            profile: _userProfile,
-                            onProfileUpdated: (key, val) {
-                              if (key == 'display_name') setState(() => _deviceName = val);
-                              if (key == 'theme') widget.onThemeModeChanged(val);
-                              if (key == 'avatar_path') {
-                                setState(() {
-                                  _userProfile = UserProfile(
-                                    displayName: _userProfile.displayName,
-                                    deviceName: _userProfile.deviceName,
-                                    avatarIndex: _userProfile.avatarIndex,
-                                    avatarPath: val,
-                                    bio: _userProfile.bio,
-                                    theme: _userProfile.theme,
-                                    accent: _userProfile.accent,
-                                    visibility: _userProfile.visibility,
-                                  );
-                                });
-                              }
-                            },
-                          ),
-                        ],
-                      ),
+        body: SafeArea(
+          child: Stack(
+            children: [
+              Column(
+                children: [
+                  _buildHeader(theme),
+                  Expanded(
+                    child: IndexedStack(
+                      index: _currentTabIndex,
+                      children: [
+                        _buildHomeScreen(theme),
+                        TransfersScreen(
+                          selectedFiles: _selectedFiles,
+                          onPickFiles: _pickFiles,
+                          onRemoveFile: (f) => setState(() => _selectedFiles.remove(f)),
+                          onClearFiles: () => setState(() => _selectedFiles.clear()),
+                          transferState: _transferState,
+                          activeFileName: _activeFileName,
+                          transferredBytes: _transferredBytes,
+                          totalTransferBytes: _totalTransferBytes,
+                          speedBytesPerSec: _speedBytesPerSec,
+                          etaSeconds: _etaSeconds,
+                          onCancelTransfer: _cancelTransfer,
+                          isIncoming: !_isSender,
+                        ),
+                        ChatHubScreen(peers: _peers),
+                        const HistoryScreen(),
+                        ProfileScreen(
+                          profile: _userProfile,
+                          onProfileUpdated: (key, val) {
+                            if (key == 'display_name') setState(() => _deviceName = val);
+                            if (key == 'theme') widget.onThemeModeChanged(val);
+                            if (key == 'avatar_path') {
+                              setState(() {
+                                _userProfile = UserProfile(
+                                  displayName: _userProfile.displayName,
+                                  deviceName: _userProfile.deviceName,
+                                  avatarIndex: _userProfile.avatarIndex,
+                                  avatarPath: val,
+                                  bio: _userProfile.bio,
+                                  theme: _userProfile.theme,
+                                  accent: _userProfile.accent,
+                                  visibility: _userProfile.visibility,
+                                );
+                              });
+                            }
+                          },
+                        ),
+                      ],
                     ),
-                    MinimalNavigationBar(
-                      currentIndex: _currentTabIndex,
-                      onTabSelected: (index) => setState(() => _currentTabIndex = index),
-                      activeTransfersCount: _selectedFiles.length,
-                      unreadChatCount: 0,
-                    ),
-                  ],
-                ),
+                  ),
+                  MinimalNavigationBar(
+                    currentIndex: _currentTabIndex,
+                    onTabSelected: (index) => setState(() => _currentTabIndex = index),
+                    activeTransfersCount: _selectedFiles.length,
+                    unreadChatCount: 0,
+                  ),
+                ],
+              ),
 
-                // Active Transfer Stream or Completion Burst Modal (Files ONLY, never for chat messages)
-                if (_activeTransferId.isNotEmpty &&
-                    _totalTransferBytes > 0 &&
-                    (_transferState == TransferState.transferring ||
-                     _transferState == TransferState.transferFinished ||
-                     _transferState == TransferState.flushing ||
-                     _transferState == TransferState.verifying ||
-                     _transferState == TransferState.completed ||
-                     _transferState == TransferState.failed))
-                  _buildTransferOverlay(theme),
-              ],
-            ),
+              // Active Transfer Stream or Completion Burst Modal (Files ONLY, never for chat messages)
+              if (_activeTransferId.isNotEmpty &&
+                  _totalTransferBytes > 0 &&
+                  (_transferState == TransferState.transferring ||
+                   _transferState == TransferState.transferFinished ||
+                   _transferState == TransferState.flushing ||
+                   _transferState == TransferState.verifying ||
+                   _transferState == TransferState.completed ||
+                   _transferState == TransferState.failed))
+                _buildTransferOverlay(theme),
+            ],
           ),
         ),
       ),
@@ -1458,17 +1336,6 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                   ),
                 ),
               ),
-              // QR Code Camera Scanner Button (Scan Desktop QR Code)
-              MinimalIconButton(
-                icon: Icons.qr_code_scanner_rounded,
-                size: 32,
-                onPressed: () {
-                  HapticFeedback.lightImpact();
-                  _showQrScannerModal(theme);
-                },
-              ),
-              const SizedBox(width: 8),
-
               // Settings Button
               MinimalIconButton(
                 icon: Icons.tune_rounded,
@@ -1607,7 +1474,6 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                     selectedPeerId: _selectedPeer?.id,
                     onPeerSelected: (peer) {
                       HapticFeedback.selectionClick();
-                      _rippleController.triggerPeerSelected();
                       setState(() {
                         _selectedPeer = _selectedPeer?.id == peer.id ? null : peer;
                       });
@@ -1895,416 +1761,6 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                 isSending: _isSender,
                 onCancel: _cancelTransfer,
               ),
-      ),
-    );
-  }
-}
-
-class _QrScannerModalSheet extends StatefulWidget {
-  final AuraTheme theme;
-  final Function(String code) onScanned;
-
-  const _QrScannerModalSheet({
-    required this.theme,
-    required this.onScanned,
-  });
-
-  @override
-  State<_QrScannerModalSheet> createState() => _QrScannerModalSheetState();
-}
-
-class _QrScannerModalSheetState extends State<_QrScannerModalSheet> {
-  MobileScannerController? _scannerController;
-  int _activeTab = 0; // 0: Scan Desktop QR, 1: Show Phone QR
-  bool _hasDetected = false;
-  bool _torchOn = false;
-
-  @override
-  void initState() {
-    super.initState();
-    if (Platform.isAndroid || Platform.isIOS) {
-      _scannerController = MobileScannerController(
-        detectionSpeed: DetectionSpeed.noDuplicates,
-        facing: CameraFacing.back,
-      );
-    } else {
-      _activeTab = 1; // Default to Show QR on desktop
-    }
-  }
-
-  @override
-  void dispose() {
-    _scannerController?.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = widget.theme;
-    final payload = AuraLanServer().getQrPayload();
-    final qrData = jsonEncode(payload);
-    final ip = AuraLanServer().localIp;
-    final port = AuraLanServer().port;
-
-    return Container(
-      height: MediaQuery.of(context).size.height * 0.76,
-      decoration: BoxDecoration(
-        color: theme.cardBackground,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-        border: Border.all(color: theme.border, width: 1.0),
-      ),
-      child: Column(
-        children: [
-          const SizedBox(height: 12),
-          // Drag handle
-          Container(
-            width: 36,
-            height: 4,
-            decoration: BoxDecoration(
-              color: theme.textSecondary.withValues(alpha: 0.3),
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          const SizedBox(height: 14),
-
-          // Header
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    Icon(
-                      _activeTab == 0 ? Icons.qr_code_scanner_rounded : Icons.qr_code_2_rounded,
-                      color: theme.textPrimary,
-                      size: 22,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      _activeTab == 0 ? 'Scan Desktop QR' : 'My Phone QR Code',
-                      style: TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w800,
-                        color: theme.textPrimary,
-                      ),
-                    ),
-                  ],
-                ),
-                IconButton(
-                  icon: Icon(Icons.close_rounded, color: theme.textSecondary, size: 20),
-                  onPressed: () => Navigator.pop(context),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 10),
-
-          // Tab Switcher
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Container(
-              padding: const EdgeInsets.all(4),
-              decoration: BoxDecoration(
-                color: theme.background,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: theme.border),
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: GestureDetector(
-                      onTap: () {
-                        HapticFeedback.selectionClick();
-                        setState(() => _activeTab = 0);
-                      },
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        decoration: BoxDecoration(
-                          color: _activeTab == 0 ? theme.actionBackground : Colors.transparent,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Center(
-                          child: Text(
-                            '📷 Scan PC Screen',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              color: _activeTab == 0 ? theme.actionText : theme.textSecondary,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  Expanded(
-                    child: GestureDetector(
-                      onTap: () {
-                        HapticFeedback.selectionClick();
-                        setState(() => _activeTab = 1);
-                      },
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        decoration: BoxDecoration(
-                          color: _activeTab == 1 ? theme.actionBackground : Colors.transparent,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Center(
-                          child: Text(
-                            '📱 Show Phone QR',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              color: _activeTab == 1 ? theme.actionText : theme.textSecondary,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 14),
-
-          // Tab 0: Native Camera Viewfinder
-          if (_activeTab == 0)
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-                child: Column(
-                  children: [
-                    Text(
-                      'Point camera at the QR code displayed on the AuraDrop Vercel website.',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: theme.textSecondary,
-                        height: 1.4,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 14),
-                    Expanded(
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(20),
-                        child: Stack(
-                          alignment: Alignment.center,
-                          children: [
-                            if (_scannerController == null)
-                              Center(
-                                child: Padding(
-                                  padding: const EdgeInsets.all(24),
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(Icons.wifi_tethering_rounded, color: theme.textSecondary, size: 48),
-                                      const SizedBox(height: 12),
-                                      Text(
-                                        'Automatic Wi-Fi Discovery Active',
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.w700,
-                                          fontSize: 14,
-                                          color: theme.textPrimary,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 6),
-                                      Text(
-                                        'All nearby AuraDrop devices on your local network are automatically discovered.\nNo camera scan required on desktop.',
-                                        textAlign: TextAlign.center,
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: theme.textSecondary,
-                                          height: 1.4,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              )
-                            else
-                              MobileScanner(
-                                controller: _scannerController!,
-                                fit: BoxFit.cover,
-                                errorBuilder: (context, error) {
-                                  return Center(
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(20),
-                                      child: Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Icon(Icons.camera_alt_outlined, color: theme.textSecondary, size: 40),
-                                          const SizedBox(height: 12),
-                                          Text(
-                                            'Camera permission needed to scan QR code.',
-                                            style: TextStyle(color: theme.textSecondary, fontSize: 13),
-                                            textAlign: TextAlign.center,
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  );
-                                },
-                              onDetect: (BarcodeCapture capture) {
-                                if (_hasDetected) return;
-                                for (final barcode in capture.barcodes) {
-                                  final raw = barcode.rawValue;
-                                  if (raw != null && raw.isNotEmpty) {
-                                    _hasDetected = true;
-                                    HapticFeedback.selectionClick();
-                                    widget.onScanned(raw);
-                                    break;
-                                  }
-                                }
-                              },
-                            ),
-                            // Scanning Frame Reticle
-                            Container(
-                              width: 210,
-                              height: 210,
-                              decoration: BoxDecoration(
-                                border: Border.all(color: const Color(0xFF34C759), width: 2.5),
-                                borderRadius: BorderRadius.circular(18),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: const Color(0xFF34C759).withValues(alpha: 0.25),
-                                    blurRadius: 16,
-                                    spreadRadius: 2,
-                                  ),
-                                ],
-                              ),
-                            ),
-                            // Torch Button
-                            Positioned(
-                              top: 12,
-                              right: 12,
-                              child: IconButton(
-                                style: IconButton.styleFrom(
-                                  backgroundColor: Colors.black.withValues(alpha: 0.6),
-                                ),
-                                icon: Icon(
-                                  _torchOn ? Icons.flash_on_rounded : Icons.flash_off_rounded,
-                                  color: _torchOn ? const Color(0xFF34C759) : Colors.white,
-                                  size: 20,
-                                ),
-                                onPressed: () async {
-                                  await _scannerController?.toggleTorch();
-                                  if (mounted) setState(() => _torchOn = !_torchOn);
-                                },
-                              ),
-                            ),
-                            // Switch Camera Button
-                            Positioned(
-                              top: 12,
-                              left: 12,
-                              child: IconButton(
-                                style: IconButton.styleFrom(
-                                  backgroundColor: Colors.black.withValues(alpha: 0.6),
-                                ),
-                                icon: const Icon(Icons.cameraswitch_rounded, color: Colors.white, size: 20),
-                                onPressed: () async {
-                                  await _scannerController?.switchCamera();
-                                },
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-
-          // Tab 1: Show Phone QR (Fallback)
-          if (_activeTab == 1)
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-                child: Column(
-                  children: [
-                    Text(
-                      'If pairing with another phone or webcam, display this QR code.',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: theme.textSecondary,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 16),
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(20),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.15),
-                            blurRadius: 16,
-                            offset: const Offset(0, 4),
-                          ),
-                        ],
-                      ),
-                      child: QrImageView(
-                        data: qrData,
-                        version: QrVersions.auto,
-                        size: 190.0,
-                        backgroundColor: Colors.white,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: theme.background,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: theme.border, width: 1.0),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Container(
-                            width: 8,
-                            height: 8,
-                            decoration: const BoxDecoration(
-                              color: Color(0xFF10B981),
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            'LAN Endpoint: $ip:$port',
-                            style: TextStyle(
-                              fontFamily: 'monospace',
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: theme.textPrimary,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    OutlinedButton.icon(
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: theme.textPrimary,
-                        side: BorderSide(color: theme.border),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                      ),
-                      onPressed: () {
-                        HapticFeedback.lightImpact();
-                        AuraLanServer().generateBootstrapToken();
-                        setState(() {});
-                      },
-                      icon: const Icon(Icons.refresh_rounded, size: 16),
-                      label: const Text('Refresh Token', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-        ],
       ),
     );
   }

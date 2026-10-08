@@ -129,17 +129,31 @@ pub async fn probe_device_ip(ip: String, state: State<'_, AppState>) -> Result<P
 pub async fn send_chat_message(
     peer_id: String,
     text: String,
+    peer_ip: Option<String>,
+    peer_port: Option<u16>,
+    peer_name: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<ChatMessage, String> {
-    let peers = state.discovery.get_peers().await;
-    let peer = peers
-        .into_iter()
-        .find(|p| p.id == peer_id)
-        .ok_or_else(|| "Peer device not found".to_string())?;
+    crate::log_debug(&format!(
+        "[Commands] send_chat_message to peer_id: {}, peer_ip: {:?}, peer_port: {:?}",
+        peer_id, peer_ip, peer_port
+    ));
+
+    let (ip, port, name) = if let (Some(ip_str), Some(p)) = (peer_ip, peer_port) {
+        let name_str = peer_name.unwrap_or_else(|| "Peer".to_string());
+        (ip_str, p, name_str)
+    } else {
+        let peers = state.discovery.get_peers().await;
+        let peer = peers
+            .into_iter()
+            .find(|p| p.id == peer_id)
+            .ok_or_else(|| "Peer device not found in active discovery cache".to_string())?;
+        (peer.ip, peer.port, peer.name)
+    };
 
     state
         .transfer
-        .send_chat(peer.ip, peer.port, peer.id, peer.name, text)
+        .send_chat(ip, port, peer_id, name, text)
         .await
 }
 
@@ -149,6 +163,139 @@ pub async fn get_chat_history(
     state: State<'_, AppState>,
 ) -> Result<Vec<ChatMessage>, String> {
     Ok(state.transfer.get_chat_history(&peer_id).await)
+}
+
+#[tauri::command]
+pub async fn get_all_chat_conversations(
+    state: State<'_, AppState>,
+) -> Result<Vec<ChatMessage>, String> {
+    Ok(state.transfer.get_all_chat_messages().await)
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct UpdateCheckResult {
+    pub has_update: bool,
+    pub current_version: String,
+    pub latest_version: String,
+    pub release_notes: String,
+    pub download_url: Option<String>,
+    pub pub_date: String,
+}
+
+#[tauri::command]
+pub async fn check_for_updates() -> Result<UpdateCheckResult, String> {
+    let current_version = env!("CARGO_PKG_VERSION").to_string();
+    let client = match reqwest::Client::builder()
+        .user_agent("AuraDrop-Desktop/2.0")
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return Ok(UpdateCheckResult {
+                has_update: false,
+                current_version: current_version.clone(),
+                latest_version: current_version,
+                release_notes: format!("Could not initialize network client: {}", e),
+                download_url: None,
+                pub_date: "Offline".to_string(),
+            });
+        }
+    };
+
+    // 1. Try GitHub Releases API
+    let res = client
+        .get("https://api.github.com/repos/JACK-AI7/AuraDrop/releases/latest")
+        .send()
+        .await;
+
+    if let Ok(resp) = res {
+        if resp.status().is_success() {
+            if let Ok(json) = resp.json::<serde_json::Value>().await {
+                let tag = json["tag_name"].as_str().unwrap_or("").trim_start_matches('v').to_string();
+                let body = json["body"].as_str().unwrap_or("").to_string();
+                let published_at = json["published_at"].as_str().unwrap_or("").to_string();
+
+                let mut download_url = None;
+                if let Some(assets) = json["assets"].as_array() {
+                    for asset in assets {
+                        let name = asset["name"].as_str().unwrap_or("");
+                        if name.ends_with(".exe") || name.ends_with(".msi") {
+                            download_url = asset["browser_download_url"].as_str().map(|s| s.to_string());
+                            break;
+                        }
+                    }
+                }
+
+                if !tag.is_empty() {
+                    let has_update = is_newer_version(&tag, &current_version);
+                    return Ok(UpdateCheckResult {
+                        has_update,
+                        current_version,
+                        latest_version: tag,
+                        release_notes: if body.is_empty() { "Bug fixes and performance improvements.".to_string() } else { body },
+                        download_url,
+                        pub_date: published_at,
+                    });
+                }
+            }
+        }
+    }
+
+    // 2. Fallback to raw version.json
+    let raw_res = client
+        .get("https://raw.githubusercontent.com/JACK-AI7/AuraDrop/main/version.json")
+        .send()
+        .await;
+
+    if let Ok(resp) = raw_res {
+        if resp.status().is_success() {
+            if let Ok(json) = resp.json::<serde_json::Value>().await {
+                let v = json["version"].as_str().unwrap_or("").trim_start_matches('v').to_string();
+                let notes = json["release_notes"].as_str().unwrap_or("").to_string();
+                let windows_url = json["downloads"]["windows"].as_str().map(|s| s.to_string());
+                let pub_date = json["release_date"].as_str().unwrap_or("").to_string();
+                let has_update = is_newer_version(&v, &current_version);
+
+                return Ok(UpdateCheckResult {
+                    has_update,
+                    current_version,
+                    latest_version: v,
+                    release_notes: notes,
+                    download_url: windows_url,
+                    pub_date,
+                });
+            }
+        }
+    }
+
+    Ok(UpdateCheckResult {
+        has_update: false,
+        current_version: current_version.clone(),
+        latest_version: current_version,
+        release_notes: "You are running the latest version of AuraDrop.".to_string(),
+        download_url: None,
+        pub_date: "Up to date".to_string(),
+    })
+}
+
+fn is_newer_version(latest: &str, current: &str) -> bool {
+    let parse_parts = |v: &str| -> Vec<u32> {
+        v.split('.')
+            .filter_map(|s| s.trim_start_matches('v').split('-').next().unwrap_or("0").parse::<u32>().ok())
+            .collect()
+    };
+    let l_parts = parse_parts(latest);
+    let c_parts = parse_parts(current);
+
+    for (l, c) in l_parts.iter().zip(c_parts.iter()) {
+        if l > c {
+            return true;
+        } else if l < c {
+            return false;
+        }
+    }
+    l_parts.len() > c_parts.len()
 }
 
 #[tauri::command]

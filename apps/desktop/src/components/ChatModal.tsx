@@ -66,6 +66,9 @@ export const ChatModal: React.FC<ChatModalProps> = ({ peer, onClose, onSendFile 
       const sentMsg = await invoke<ChatMessage>('send_chat_message', {
         peerId: peer.id,
         text,
+        peerIp: peer.ip,
+        peerPort: peer.port,
+        peerName: peer.name,
       });
       setMessages((prev) => {
         if (prev.some((m) => m.id === sentMsg.id)) return prev;

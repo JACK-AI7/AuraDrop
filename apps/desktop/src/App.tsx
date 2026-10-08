@@ -9,6 +9,8 @@ import { DiagnosticsModal } from './components/DiagnosticsModal';
 import { HistoryView } from './components/HistoryView';
 import { DirectIpModal } from './components/DirectIpModal';
 import { ChatModal } from './components/ChatModal';
+import { ChatHubModal } from './components/ChatHubModal';
+import { UpdateModal } from './components/UpdateModal';
 import {
   Send,
   FolderOpen,
@@ -19,6 +21,7 @@ import {
   RefreshCw,
   Target,
   MessageSquare,
+  ArrowUpCircle,
 } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -31,6 +34,8 @@ export const App: React.FC = () => {
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showDirectIp, setShowDirectIp] = useState(false);
+  const [showChatHub, setShowChatHub] = useState(false);
+  const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [isPickingFiles, setIsPickingFiles] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
 
@@ -210,6 +215,26 @@ export const App: React.FC = () => {
             <span className="hidden md:inline">Direct IP</span>
           </button>
 
+          {/* Messages Hub Button */}
+          <button
+            onClick={() => setShowChatHub(true)}
+            title="Messages Hub"
+            className="px-3 py-1.5 rounded-lg border border-white/15 bg-white/5 hover:bg-white/10 text-white text-xs font-medium flex items-center gap-1.5 transition-all active:scale-95"
+          >
+            <MessageSquare className="w-3.5 h-3.5 text-neutral-300" />
+            <span className="hidden md:inline">Chats</span>
+          </button>
+
+          {/* Over-The-Air Wireless Update Checker */}
+          <button
+            onClick={() => setShowUpdateModal(true)}
+            title="Check Over-The-Air Updates"
+            className="px-2.5 py-1.5 rounded-lg border border-white/15 bg-white/5 hover:bg-white/10 text-white text-xs font-mono font-medium flex items-center gap-1.5 transition-all active:scale-95"
+          >
+            <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
+            <span>v2.0.1</span>
+          </button>
+
           <button
             onClick={() => setShowHistory(true)}
             title="Transfer History"
@@ -253,7 +278,7 @@ export const App: React.FC = () => {
                 ? `${activeTransfer.speedMbps.toFixed(1)} MB/s`
                 : null
             }
-            size={340}
+            size={440}
           />
 
           {/* Quick Action Bar under Globe */}
@@ -308,6 +333,19 @@ export const App: React.FC = () => {
           onClose={() => setChatPeer(null)}
           onSendFile={(peer) => handleSendFiles(peer)}
         />
+      )}
+
+      {showChatHub && (
+        <ChatHubModal
+          peers={peers}
+          initialPeerId={selectedPeerId}
+          onClose={() => setShowChatHub(false)}
+          onSendFile={(peer) => handleSendFiles(peer)}
+        />
+      )}
+
+      {showUpdateModal && (
+        <UpdateModal onClose={() => setShowUpdateModal(false)} />
       )}
 
       {showDirectIp && (
