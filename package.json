@@ -5,7 +5,8 @@
   "description": "AuraDrop - Next-Gen Cross-Platform Peer-to-Peer File Sharing Engine & Applications",
   "workspaces": [
     "packages/*",
-    "apps/*"
+    "apps/*",
+    "services/*"
   ],
   "scripts": {
     "build": "pnpm -r run build && node scripts/copy-web-dist.js",
@@ -24,11 +25,15 @@
     "clean": "pnpm -r run clean"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/node": "^22.13.0",
+    "@types/ws": "^8.18.2",
+    "express": "^4.22.3",
     "rimraf": "^6.0.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
-    "vitest": "^3.0.5"
+    "vitest": "^3.0.5",
+    "ws": "^8.22.0"
   },
   "dependencies": {
     "@types/pg": "^8.23.1",

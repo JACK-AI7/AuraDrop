@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  coturn:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: auradrop/coturn:latest
+    container_name: auradrop-coturn
+    restart: always
+    network_mode: "host"
+    environment:
+      - TURN_SECRET=auradrop-production-coturn-shared-secret-2026
+      - TURN_REALM=auradrop.network
+    volumes:
+      - ./turnserver.conf:/etc/coturn/turnserver.conf:ro
+    ports:
+      # Note: with network_mode: "host", port mappings are native.
+      # If bridging without host network, expose these explicitly:
+      - "3478:3478/tcp"
+      - "3478:3478/udp"
+      - "5349:5349/tcp"
+      - "5349:5349/udp"
+      - "49152-65535:49152-65535/udp"

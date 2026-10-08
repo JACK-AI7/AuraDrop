@@ -63,17 +63,46 @@ export class WebRtcTransport implements P2PTransport {
     this.stateCallback?.(state);
   }
 
-  private getRtcConfig(): RTCConfiguration {
-    return {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-        { urls: 'stun:stun.cloudflare.com:3478' },
-        { urls: 'stun:global.stun.twilio.com:3478' },
-      ],
-      iceCandidatePoolSize: 4,
-    };
+  private cachedIceServers: RTCIceServer[] | null = null;
+  private lastTurnFetch = 0;
+
+  private async fetchRtcConfig(): Promise<RTCConfiguration> {
+    if (this.cachedIceServers && Date.now() - this.lastTurnFetch < 3600000) {
+      return {
+        iceServers: this.cachedIceServers,
+        iceCandidatePoolSize: 4,
+      };
+    }
+
+    const defaultServers: RTCIceServer[] = [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' },
+    ];
+
+    try {
+      const endpoints = [
+        '/turn/credentials',
+        '/api/signaling?action=turn',
+      ];
+      for (const ep of endpoints) {
+        try {
+          const res = await fetch(ep, { signal: AbortSignal.timeout(2000) });
+          if (res.ok) {
+            const data = await res.json();
+            if (data && Array.isArray(data.iceServers) && data.iceServers.length > 0) {
+              this.cachedIceServers = data.iceServers;
+              this.lastTurnFetch = Date.now();
+              return { iceServers: this.cachedIceServers, iceCandidatePoolSize: 4 };
+            }
+          }
+        } catch {}
+      }
+    } catch {}
+
+    this.cachedIceServers = defaultServers;
+    return { iceServers: defaultServers, iceCandidatePoolSize: 4 };
   }
 
   // ---------------------------------------------------------------------------
@@ -87,7 +116,8 @@ export class WebRtcTransport implements P2PTransport {
 
     console.log(`[WebRTC] Initiating connection to ${peer.name} (${peer.deviceId})`);
 
-    this.peerConnection = new RTCPeerConnection(this.getRtcConfig());
+    const config = await this.fetchRtcConfig();
+    this.peerConnection = new RTCPeerConnection(config);
     this.setupPeerConnectionEvents();
 
     // Create reliable binary data channel (ordered, reliable delivery)
@@ -125,7 +155,8 @@ export class WebRtcTransport implements P2PTransport {
       this.updateState('CONNECTING');
       this.pendingCandidates = [];
 
-      this.peerConnection = new RTCPeerConnection(this.getRtcConfig());
+      const config = await this.fetchRtcConfig();
+      this.peerConnection = new RTCPeerConnection(config);
       this.setupPeerConnectionEvents();
 
       this.peerConnection.ondatachannel = (e) => {
@@ -410,6 +441,51 @@ export class WebRtcTransport implements P2PTransport {
       bufferedAmount: this.dataChannel?.bufferedAmount || 0,
       localCandidateType: this.localCandidateType,
       remoteCandidateType: this.remoteCandidateType,
+    };
+  }
+
+  public async inspectActiveCandidatePair(): Promise<{ transportType: 'DIRECT-LAN' | 'DIRECT-P2P' | 'TURN-RELAY'; rttMs: number }> {
+    if (!this.peerConnection) {
+      return { transportType: 'DIRECT-P2P', rttMs: this.rttMs };
+    }
+    try {
+      const stats = await this.peerConnection.getStats();
+      let activePair: any = null;
+      stats.forEach((report) => {
+        if (report.type === 'transport' && (report as any).selectedCandidatePairId) {
+          activePair = stats.get((report as any).selectedCandidatePairId);
+        } else if (report.type === 'candidate-pair' && ((report as any).selected || (report as any).state === 'succeeded')) {
+          activePair = report;
+        }
+      });
+
+      if (activePair) {
+        const localCand: any = stats.get(activePair.localCandidateId);
+        const remoteCand: any = stats.get(activePair.remoteCandidateId);
+        if (localCand && remoteCand) {
+          this.localCandidateType = localCand.candidateType;
+          this.remoteCandidateType = remoteCand.candidateType;
+          if (localCand.candidateType === 'relay' || remoteCand.candidateType === 'relay') {
+            this.name = 'WebRTC Relay';
+            return {
+              transportType: 'TURN-RELAY',
+              rttMs: activePair.currentRoundTripTime ? Math.round(activePair.currentRoundTripTime * 1000) : this.rttMs,
+            };
+          }
+          const ip = localCand.ip || localCand.address || '';
+          if (ip.startsWith('192.168.') || ip.startsWith('10.') || ip.startsWith('172.')) {
+            this.name = 'WebRTC Direct LAN';
+            return {
+              transportType: 'DIRECT-LAN',
+              rttMs: activePair.currentRoundTripTime ? Math.round(activePair.currentRoundTripTime * 1000) : this.rttMs,
+            };
+          }
+        }
+      }
+    } catch {}
+    return {
+      transportType: (this.localCandidateType === 'relay' || this.remoteCandidateType === 'relay') ? 'TURN-RELAY' : 'DIRECT-P2P',
+      rttMs: this.rttMs,
     };
   }
 

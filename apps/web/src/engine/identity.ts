@@ -36,7 +36,7 @@ export class IdentityManager {
       if (stored) {
         const parsed = JSON.parse(stored);
         if (parsed.deviceId) {
-          baseDeviceId = parsed.deviceId.split('_')[0] || parsed.deviceId;
+          baseDeviceId = parsed.deviceId;
           storedName = parsed.displayName || '';
         }
       }

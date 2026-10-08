@@ -138,7 +138,7 @@ async function getActivePeers(
     try {
       await ensureTables(pool);
 
-      // Load DB trusted relationships for this device
+      // Load DB trusted relationships for this device (both legacy and V25 tables)
       if (selfDeviceId) {
         try {
           const pairRes = await pool.query(
@@ -151,6 +151,18 @@ async function getActivePeers(
             addMemoryPair(selfDeviceId, other);
           }
         } catch {}
+
+        try {
+          const pairRes2 = await pool.query(
+            `SELECT device_a_id, device_b_id FROM trusted_device_pairs WHERE (device_a_id = $1 OR device_b_id = $1) AND revoked_at IS NULL`,
+            [selfDeviceId]
+          );
+          for (const row of pairRes2.rows) {
+            const other = row.device_a_id === selfDeviceId ? row.device_b_id : row.device_a_id;
+            trustedSet.add(other);
+            addMemoryPair(selfDeviceId, other);
+          }
+        } catch {}
       }
 
       const q = `
@@ -158,7 +170,7 @@ async function getActivePeers(
                EXTRACT(EPOCH FROM last_seen_at) * 1000 as last_seen
         FROM active_peers
         WHERE device_id != $1
-          AND last_seen_at > NOW() - INTERVAL '35 seconds'
+          AND last_seen_at > NOW() - INTERVAL '45 seconds'
         ORDER BY last_seen_at DESC
         LIMIT 50;
       `;
@@ -184,6 +196,35 @@ async function getActivePeers(
           });
         }
       }
+
+      // Also query V25 devices table for active devices that registered via standalone signaling
+      try {
+        const devRes = await pool.query(
+          `SELECT id, display_name, device_name, platform, device_type,
+                  EXTRACT(EPOCH FROM last_seen_at) * 1000 as last_seen
+           FROM devices
+           WHERE id != $1 AND last_seen_at > NOW() - INTERVAL '45 seconds'
+           LIMIT 50;`,
+          [selfDeviceId]
+        );
+        for (const d of devRes.rows) {
+          if (!peersMap.has(d.id)) {
+            const isTrusted = trustedSet.has(d.id) || isMemoryPaired(selfDeviceId, d.id);
+            if (isTrusted || visibility === 'everyone') {
+              peersMap.set(d.id, {
+                deviceId: d.id,
+                displayName: d.display_name,
+                deviceName: d.device_name || d.display_name,
+                platform: d.platform || 'unknown',
+                clientIp: '127.0.0.1',
+                lastSeen: Number(d.last_seen),
+                visibility: 'everyone',
+                isTrusted: isTrusted || undefined,
+              });
+            }
+          }
+        }
+      } catch {}
     } catch (e) {
       console.warn('[Signaling] DB query peers notice:', e);
     }
@@ -300,6 +341,19 @@ export default async function handler(req: any, res: any) {
         `,
           [regDeviceId, displayName, deviceName, platform, clientIp, localIp || null, localPort || null, capabilities ? JSON.stringify(capabilities) : null, visibility]
         );
+
+        await pool.query(
+          `INSERT INTO devices (id, display_name, device_name, platform, device_type, status, last_seen_at, updated_at)
+           VALUES ($1, $2, $3, $4, $4, 'online', NOW(), NOW())
+           ON CONFLICT (id) DO UPDATE SET
+             display_name = EXCLUDED.display_name,
+             device_name = EXCLUDED.device_name,
+             platform = EXCLUDED.platform,
+             status = 'online',
+             last_seen_at = NOW(),
+             updated_at = NOW();`,
+          [regDeviceId, displayName, deviceName, platform]
+        ).catch(() => {});
       } catch (err) {
         console.warn('[Signaling] DB register notice:', err);
       }
@@ -400,6 +454,16 @@ export default async function handler(req: any, res: any) {
         `,
           [deviceId, name, reqDeviceName, reqPlatform, clientIp, localIp || null, localPort || null, capabilities ? JSON.stringify(capabilities) : null, reqVisibility]
         ).catch(() => {});
+
+        await pool.query(
+          `INSERT INTO devices (id, display_name, device_name, platform, device_type, status, last_seen_at, updated_at)
+           VALUES ($1, $2, $3, $4, $4, 'online', NOW(), NOW())
+           ON CONFLICT (id) DO UPDATE SET
+             status = 'online',
+             last_seen_at = NOW(),
+             updated_at = NOW();`,
+          [deviceId, name, reqDeviceName, reqPlatform]
+        ).catch(() => {});
       } catch {}
     }
 
@@ -467,6 +531,16 @@ export default async function handler(req: any, res: any) {
            ON CONFLICT (device_id_a, device_id_b) DO UPDATE SET relationship_id = EXCLUDED.relationship_id;`,
           [deviceA, deviceB, relationshipId, authToken]
         );
+
+        // Also insert into V25 trusted_device_pairs
+        const [d1, d2] = [deviceA, deviceB].sort();
+        const pairId = `pair_${d1.slice(0, 8)}_${d2.slice(0, 8)}`;
+        await pool.query(
+          `INSERT INTO trusted_device_pairs (pair_id, device_a_id, device_b_id, created_at, updated_at)
+           VALUES ($1, $2, $3, NOW(), NOW())
+           ON CONFLICT (pair_id) DO UPDATE SET updated_at = NOW(), revoked_at = NULL;`,
+          [pairId, d1, d2]
+        ).catch(() => {});
       } catch (err) {
         console.warn('[Signaling] DB pair notice:', err);
       }
