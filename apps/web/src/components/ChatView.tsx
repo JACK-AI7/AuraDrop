@@ -60,6 +60,7 @@ interface ChatViewProps {
   currentUserId?: string;
   currentUsername?: string;
   peers: PeerDevice[];
+  initialPeer?: PeerDevice | null;
   onStartFileTransfer?: (peer: PeerDevice, file: File) => void;
 }
 
@@ -67,6 +68,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   currentUserId = 'user_local',
   currentUsername = 'You',
   peers,
+  initialPeer,
+  onStartFileTransfer,
 }) => {
   const engine = TransferEngine.getInstance();
   const [conversations, setConversations] = useState<ConversationItem[]>(() => {
@@ -92,14 +95,23 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
   const activeConv = conversations.find((c) => c.id === activeConvId);
 
-  // Sync conversations from backend
+  // ---------------------------------------------------------------------------
+  // SYNC CONVERSATIONS FROM BACKEND (NEON POSTGRESQL)
+  // ---------------------------------------------------------------------------
   const fetchConversations = async () => {
     try {
       const token = localStorage.getItem('auradrop_access_token');
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-user-id': currentUserId,
+        'x-user-name': currentUsername,
+      };
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      const res = await fetch('/api/conversations', { headers });
+      const res = await fetch(
+        `/api/conversations?userId=${encodeURIComponent(currentUserId)}&userName=${encodeURIComponent(currentUsername)}`,
+        { headers }
+      );
       if (res.ok) {
         const data = await res.json();
         if (data.conversations) {
@@ -117,16 +129,24 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
   useEffect(() => {
     fetchConversations();
-  }, []);
+  }, [currentUserId, currentUsername]);
 
-  // Fetch messages for active conversation
+  // ---------------------------------------------------------------------------
+  // FETCH MESSAGES FOR ACTIVE CONVERSATION
+  // ---------------------------------------------------------------------------
   const fetchMessages = async (convId: string) => {
     try {
       const token = localStorage.getItem('auradrop_access_token');
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-user-id': currentUserId,
+      };
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      const res = await fetch(`/api/conversations/${convId}/messages?limit=50`, { headers });
+      const res = await fetch(
+        `/api/conversations/${convId}/messages?limit=50&userId=${encodeURIComponent(currentUserId)}`,
+        { headers }
+      );
       if (res.ok) {
         const data = await res.json();
         if (data.messages) {
@@ -152,7 +172,102 @@ export const ChatView: React.FC<ChatViewProps> = ({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Send message
+  // ---------------------------------------------------------------------------
+  // REAL-TIME MESSAGING OVER WEBRTC / SIGNALING RELAY
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    const unsubscribeChat = engine.onChatMessage((payload: any) => {
+      if (!payload) return;
+      const incomingMsg = payload.message || payload;
+      const convId = payload.conversationId || incomingMsg.conversation_id;
+
+      if (convId && convId === activeConvId) {
+        setMessages((prev) => {
+          if (prev.some((m) => m.id === incomingMsg.id)) return prev;
+          return [...prev, incomingMsg];
+        });
+      }
+
+      // Play soft notification beep
+      try {
+        const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+        gain.gain.setValueAtTime(0.08, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.18);
+      } catch {}
+
+      // Refresh conversations list to update last message preview and unread counts
+      fetchConversations();
+    });
+
+    return () => {
+      unsubscribeChat();
+    };
+  }, [activeConvId, currentUserId]);
+
+  // ---------------------------------------------------------------------------
+  // OPEN OR CREATE CONVERSATION WITH DISCOVERED PEER
+  // ---------------------------------------------------------------------------
+  const handleOpenPeerChat = async (peer: PeerDevice) => {
+    // Check if direct conversation already exists
+    const existing = conversations.find((c) => {
+      if (c.type !== 'DIRECT') return false;
+      return c.members?.some((m) => m.id === peer.id);
+    });
+
+    if (existing) {
+      setActiveConvId(existing.id);
+      return;
+    }
+
+    try {
+      const token = localStorage.getItem('auradrop_access_token');
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-user-id': currentUserId,
+        'x-user-name': currentUsername,
+      };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch('/api/conversations/direct', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          userAId: currentUserId,
+          userBId: peer.id,
+          peerName: peer.name,
+          userName: currentUsername,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.conversation) {
+          setConversations((prev) => [data.conversation, ...prev.filter((c) => c.id !== data.conversation.id)]);
+          setActiveConvId(data.conversation.id);
+        }
+      }
+    } catch (err) {
+      console.error('[AuraDrop Chat] Failed to create direct conversation:', err);
+    }
+  };
+
+  // Handle initial peer selection from globe or card
+  useEffect(() => {
+    if (initialPeer) {
+      handleOpenPeerChat(initialPeer);
+    }
+  }, [initialPeer]);
+
+  // ---------------------------------------------------------------------------
+  // SEND MESSAGE (PERSIST IN NEON DB + RELAY IN REAL-TIME OVER NETWORK)
+  // ---------------------------------------------------------------------------
   const handleSendMessage = async () => {
     if (!inputText.trim() || !activeConvId) return;
     const textToSend = inputText.trim();
@@ -176,26 +291,46 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
     try {
       const token = localStorage.getItem('auradrop_access_token');
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-user-id': currentUserId,
+        'x-user-name': currentUsername,
+      };
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
       const res = await fetch(`/api/conversations/${activeConvId}/messages`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ text: textToSend, type: 'TEXT' }),
+        body: JSON.stringify({
+          text: textToSend,
+          type: 'TEXT',
+          senderId: currentUserId,
+        }),
       });
+
       if (res.ok) {
         const data = await res.json();
         if (data.message) {
           setMessages((prev) => prev.map((m) => (m.id === tempMsg.id ? data.message : m)));
+
+          // Real-time dispatch to other members via signaling / P2P
+          const targetMembers = activeConv?.members?.filter((m) => m.id !== currentUserId) || [];
+          for (const member of targetMembers) {
+            engine.sendChatMessage(member.id, {
+              conversationId: activeConvId,
+              message: data.message,
+            });
+          }
         }
       }
     } catch {
-      // In offline fallback, message remains in state
+      // In offline mode, message remains in state
     }
   };
 
-  // Send file attachment
+  // ---------------------------------------------------------------------------
+  // SEND FILE ATTACHMENT IN CHAT + P2P DATA TRANSFER
+  // ---------------------------------------------------------------------------
   const handleSendFileAttachment = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !activeConvId) return;
@@ -223,9 +358,24 @@ export const ChatView: React.FC<ChatViewProps> = ({
     };
     setMessages((prev) => [...prev, tempMsg]);
 
+    // If active conversation is direct and peer is online, trigger P2P file transfer
+    if (activeConv?.type === 'DIRECT') {
+      const otherMember = activeConv.members?.find((m) => m.id !== currentUserId);
+      if (otherMember) {
+        const peer = peers.find((p) => p.id === otherMember.id);
+        if (peer && onStartFileTransfer) {
+          onStartFileTransfer(peer, file);
+        }
+      }
+    }
+
     try {
       const token = localStorage.getItem('auradrop_access_token');
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-user-id': currentUserId,
+        'x-user-name': currentUsername,
+      };
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
       const res = await fetch(`/api/conversations/${activeConvId}/messages`, {
@@ -234,6 +384,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         body: JSON.stringify({
           text: file.name,
           type: 'FILE',
+          senderId: currentUserId,
           attachments: [
             {
               fileName: file.name,
@@ -243,24 +394,36 @@ export const ChatView: React.FC<ChatViewProps> = ({
           ],
         }),
       });
+
       if (res.ok) {
         const data = await res.json();
         if (data.message) {
           setMessages((prev) => prev.map((m) => (m.id === tempMsg.id ? data.message : m)));
+
+          // Real-time dispatch to other members via signaling
+          const targetMembers = activeConv?.members?.filter((m) => m.id !== currentUserId) || [];
+          for (const member of targetMembers) {
+            engine.sendChatMessage(member.id, {
+              conversationId: activeConvId,
+              message: data.message,
+            });
+          }
         }
       }
     } catch {
-      // Keep in state
+      // Kept in local state
     }
   };
 
-  // Clear Chat
+  // ---------------------------------------------------------------------------
+  // CLEAR CHAT
+  // ---------------------------------------------------------------------------
   const handleClearChat = async () => {
     if (!activeConvId) return;
-    if (!confirm('Clear all messages in this conversation for you?')) return;
+    if (!confirm('Clear all messages in this conversation for your account?')) return;
     try {
       const token = localStorage.getItem('auradrop_access_token');
-      const headers: Record<string, string> = {};
+      const headers: Record<string, string> = { 'x-user-id': currentUserId };
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
       await fetch(`/api/conversations/${activeConvId}/clear`, { method: 'DELETE', headers });
@@ -270,13 +433,18 @@ export const ChatView: React.FC<ChatViewProps> = ({
     }
   };
 
-  // Set Disappearing timer
+  // ---------------------------------------------------------------------------
+  // SET DISAPPEARING TIMER
+  // ---------------------------------------------------------------------------
   const handleSetDisappearing = async (seconds: number) => {
     if (!activeConvId) return;
     setDisappearingSeconds(seconds);
     try {
       const token = localStorage.getItem('auradrop_access_token');
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-user-id': currentUserId,
+      };
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
       await fetch(`/api/conversations/${activeConvId}/disappearing`, {
@@ -289,19 +457,20 @@ export const ChatView: React.FC<ChatViewProps> = ({
     }
   };
 
-  // Delete message for everyone
+  // ---------------------------------------------------------------------------
+  // DELETE MESSAGE FOR EVERYONE
+  // ---------------------------------------------------------------------------
   const handleDeleteMessage = async (msgId: string) => {
     if (!confirm('Delete this message for everyone?')) return;
     try {
       const token = localStorage.getItem('auradrop_access_token');
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-user-id': currentUserId,
+      };
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      await fetch(`/api/messages/${msgId}`, {
-        method: 'DELETE',
-        headers,
-        body: JSON.stringify({ deleteForEveryone: true }),
-      });
+      await fetch(`/api/messages/${msgId}`, { method: 'DELETE', headers });
       setMessages((prev) =>
         prev.map((m) =>
           m.id === msgId ? { ...m, is_deleted_everyone: true, text: 'This message was deleted' } : m
@@ -316,12 +485,18 @@ export const ChatView: React.FC<ChatViewProps> = ({
     }
   };
 
-  // Create Group
+  // ---------------------------------------------------------------------------
+  // CREATE GROUP CONVERSATION
+  // ---------------------------------------------------------------------------
   const handleCreateGroup = async () => {
     if (!groupTitleInput.trim() || selectedGroupMemberIds.length === 0) return;
     try {
       const token = localStorage.getItem('auradrop_access_token');
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-user-id': currentUserId,
+        'x-user-name': currentUsername,
+      };
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
       const res = await fetch('/api/conversations/group', {
@@ -330,6 +505,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         body: JSON.stringify({
           title: groupTitleInput.trim(),
           memberIds: selectedGroupMemberIds,
+          creatorId: currentUserId,
         }),
       });
       if (res.ok) {
@@ -348,7 +524,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   const filteredConversations = conversations.filter((c) => {
-    const title = c.type === 'GROUP' ? c.title : c.members?.find((m) => m.id !== currentUserId)?.display_name || 'Direct Chat';
+    const title =
+      c.type === 'GROUP'
+        ? c.title
+        : c.members?.find((m) => m.id !== currentUserId)?.display_name || 'Direct Chat';
     return title?.toLowerCase().includes(searchQuery.toLowerCase());
   });
 
@@ -357,8 +536,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
       style={{
         display: 'flex',
         width: '100%',
-        maxWidth: '980px',
-        height: '76vh',
+        maxWidth: '1040px',
+        height: '78vh',
         background: '#121214',
         border: '1px solid #242428',
         borderRadius: '24px',
@@ -366,10 +545,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
         boxShadow: '0 24px 60px rgba(0, 0, 0, 0.85)',
       }}
     >
-      {/* LEFT PANE: CONVERSATION LIST */}
+      {/* ------------------------------------------------------------------- */}
+      {/* LEFT PANE: DISCOVERED PEERS + CONVERSATION LIST                     */}
+      {/* ------------------------------------------------------------------- */}
       <div
         style={{
-          width: '320px',
+          width: '340px',
           borderRight: '1px solid #202024',
           display: 'flex',
           flexDirection: 'column',
@@ -377,29 +558,35 @@ export const ChatView: React.FC<ChatViewProps> = ({
         }}
       >
         {/* Header */}
-        <div style={{ padding: '18px 20px', borderBottom: '1px solid #202024' }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid #202024' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-            <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#FFFFFF', margin: 0 }}>Chats</h2>
+            <h2 style={{ fontSize: '17px', fontWeight: 800, color: '#FFFFFF', margin: 0, letterSpacing: '-0.3px' }}>
+              Messages
+            </h2>
             <button
               onClick={() => setIsGroupModalOpen(true)}
               style={{
                 background: '#242428',
                 border: '1px solid #323238',
-                borderRadius: '16px',
-                padding: '6px 12px',
-                color: '#0A84FF',
-                fontSize: '12px',
+                borderRadius: '14px',
+                padding: '5px 12px',
+                color: '#FFFFFF',
+                fontSize: '11px',
                 fontWeight: 700,
                 cursor: 'pointer',
+                transition: 'all 0.15s ease',
               }}
+              onMouseEnter={(e) => (e.currentTarget.style.borderColor = '#FFFFFF')}
+              onMouseLeave={(e) => (e.currentTarget.style.borderColor = '#323238')}
             >
               + New Group
             </button>
           </div>
+
           {/* Search */}
           <input
             type="text"
-            placeholder="Search chats or members..."
+            placeholder="Search conversations..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             style={{
@@ -416,17 +603,121 @@ export const ChatView: React.FC<ChatViewProps> = ({
           />
         </div>
 
-        {/* Conversation List */}
+        {/* SECTION 1: NEARBY DISCOVERED DEVICES ON WI-FI */}
+        <div style={{ padding: '12px 18px 8px 18px', borderBottom: '1px solid #1C1C20' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+            <span style={{ fontSize: '11px', fontWeight: 800, color: '#8E8E93', letterSpacing: '0.4px', textTransform: 'uppercase' }}>
+              Nearby Devices ({peers.length})
+            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+              <div
+                style={{
+                  width: '6px',
+                  height: '6px',
+                  borderRadius: '50%',
+                  background: peers.length > 0 ? '#34C759' : '#8E8E93',
+                  boxShadow: peers.length > 0 ? '0 0 6px #34C759' : 'none',
+                }}
+              />
+              <span style={{ fontSize: '10px', color: '#8E8E93' }}>
+                {peers.length > 0 ? 'Wi-Fi Active' : 'Scanning'}
+              </span>
+            </div>
+          </div>
+
+          {peers.length === 0 ? (
+            <div style={{ padding: '8px 0', fontSize: '11px', color: '#636366' }}>
+              Searching for AuraDrop devices on your local network...
+            </div>
+          ) : (
+            <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '6px' }}>
+              {peers.map((p) => {
+                const isSelected = activeConv?.members?.some((m) => m.id === p.id);
+                return (
+                  <div
+                    key={p.id}
+                    onClick={() => handleOpenPeerChat(p)}
+                    title={`Start chatting with ${p.name}`}
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: '4px',
+                      cursor: 'pointer',
+                      padding: '6px 8px',
+                      borderRadius: '12px',
+                      background: isSelected ? '#24242C' : 'transparent',
+                      minWidth: '60px',
+                      flexShrink: 0,
+                    }}
+                  >
+                    <div
+                      style={{
+                        position: 'relative',
+                        width: '36px',
+                        height: '36px',
+                        borderRadius: '50%',
+                        background: '#242428',
+                        border: '1px solid #34343A',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '13px',
+                        fontWeight: 800,
+                        color: '#FFFFFF',
+                      }}
+                    >
+                      {p.name.charAt(0).toUpperCase()}
+                      <div
+                        style={{
+                          position: 'absolute',
+                          bottom: 0,
+                          right: 0,
+                          width: '9px',
+                          height: '9px',
+                          borderRadius: '50%',
+                          background: '#34C759',
+                          border: '2px solid #141418',
+                        }}
+                      />
+                    </div>
+                    <span
+                      style={{
+                        fontSize: '10px',
+                        fontWeight: 600,
+                        color: '#FFFFFF',
+                        maxWidth: '64px',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {p.name}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* SECTION 2: CONVERSATION LIST */}
         <div style={{ flex: 1, overflowY: 'auto' }}>
+          <div style={{ padding: '12px 18px 4px 18px', fontSize: '11px', fontWeight: 800, color: '#8E8E93', letterSpacing: '0.4px', textTransform: 'uppercase' }}>
+            Conversations
+          </div>
           {filteredConversations.length === 0 ? (
-            <div style={{ padding: '32px 20px', textAlign: 'center', color: '#8E8E93', fontSize: '13px' }}>
-              No conversations found. Discovered peers on your network will appear here automatically.
+            <div style={{ padding: '24px 20px', textAlign: 'center', color: '#8E8E93', fontSize: '12px', lineHeight: 1.5 }}>
+              No messages yet.<br />Click any nearby device above to start a direct chat!
             </div>
           ) : (
             filteredConversations.map((c) => {
               const isActive = c.id === activeConvId;
               const otherMember = c.members?.find((m) => m.id !== currentUserId);
-              const displayName = c.type === 'GROUP' ? c.title : otherMember?.display_name || otherMember?.username || 'Direct Chat';
+              const displayName =
+                c.type === 'GROUP'
+                  ? c.title
+                  : otherMember?.display_name || otherMember?.username || 'Direct Chat';
               const avatar = c.type === 'GROUP' ? c.avatar_url : otherMember?.avatar_url;
               const initials = (displayName || 'C').substring(0, 2).toUpperCase();
 
@@ -448,16 +739,17 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   {/* Avatar */}
                   <div
                     style={{
-                      width: '42px',
-                      height: '42px',
+                      width: '40px',
+                      height: '40px',
                       borderRadius: '50%',
-                      background: c.type === 'GROUP' ? '#5856D6' : '#0A84FF',
+                      background: c.type === 'GROUP' ? '#32323A' : '#24242A',
+                      border: '1px solid #3A3A42',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
                       color: '#FFFFFF',
                       fontWeight: 800,
-                      fontSize: '14px',
+                      fontSize: '13px',
                       flexShrink: 0,
                       overflow: 'hidden',
                     }}
@@ -472,21 +764,52 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   {/* Details */}
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: '14px', fontWeight: 700, color: '#FFFFFF', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      <span
+                        style={{
+                          fontSize: '13px',
+                          fontWeight: 700,
+                          color: '#FFFFFF',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        }}
+                      >
                         {displayName}
                       </span>
                       <span style={{ fontSize: '10px', color: '#636366' }}>
-                        {c.last_message_at ? new Date(c.last_message_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                        {c.last_message_at
+                          ? new Date(c.last_message_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                          : ''}
                       </span>
                     </div>
-                    <div style={{ fontSize: '12px', color: '#8E8E93', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {c.last_message?.is_deleted_everyone ? 'Deleted message' : c.last_message?.text || (c.type === 'GROUP' ? 'Group created' : 'Start messaging')}
+                    <div
+                      style={{
+                        fontSize: '12px',
+                        color: '#8E8E93',
+                        marginTop: '2px',
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                      }}
+                    >
+                      {c.last_message?.is_deleted_everyone
+                        ? 'Deleted message'
+                        : c.last_message?.text || (c.type === 'GROUP' ? 'Group created' : 'Start messaging')}
                     </div>
                   </div>
 
                   {/* Unread badge */}
                   {(c.unread_count || 0) > 0 && (
-                    <div style={{ background: '#0A84FF', color: '#FFFFFF', borderRadius: '10px', fontSize: '10px', fontWeight: 800, padding: '2px 6px' }}>
+                    <div
+                      style={{
+                        background: '#FFFFFF',
+                        color: '#000000',
+                        borderRadius: '10px',
+                        fontSize: '10px',
+                        fontWeight: 900,
+                        padding: '1px 6px',
+                      }}
+                    >
                       {c.unread_count}
                     </div>
                   )}
@@ -497,13 +820,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
         </div>
       </div>
 
-      {/* RIGHT PANE: ACTIVE CONVERSATION */}
+      {/* ------------------------------------------------------------------- */}
+      {/* RIGHT PANE: ACTIVE CONVERSATION STREAM                              */}
+      {/* ------------------------------------------------------------------- */}
       {activeConv ? (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#0E0E10' }}>
-          {/* Chat Header */}
+          {/* Header */}
           <div
             style={{
-              padding: '14px 20px',
+              padding: '14px 22px',
               borderBottom: '1px solid #202024',
               display: 'flex',
               alignItems: 'center',
@@ -512,18 +837,20 @@ export const ChatView: React.FC<ChatViewProps> = ({
             }}
           >
             <div>
-              <div style={{ fontSize: '16px', fontWeight: 800, color: '#FFFFFF' }}>
+              <div style={{ fontSize: '15px', fontWeight: 800, color: '#FFFFFF' }}>
                 {activeConv.type === 'GROUP'
                   ? activeConv.title
-                  : activeConv.members?.find((m) => m.id !== currentUserId)?.display_name || 'Chat'}
+                  : activeConv.members?.find((m) => m.id !== currentUserId)?.display_name || 'Direct Chat'}
               </div>
-              <div style={{ fontSize: '11px', color: '#34C759', marginTop: '2px' }}>
-                ● Real P2P WebRTC Connected {activeConv.type === 'GROUP' ? `• ${activeConv.members?.length || 0} members` : ''}
+              <div style={{ fontSize: '11px', color: '#34C759', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', background: '#34C759' }} />
+                Real-Time Network Connected • Neon DB Synced
+                {activeConv.type === 'GROUP' ? ` • ${activeConv.members?.length || 0} members` : ''}
               </div>
             </div>
 
-            {/* Options */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            {/* Controls */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               {/* Disappearing Messages Dropdown */}
               <select
                 value={disappearingSeconds}
@@ -548,7 +875,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 <option value={600}>⏳ 10 minutes</option>
                 <option value={3600}>⏳ 1 hour</option>
                 <option value={86400}>⏳ 24 hours</option>
-                <option value={604800}>⏳ 7 days</option>
               </select>
 
               <button
@@ -564,16 +890,25 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   cursor: 'pointer',
                 }}
               >
-                Clear Chat
+                Clear
               </button>
             </div>
           </div>
 
           {/* Messages Stream */}
-          <div style={{ flex: 1, overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <div
+            style={{
+              flex: 1,
+              overflowY: 'auto',
+              padding: '20px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '12px',
+            }}
+          >
             {messages.length === 0 ? (
               <div style={{ margin: 'auto', textAlign: 'center', color: '#636366', fontSize: '13px' }}>
-                No messages yet. Send a message or attach a file to transfer directly!
+                No messages yet. Send a message or attach a file below!
               </div>
             ) : (
               messages.map((m) => {
@@ -583,38 +918,51 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     key={m.id}
                     style={{
                       alignSelf: isMe ? 'flex-end' : 'flex-start',
-                      maxWidth: '70%',
+                      maxWidth: '72%',
                       display: 'flex',
                       flexDirection: 'column',
                       alignItems: isMe ? 'flex-end' : 'flex-start',
                     }}
                   >
                     {!isMe && activeConv.type === 'GROUP' && (
-                      <span style={{ fontSize: '11px', color: '#0A84FF', fontWeight: 700, marginBottom: '2px', marginLeft: '4px' }}>
+                      <span style={{ fontSize: '11px', color: '#8E8E93', fontWeight: 700, marginBottom: '2px', marginLeft: '4px' }}>
                         {m.sender?.display_name || m.sender?.username || 'User'}
                       </span>
                     )}
 
                     <div
                       style={{
-                        background: isMe ? '#0A84FF' : '#202024',
+                        background: isMe ? '#282830' : '#1C1C20',
                         color: '#FFFFFF',
                         borderRadius: isMe ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
                         padding: '10px 14px',
-                        fontSize: '14px',
-                        lineHeight: 1.4,
-                        border: isMe ? 'none' : '1px solid #2C2C32',
+                        fontSize: '13.5px',
+                        lineHeight: 1.45,
+                        border: isMe ? '1px solid #383842' : '1px solid #28282E',
                         wordBreak: 'break-word',
                         position: 'relative',
                       }}
                     >
                       {/* File Card Rendering if type is FILE */}
                       {m.type === 'FILE' && m.attachments && m.attachments.length > 0 ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'rgba(0,0,0,0.25)', padding: '8px 12px', borderRadius: '12px', marginBottom: '4px' }}>
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px',
+                            background: 'rgba(0, 0, 0, 0.35)',
+                            padding: '8px 12px',
+                            borderRadius: '12px',
+                            marginBottom: '6px',
+                            border: '1px solid #28282E',
+                          }}
+                        >
                           <span style={{ fontSize: '24px' }}>📁</span>
                           <div>
-                            <div style={{ fontWeight: 700, fontSize: '13px' }}>{m.attachments[0].file_name}</div>
-                            <div style={{ fontSize: '11px', opacity: 0.75 }}>{(m.attachments[0].file_size / (1024 * 1024)).toFixed(1)} MB</div>
+                            <div style={{ fontWeight: 700, fontSize: '12.5px' }}>{m.attachments[0].file_name}</div>
+                            <div style={{ fontSize: '11px', color: '#8E8E93' }}>
+                              {(m.attachments[0].file_size / (1024 * 1024)).toFixed(2)} MB
+                            </div>
                           </div>
                         </div>
                       ) : null}
@@ -632,7 +980,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                           justifyContent: 'flex-end',
                           gap: '4px',
                           fontSize: '10px',
-                          color: isMe ? 'rgba(255,255,255,0.7)' : '#8E8E93',
+                          color: '#8E8E93',
                           marginTop: '4px',
                         }}
                       >
@@ -652,7 +1000,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
                           color: '#636366',
                           fontSize: '10px',
                           cursor: 'pointer',
-                          marginTop: '2px',
+                          marginTop: '3px',
+                          padding: '0 4px',
                         }}
                       >
                         Delete for everyone
@@ -685,7 +1034,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             />
             <button
               onClick={() => fileInputRef.current?.click()}
-              title="Attach File for P2P Transfer"
+              title="Attach File for P2P Transfer & Chat"
               style={{
                 background: '#242428',
                 border: '1px solid #323238',
@@ -697,7 +1046,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 justifyContent: 'center',
                 color: '#FFFFFF',
                 cursor: 'pointer',
-                fontSize: '18px',
+                fontSize: '16px',
               }}
             >
               📎
@@ -713,10 +1062,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 flex: 1,
                 background: '#09090B',
                 border: '1px solid #242428',
-                borderRadius: '18px',
+                borderRadius: '16px',
                 padding: '10px 16px',
                 color: '#FFFFFF',
-                fontSize: '14px',
+                fontSize: '13.5px',
                 outline: 'none',
               }}
             />
@@ -724,23 +1073,27 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <button
               onClick={handleSendMessage}
               style={{
-                background: '#0A84FF',
+                background: '#FFFFFF',
                 border: 'none',
-                borderRadius: '18px',
+                borderRadius: '16px',
                 padding: '10px 20px',
-                color: '#FFFFFF',
-                fontSize: '14px',
-                fontWeight: 700,
+                color: '#000000',
+                fontSize: '13px',
+                fontWeight: 800,
                 cursor: 'pointer',
+                transition: 'opacity 0.15s ease',
               }}
+              onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.9')}
+              onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
             >
               Send
             </button>
           </div>
         </div>
       ) : (
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#636366', fontSize: '14px' }}>
-          Select a chat or start a conversation with a nearby device.
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#636366', fontSize: '13px', gap: '8px' }}>
+          <div style={{ fontSize: '32px' }}>💬</div>
+          <div>Select a conversation or click a nearby device on your network to begin chatting.</div>
         </div>
       )}
 
@@ -767,10 +1120,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
               maxWidth: '420px',
             }}
           >
-            <h3 style={{ fontSize: '16px', fontWeight: 800, color: '#FFFFFF', margin: '0 0 16px 0' }}>Create Group Chat</h3>
+            <h3 style={{ fontSize: '16px', fontWeight: 800, color: '#FFFFFF', margin: '0 0 16px 0' }}>
+              Create Group Chat
+            </h3>
             <input
               type="text"
-              placeholder="Group Name (e.g. Design Team)"
+              placeholder="Group Name (e.g. Project Team)"
               value={groupTitleInput}
               onChange={(e) => setGroupTitleInput(e.target.value)}
               style={{
@@ -785,10 +1140,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 boxSizing: 'border-box',
               }}
             />
-            <div style={{ fontSize: '12px', color: '#8E8E93', marginBottom: '8px', fontWeight: 700 }}>Select Peers / Members:</div>
+            <div style={{ fontSize: '12px', color: '#8E8E93', marginBottom: '8px', fontWeight: 700 }}>
+              Select Members:
+            </div>
             <div style={{ maxHeight: '160px', overflowY: 'auto', marginBottom: '16px' }}>
               {peers.length === 0 ? (
-                <div style={{ color: '#636366', fontSize: '12px' }}>No nearby peers online. You can still create the group and invite members later.</div>
+                <div style={{ color: '#636366', fontSize: '12px' }}>
+                  No nearby peers online. You can still create the group now.
+                </div>
               ) : (
                 peers.map((p) => {
                   const isChecked = selectedGroupMemberIds.includes(p.id);
@@ -821,13 +1180,31 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <div style={{ display: 'flex', gap: '10px' }}>
               <button
                 onClick={() => setIsGroupModalOpen(false)}
-                style={{ flex: 1, padding: '10px', background: '#242428', border: 'none', borderRadius: '12px', color: '#FFFFFF', cursor: 'pointer', fontWeight: 600 }}
+                style={{
+                  flex: 1,
+                  padding: '10px',
+                  background: '#242428',
+                  border: 'none',
+                  borderRadius: '12px',
+                  color: '#FFFFFF',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                }}
               >
                 Cancel
               </button>
               <button
                 onClick={handleCreateGroup}
-                style={{ flex: 1, padding: '10px', background: '#0A84FF', border: 'none', borderRadius: '12px', color: '#FFFFFF', cursor: 'pointer', fontWeight: 700 }}
+                style={{
+                  flex: 1,
+                  padding: '10px',
+                  background: '#FFFFFF',
+                  border: 'none',
+                  borderRadius: '12px',
+                  color: '#000000',
+                  cursor: 'pointer',
+                  fontWeight: 700,
+                }}
               >
                 Create
               </button>

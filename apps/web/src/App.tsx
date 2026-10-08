@@ -583,6 +583,7 @@ export const App: React.FC = () => {
               currentUserId={engine.localId}
               currentUsername={engine.localName}
               peers={peers}
+              initialPeer={selectedPeer}
               onStartFileTransfer={(peer, file) => {
                 engine.startOutgoingTransfer(peer, file);
               }}

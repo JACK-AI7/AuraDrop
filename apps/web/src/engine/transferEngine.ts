@@ -68,6 +68,7 @@ export class TransferEngine {
   private peersMap = new Map<string, PeerDevice>();
   private peerListeners: PeersUpdateListener[] = [];
   private eventListeners: EngineEventListener[] = [];
+  private chatListeners: ((payload: any) => void)[] = [];
 
   // Active Receiving State
   private activeIncomingTransfer: {
@@ -151,6 +152,17 @@ export class TransferEngine {
     };
   }
 
+  public onChatMessage(listener: (payload: any) => void): () => void {
+    this.chatListeners.push(listener);
+    return () => {
+      this.chatListeners = this.chatListeners.filter((l) => l !== listener);
+    };
+  }
+
+  public sendChatMessage(targetDeviceId: string, payload: any): void {
+    this.signaling.sendChatMessage(targetDeviceId, payload);
+  }
+
   private notifyPeers(): void {
     const list = Array.from(this.peersMap.values());
     this.peerListeners.forEach((l) => l(list));
@@ -207,6 +219,10 @@ export class TransferEngine {
 
       onTransferAck: (msg) => {
         this.handleTransferAckMessage(msg);
+      },
+
+      onChatMessage: (payload) => {
+        this.chatListeners.forEach((l) => l(payload));
       },
     });
   }

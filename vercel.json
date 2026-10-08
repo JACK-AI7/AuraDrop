@@ -24,6 +24,22 @@
   ],
   "rewrites": [
     {
+      "source": "/api/signaling",
+      "destination": "/api/signaling"
+    },
+    {
+      "source": "/api/conversations/:path*",
+      "destination": "/api/conversations?subpath=:path*"
+    },
+    {
+      "source": "/api/conversations",
+      "destination": "/api/conversations"
+    },
+    {
+      "source": "/api/messages/:path*",
+      "destination": "/api/conversations?subpath=messages/:path*"
+    },
+    {
       "source": "/api/(.*)",
       "destination": "/api/$1"
     },

@@ -16,6 +16,7 @@ export interface SignalingEventCallbacks {
   onTransferAck?: (payload: any) => void;
   onConnectionStatus?: (isConnected: boolean) => void;
   onDiagnosticsUpdate?: () => void;
+  onChatMessage?: (payload: any) => void;
 }
 
 export interface SignalingDiagnostics {
@@ -460,6 +461,12 @@ export class SignalingClient {
         this.callbacks.onDiagnosticsUpdate?.();
         break;
       }
+
+      case 'CHAT_MESSAGE': {
+        const payload = msg.payload || msg;
+        this.callbacks.onChatMessage?.(payload);
+        break;
+      }
     }
   }
 
@@ -529,6 +536,16 @@ export class SignalingClient {
       senderId: this.identity.deviceId,
       targetDeviceId,
       transferId: payload.transferId,
+      payload,
+    });
+  }
+
+  public sendChatMessage(targetDeviceId: string, payload: any): void {
+    this.send({
+      type: 'CHAT_MESSAGE',
+      deviceId: this.identity.deviceId,
+      senderId: this.identity.deviceId,
+      targetDeviceId,
       payload,
     });
   }
