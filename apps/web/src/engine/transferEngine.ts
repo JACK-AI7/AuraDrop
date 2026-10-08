@@ -183,7 +183,14 @@ export class TransferEngine {
   private setupSignalingEvents(): void {
     this.signaling.setCallbacks({
       onPeerList: (peers) => {
-        this.peersMap.clear();
+        const now = Date.now();
+        // Gracefully prune peers older than 45 seconds rather than clearing immediately
+        for (const [id, existing] of this.peersMap.entries()) {
+          const last = existing.lastSeen instanceof Date ? existing.lastSeen.getTime() : Number(existing.lastSeen || 0);
+          if (now - last > 45000) {
+            this.peersMap.delete(id);
+          }
+        }
         for (const p of peers) {
           if (p.deviceId !== this.localId) {
             this.peersMap.set(p.deviceId, p);

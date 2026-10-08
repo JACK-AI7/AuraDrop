@@ -28,27 +28,50 @@ export class IdentityManager {
   }
 
   private loadOrGenerateIdentity(): DeviceIdentity {
+    let baseDeviceId = '';
+    let storedName = '';
+
     try {
       const stored = localStorage.getItem(STORAGE_KEY_IDENTITY);
       if (stored) {
-        const parsed: DeviceIdentity = JSON.parse(stored);
-        if (parsed.deviceId && parsed.platform) {
-          return parsed;
+        const parsed = JSON.parse(stored);
+        if (parsed.deviceId) {
+          baseDeviceId = parsed.deviceId.split('_')[0] || parsed.deviceId;
+          storedName = parsed.displayName || '';
         }
       }
     } catch {
-      // Ignore storage errors and generate fresh persistent identity
+      // Ignore storage errors
     }
+
+    if (!baseDeviceId) {
+      const randomHex = typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID().replace(/-/g, '').substring(0, 8)
+        : Math.random().toString(36).substring(2, 10);
+      baseDeviceId = `aura_${randomHex}`;
+    }
+
+    // Ensure each tab or window has its own distinct session identity
+    let tabSessionId = '';
+    const isReceiverRole = typeof window !== 'undefined' && window.location.search.includes('role=receiver');
+
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        tabSessionId = sessionStorage.getItem('auradrop_tab_session_id') || '';
+        if (!tabSessionId) {
+          tabSessionId = isReceiverRole ? 'receiver' : Math.random().toString(36).substring(2, 6);
+          sessionStorage.setItem('auradrop_tab_session_id', tabSessionId);
+        }
+      }
+    } catch {}
 
     const platform = this.detectPlatform();
     const deviceName = this.detectDeviceModel(platform);
-    
-    // Durable random UUID (not session-dependent)
-    const randomHex = typeof crypto !== 'undefined' && crypto.randomUUID
-      ? crypto.randomUUID().replace(/-/g, '').substring(0, 8)
-      : Math.random().toString(36).substring(2, 10);
-    const deviceId = `aura_${randomHex}`;
-    const displayName = `${deviceName} (${randomHex.substring(0, 4)})`;
+
+    const deviceId = tabSessionId ? `${baseDeviceId}_${tabSessionId}` : baseDeviceId;
+    const displayName = isReceiverRole
+      ? `${deviceName} (Receiver)`
+      : `${deviceName} (${tabSessionId || baseDeviceId.substring(5, 9)})`;
 
     const identity: DeviceIdentity = {
       deviceId,
@@ -60,7 +83,7 @@ export class IdentityManager {
     };
 
     try {
-      localStorage.setItem(STORAGE_KEY_IDENTITY, JSON.stringify(identity));
+      localStorage.setItem(STORAGE_KEY_IDENTITY, JSON.stringify({ deviceId: baseDeviceId, displayName: deviceName }));
     } catch (e) {
       console.warn('Failed to persist identity to localStorage', e);
     }

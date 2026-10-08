@@ -54,6 +54,11 @@ export class SignalingClient {
   private lastHeartbeat: number | null = null;
   private reconnectAttempts = 0;
 
+  // Inter-tab Broadcast Mesh
+  private broadcastChannel: BroadcastChannel | null = null;
+  private localMeshPeers = new Map<string, PeerDevice>();
+  private networkDiscoveredPeers: any[] = [];
+
   // Serverless HTTP Signaling Polling
   private httpPollTimer: any = null;
   private isHttpPolling = false;
@@ -64,6 +69,7 @@ export class SignalingClient {
     this.identity = identity;
     this.serverlessApiUrl = typeof window !== 'undefined' ? `${window.location.origin}/api/signaling` : '';
     this.setupNetworkLifecycleListeners();
+    this.setupBroadcastMesh();
   }
 
   public static getInstance(identity: DeviceIdentity): SignalingClient {
@@ -331,10 +337,87 @@ export class SignalingClient {
     this.isHttpPolling = false;
   }
 
+  private setupBroadcastMesh(): void {
+    if (typeof window === 'undefined' || typeof BroadcastChannel === 'undefined') return;
+
+    try {
+      this.broadcastChannel = new BroadcastChannel('auradrop_tab_mesh_v1');
+      this.broadcastChannel.onmessage = (event) => {
+        const msg = event.data;
+        if (!msg || typeof msg !== 'object') return;
+
+        if (msg.senderDeviceId && msg.senderDeviceId !== this.identity.deviceId) {
+          if (msg.type === 'TAB_PRESENCE') {
+            const peer = this.mapToPeerDevice(msg.peer);
+            this.localMeshPeers.set(peer.id, peer);
+            this.emitCombinedPeers();
+          } else if (msg.type === 'TAB_LEAVE') {
+            this.localMeshPeers.delete(msg.senderDeviceId);
+            this.emitCombinedPeers();
+          } else if (msg.targetDeviceId === this.identity.deviceId) {
+            this.handleIncomingMessage(msg.payload || msg);
+          }
+        }
+      };
+
+      const broadcastPresence = () => {
+        if (!this.broadcastChannel) return;
+        this.broadcastChannel.postMessage({
+          type: 'TAB_PRESENCE',
+          senderDeviceId: this.identity.deviceId,
+          peer: {
+            deviceId: this.identity.deviceId,
+            displayName: this.identity.displayName,
+            deviceName: `${this.identity.deviceName} (Local Tab)`,
+            platform: this.identity.platform,
+            clientIp: '127.0.0.1',
+            lastSeen: Date.now(),
+            visibility: this.identity.visibility,
+          },
+        });
+      };
+
+      broadcastPresence();
+      setInterval(broadcastPresence, 1200);
+
+      window.addEventListener('beforeunload', () => {
+        try {
+          this.broadcastChannel?.postMessage({
+            type: 'TAB_LEAVE',
+            senderDeviceId: this.identity.deviceId,
+          });
+        } catch {}
+      });
+    } catch (e) {
+      console.warn('[AuraDrop] BroadcastChannel notice:', e);
+    }
+  }
+
   private handleDiscoveredPeers(peers: any[]): void {
-    const valid = peers.filter((p) => p && (p.deviceId || p.id) !== this.identity.deviceId);
-    this.connectedPeersCount = valid.length;
-    const peerDevices: PeerDevice[] = valid.map((p: any) => this.mapToPeerDevice(p));
+    this.networkDiscoveredPeers = Array.isArray(peers) ? peers : [];
+    this.emitCombinedPeers();
+  }
+
+  private emitCombinedPeers(): void {
+    const combined = new Map<string, PeerDevice>();
+
+    // 1. Add local mesh peers from BroadcastChannel (same machine tabs/windows)
+    for (const [id, peer] of this.localMeshPeers) {
+      if (id !== this.identity.deviceId) {
+        combined.set(id, peer);
+      }
+    }
+
+    // 2. Add network peers from Serverless API / Neon DB / WebSocket
+    for (const p of this.networkDiscoveredPeers) {
+      const id = p.deviceId || p.id;
+      if (id && id !== this.identity.deviceId && !combined.has(id)) {
+        combined.set(id, this.mapToPeerDevice(p));
+      }
+    }
+
+    const peerDevices = Array.from(combined.values());
+    this.connectedPeersCount = peerDevices.length;
     this.callbacks.onPeerList?.(peerDevices);
     this.callbacks.onDiagnosticsUpdate?.();
   }
@@ -354,8 +437,8 @@ export class SignalingClient {
       const host = window.location.hostname || 'localhost';
       const port = window.location.port;
 
-      // 3. If on Vercel without custom env, use high-speed Serverless Wi-Fi signaling
-      if (host.includes('vercel.app')) {
+      // 3. In web browser on Vercel or cloud web host, use the serverless API on current origin
+      if (host.includes('vercel.app') || !port || port === '80' || port === '443') {
         return `${window.location.origin}/api/signaling`;
       }
 
@@ -369,8 +452,8 @@ export class SignalingClient {
         return `${wsProto}//${host}:48280`;
       }
 
-      // 6. Default backend port 48280 on local machine
-      return `${wsProto}//${host}:48280`;
+      // 6. Default to serverless signaling API on current origin
+      return `${window.location.origin}/api/signaling`;
     }
 
     return 'ws://localhost:48280';
@@ -559,6 +642,17 @@ export class SignalingClient {
 
     if (this.socket && this.socket.readyState === WebSocket.OPEN) {
       this.socket.send(JSON.stringify(outgoing));
+    }
+
+    // Forward to local mesh tabs if broadcast channel is active
+    if (this.broadcastChannel && data.targetDeviceId) {
+      try {
+        this.broadcastChannel.postMessage({
+          senderDeviceId: this.identity.deviceId,
+          targetDeviceId: data.targetDeviceId,
+          payload: outgoing,
+        });
+      } catch {}
     }
 
     // Mirror to Serverless Signaling if targetDeviceId is present
