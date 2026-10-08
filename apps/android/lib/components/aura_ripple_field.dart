@@ -74,7 +74,10 @@ class _AuraRippleFieldState extends State<AuraRippleField> with SingleTickerProv
   @override
   void initState() {
     super.initState();
-    _ticker = AnimationController(vsync: this, duration: const Duration(seconds: 1))..repeat();
+    _ticker = AnimationController(vsync: this, duration: const Duration(seconds: 1));
+    if (widget.controller.ripples.isNotEmpty) {
+      _ticker.repeat();
+    }
     widget.controller.addListener(_onControllerUpdate);
   }
 
@@ -86,7 +89,14 @@ class _AuraRippleFieldState extends State<AuraRippleField> with SingleTickerProv
   }
 
   void _onControllerUpdate() {
-    if (mounted) setState(() {});
+    if (mounted) {
+      setState(() {});
+      if (widget.controller.ripples.isEmpty) {
+        _ticker.stop();
+      } else if (!_ticker.isAnimating) {
+        _ticker.repeat();
+      }
+    }
   }
 
   @override

@@ -15,3 +15,5 @@ coverage/
 pnpm-debug.log*
 prisma/dev.db
 prisma/*.db
+
+scratch/

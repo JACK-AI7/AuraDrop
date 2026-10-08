@@ -1,0 +1,32 @@
+[package]
+name = "auradrop"
+version = "2.0.0"
+description = "AuraDrop Desktop Native File Sharing"
+authors = ["AuraDrop Team"]
+edition = "2021"
+
+[lib]
+name = "auradrop_lib"
+crate-type = ["staticlib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.1", features = [] }
+
+[dependencies]
+tauri = { version = "2.12.1", features = [] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.43", features = ["full"] }
+reqwest = { version = "0.12", features = ["stream", "json"] }
+axum = { version = "0.7", features = ["tokio"] }
+tower-http = { version = "0.5", features = ["cors"] }
+local-ip-address = "0.6"
+socket2 = "0.5"
+uuid = { version = "1.12", features = ["v4", "serde"] }
+sha2 = "0.10"
+hex = "0.4"
+futures-util = "0.3"
+rfd = "0.15"
+dirs = "6.0"
+chrono = "0.4"
+tokio-util = { version = "0.7", features = ["io"] }

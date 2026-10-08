@@ -58,10 +58,17 @@ class _HeroGlobeState extends State<HeroGlobe> with SingleTickerProviderStateMix
     _rotationController.repeat();
   }
 
+  int _lastTickMs = 0;
+
   void _onTick() {
     if (!_isInteracting) {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      // Cap rotation redraw to ~30 FPS (at least 33ms interval) to keep desktop UI thread 100% responsive
+      if (now - _lastTickMs < 33) return;
+      final elapsedMs = _lastTickMs == 0 ? 33 : (now - _lastTickMs);
+      _lastTickMs = now;
       setState(() {
-        _yaw += 0.0035;
+        _yaw += 0.0035 * (elapsedMs / 33.0).clamp(0.5, 2.5);
         if (_yaw > 2 * math.pi) _yaw -= 2 * math.pi;
       });
     }
