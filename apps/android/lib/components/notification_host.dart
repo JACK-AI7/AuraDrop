@@ -434,11 +434,15 @@ class _InAppNotificationHostState extends State<InAppNotificationHost>
       return Container(
         width: 42,
         height: 42,
-        decoration: const BoxDecoration(
-          color: Color(0xFF0A84FF),
-          shape: BoxShape.circle,
+        decoration: BoxDecoration(
+          color: theme.isDark ? Colors.white : Colors.black,
+          borderRadius: BorderRadius.circular(12),
         ),
-        child: const Icon(Icons.wifi_tethering_rounded, size: 22, color: Colors.white),
+        child: Icon(
+          Icons.arrow_downward_rounded,
+          size: 22,
+          color: theme.isDark ? Colors.black : Colors.white,
+        ),
       );
     }
 
@@ -447,19 +451,14 @@ class _InAppNotificationHostState extends State<InAppNotificationHost>
         width: 42,
         height: 42,
         decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          gradient: const RadialGradient(
-            colors: [Color(0xFF5856D6), Color(0xFF007AFF)],
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: const Color(0xFF007AFF).withValues(alpha: 0.4),
-              blurRadius: 10,
-              spreadRadius: 2,
-            ),
-          ],
+          color: theme.isDark ? Colors.white : Colors.black,
+          borderRadius: BorderRadius.circular(12),
         ),
-        child: const Icon(Icons.contactless_rounded, size: 22, color: Colors.white),
+        child: Icon(
+          Icons.devices_rounded,
+          size: 22,
+          color: theme.isDark ? Colors.black : Colors.white,
+        ),
       );
     }
 

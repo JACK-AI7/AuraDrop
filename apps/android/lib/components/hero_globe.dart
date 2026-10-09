@@ -284,26 +284,20 @@ class _GlobePainter extends CustomPainter {
       final peerPos = Offset(center.dx + peerRot.x * radius, center.dy + peerRot.y * radius);
 
       final isPeerFront = peerRot.z > -0.15;
-      if (isPeerFront) {
-        peerPositions[peer.id] = peerPos;
-        final isSelected = selectedPeerId == peer.id;
+      final isSelected = selectedPeerId == peer.id;
 
-        // If selected: render orbital ring around marker (Circles concept)
-        if (isSelected) {
-          final ringPaint = Paint()
-            ..color = theme.isDark ? Colors.white : Colors.black
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 1.2;
-          canvas.drawCircle(peerPos, 10.0, ringPaint);
-        }
+      if (isPeerFront || isSelected) {
+        peerPositions[peer.id] = peerPos;
+        final opacity = isPeerFront ? 1.0 : 0.55;
 
         // Peer Dot Marker
         final peerMarkerPaint = Paint()
-          ..color = isSelected
+          ..color = (isSelected
               ? (theme.isDark ? Colors.white : Colors.black)
-              : (theme.isDark ? const Color(0xFF888888) : const Color(0xFF555555))
+              : (theme.isDark ? const Color(0xFF888888) : const Color(0xFF555555)))
+              .withValues(alpha: opacity)
           ..style = PaintingStyle.fill;
-        canvas.drawCircle(peerPos, isSelected ? 4.5 : 3.5, peerMarkerPaint);
+        canvas.drawCircle(peerPos, isSelected ? 5.0 : 3.5, peerMarkerPaint);
 
         // Peer Name Label
         final peerLabelPainter = TextPainter(
@@ -312,9 +306,10 @@ class _GlobePainter extends CustomPainter {
             style: TextStyle(
               fontSize: 10,
               fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
-              color: isSelected
+              color: (isSelected
                   ? (theme.isDark ? Colors.white : Colors.black)
-                  : theme.textSecondary,
+                  : theme.textSecondary)
+                  .withValues(alpha: opacity),
             ),
           ),
           textDirection: TextDirection.ltr,
@@ -323,11 +318,11 @@ class _GlobePainter extends CustomPainter {
         )..layout(maxWidth: 80);
         peerLabelPainter.paint(
           canvas,
-          Offset(peerPos.dx - peerLabelPainter.width / 2, peerPos.dy + (isSelected ? 13 : 8)),
+          Offset(peerPos.dx - peerLabelPainter.width / 2, peerPos.dy + (isSelected ? 10 : 7)),
         );
 
-        // 6. Connection Arc between User and Selected Peer
-        if (isSelected && isUserFront) {
+        // 6. Persistent Connection Arc between User and Selected Peer
+        if (isSelected) {
           _drawConnectionArc(canvas, userSpherical, peerVec, center, radius, isTransferring);
         }
       }

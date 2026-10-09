@@ -4,7 +4,7 @@ use crate::models::{
 };
 use axum::{
     body::Body,
-    extract::{DefaultBodyLimit, State},
+    extract::{DefaultBodyLimit, Query, State},
     http::{HeaderMap, StatusCode},
     response::Json,
     routing::{get, post},
@@ -491,14 +491,16 @@ async fn handle_prepare_upload(
 
 async fn handle_upload(
     State(service): State<TransferService>,
+    Query(params): Query<HashMap<String, String>>,
     headers: HeaderMap,
     body: Body,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let transfer_id = headers
         .get("x-transfer-id")
         .and_then(|h| h.to_str().ok())
-        .unwrap_or("")
-        .to_string();
+        .map(|s| s.to_string())
+        .or_else(|| params.get("transferId").cloned())
+        .unwrap_or_default();
 
     let session = {
         let sessions = service.sessions.read().await;
@@ -605,7 +607,7 @@ async fn handle_upload(
     }
 
     let calculated_hash = hex::encode(hasher.finalize());
-    let verified = calculated_hash.eq_ignore_ascii_case(&session.sha256_expected);
+    let verified = session.sha256_expected.is_empty() || calculated_hash.eq_ignore_ascii_case(&session.sha256_expected);
 
     // Remove session
     service.sessions.write().await.remove(&transfer_id);

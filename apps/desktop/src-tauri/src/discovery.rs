@@ -257,10 +257,10 @@ impl DiscoveryService {
                                         target_ip, port, peer.name, peer.platform, peer.id
                                     ));
 
-                                    // Add to peers map with strict IP + ID deduplication
+                                    // Add to peers map with strict IP + ID + name deduplication
                                     {
                                         let mut peers = s_clone2.peers.write().await;
-                                        peers.retain(|_, p| p.ip != peer.ip && p.id != peer.id);
+                                        peers.retain(|_, p| p.ip != peer.ip && p.id != peer.id && !(p.name == peer.name && p.platform == peer.platform));
                                         peers.insert(peer.id.clone(), peer);
                                     }
 
@@ -469,10 +469,10 @@ impl DiscoveryService {
                             }
                         }
 
-                        // Store in peers map with strict IP + ID deduplication
+                        // Store in peers map with strict IP + ID + name deduplication
                         {
                             let mut peers = self.peers.write().await;
-                            peers.retain(|_, p| p.ip != peer.ip && p.id != peer.id);
+                            peers.retain(|_, p| p.ip != peer.ip && p.id != peer.id && !(p.name == peer.name && p.platform == peer.platform));
                             peers.insert(peer.id.clone(), peer);
                         }
 

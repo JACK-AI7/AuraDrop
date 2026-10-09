@@ -9,17 +9,7 @@
     android:paddingTop="0dp"
     android:paddingBottom="16dp">
 
-    <!-- Bright, shimmering, fluid light-ripple effect shooting out from top of screen -->
-    <View
-        android:id="@+id/view_fluid_ripple"
-        android:layout_width="match_parent"
-        android:layout_height="140dp"
-        android:layout_gravity="top|center_horizontal"
-        android:layout_marginTop="-24dp"
-        android:background="@drawable/bg_apple_rim_ripple"
-        android:alpha="0" />
-
-    <!-- Apple Dynamic Island Floating Card Container -->
+    <!-- Sleek Minimal Floating Proximity Card Container (Zero background ripples or fake circles) -->
     <LinearLayout
         android:id="@+id/pill_card_container"
         android:layout_width="match_parent"
@@ -30,108 +20,116 @@
         android:layout_marginEnd="14dp"
         android:background="@drawable/bg_dynamic_island_card"
         android:orientation="vertical"
-        android:paddingStart="18dp"
-        android:paddingEnd="18dp"
-        android:paddingTop="18dp"
-        android:paddingBottom="18dp"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:paddingTop="16dp"
+        android:paddingBottom="16dp"
         android:elevation="16dp">
 
-        <!-- Top Section: Left (Concentric Arcs + Avatar + AirDrop Title + Subtitle) | Right (Preview Thumbnail) -->
+        <!-- Header Info Row -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:gravity="center_vertical">
 
-            <!-- Left Details Column -->
+            <!-- Real Device Avatar / Monogram Icon -->
+            <FrameLayout
+                android:id="@+id/avatar_container"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:layout_marginEnd="12dp"
+                android:background="@drawable/bg_photo_preview_default">
+
+                <TextView
+                    android:id="@+id/tv_device_icon"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center"
+                    android:text="📱"
+                    android:textSize="22sp" />
+
+                <ImageView
+                    android:id="@+id/iv_device_avatar"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:scaleType="centerCrop"
+                    android:visibility="gone"
+                    android:contentDescription="Device Avatar" />
+            </FrameLayout>
+
+            <!-- Device & Proximity Details -->
             <LinearLayout
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:orientation="vertical"
-                android:layout_marginEnd="14dp">
+                android:orientation="vertical">
 
-                <!-- Concentric AirDrop Radiating Waves with Overlapping Circular Avatar -->
-                <FrameLayout
-                    android:layout_width="44dp"
-                    android:layout_height="44dp">
-
-                    <ImageView
-                        android:id="@+id/iv_airdrop_waves"
-                        android:layout_width="38dp"
-                        android:layout_height="38dp"
-                        android:layout_gravity="top|start"
-                        android:src="@drawable/ic_airdrop_concentric_arcs"
-                        android:contentDescription="AirDrop Icon" />
-
-                    <ImageView
-                        android:id="@+id/iv_sender_avatar_badge"
-                        android:layout_width="20dp"
-                        android:layout_height="20dp"
-                        android:layout_gravity="bottom|end"
-                        android:background="@drawable/bg_avatar_badge_border"
-                        android:contentDescription="Sender Avatar" />
-                </FrameLayout>
-
-                <!-- Title: AirDrop (Pure White Bold) -->
                 <TextView
                     android:id="@+id/tv_title"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="AirDrop"
+                    android:text="AuraDrop Nearby"
                     android:textColor="#FFFFFF"
-                    android:textSize="18sp"
+                    android:textSize="15sp"
                     android:textStyle="bold"
-                    android:fontFamily="sans-serif"
-                    android:layout_marginTop="8dp" />
+                    android:fontFamily="sans-serif-medium" />
 
-                <!-- Subtitle: [Sender Name] would like to share [count] photos -->
                 <TextView
                     android:id="@+id/tv_sender_subtitle"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Nearby Peer would like to share 1 photo"
-                    android:textColor="#8E8E93"
-                    android:textSize="13.5sp"
+                    android:text="Nearby Device is ready"
+                    android:textColor="#A1A1AA"
+                    android:textSize="12.5sp"
                     android:fontFamily="sans-serif"
-                    android:lineSpacingExtra="1dp"
-                    android:layout_marginTop="3dp"
-                    android:maxLines="2"
+                    android:layout_marginTop="2dp"
+                    android:maxLines="1"
                     android:ellipsize="end" />
 
+                <TextView
+                    android:id="@+id/tv_status_badge"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Direct Wi-Fi • 24/7 Proximity"
+                    android:textColor="#71717A"
+                    android:textSize="10.5sp"
+                    android:fontFamily="monospace"
+                    android:layout_marginTop="2dp" />
             </LinearLayout>
 
-            <!-- Right Preview Thumbnail Rounded Card -->
+            <!-- Real File Thumbnail (Displayed only if incoming transfer contains an image) -->
             <FrameLayout
                 android:id="@+id/preview_thumbnail_container"
-                android:layout_width="82dp"
-                android:layout_height="82dp"
-                android:background="@drawable/bg_photo_preview_default">
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/bg_photo_preview_default"
+                android:visibility="gone">
 
                 <ImageView
                     android:id="@+id/iv_preview_thumbnail"
                     android:layout_width="match_parent"
                     android:layout_height="match_parent"
                     android:scaleType="centerCrop"
-                    android:contentDescription="Photo Preview Thumbnail" />
+                    android:contentDescription="File Preview" />
             </FrameLayout>
-
         </LinearLayout>
 
-        <!-- Bottom Action Pills: Decline (Charcoal) and Accept (Deep Midnight Navy with Blue Text) -->
+        <!-- Bottom Action Pill Buttons -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:gravity="center"
-            android:layout_marginTop="18dp">
+            android:layout_marginTop="14dp">
 
-            <!-- Decline Pill Button -->
+            <!-- Decline / Dismiss Button -->
             <FrameLayout
                 android:id="@+id/btn_decline_container"
                 android:layout_width="0dp"
                 android:layout_weight="1"
-                android:layout_height="44dp"
+                android:layout_height="40dp"
                 android:background="@drawable/bg_pill_decline"
                 android:layout_marginEnd="6dp"
                 android:clickable="true"
@@ -142,19 +140,19 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_gravity="center"
-                    android:text="Decline"
+                    android:text="Dismiss"
                     android:textColor="#FFFFFF"
-                    android:textSize="16sp"
+                    android:textSize="14sp"
                     android:textStyle="bold"
                     android:fontFamily="sans-serif" />
             </FrameLayout>
 
-            <!-- Accept Pill Button -->
+            <!-- Accept / Share Button (Pure White Pill with Black Bold Text) -->
             <FrameLayout
                 android:id="@+id/btn_accept_container"
                 android:layout_width="0dp"
                 android:layout_weight="1"
-                android:layout_height="44dp"
+                android:layout_height="40dp"
                 android:background="@drawable/bg_pill_accept_navy"
                 android:layout_marginStart="6dp"
                 android:clickable="true"
@@ -165,15 +163,13 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_gravity="center"
-                    android:text="Accept"
-                    android:textColor="#2997FF"
-                    android:textSize="16sp"
+                    android:text="Share Files"
+                    android:textColor="#000000"
+                    android:textSize="14sp"
                     android:textStyle="bold"
                     android:fontFamily="sans-serif" />
             </FrameLayout>
-
         </LinearLayout>
-
     </LinearLayout>
 
 </FrameLayout>

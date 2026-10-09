@@ -244,12 +244,18 @@ class NativeBridgeService {
   static Future<void> showNameDropProximityAlert({
     required String peerId,
     required String peerName,
+    String? deviceName,
+    String? platform,
+    String? ip,
   }) async {
     if (!Platform.isAndroid) return;
     try {
       await _channel.invokeMethod('showNameDropProximityAlert', {
         'peerId': peerId,
         'peerName': peerName,
+        'deviceName': deviceName ?? peerName,
+        'platform': platform ?? 'device',
+        'ip': ip ?? '',
       });
     } catch (_) {}
   }

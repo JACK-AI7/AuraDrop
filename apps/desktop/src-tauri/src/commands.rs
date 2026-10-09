@@ -350,10 +350,10 @@ pub async fn open_file(
         let path_str = if target.exists() {
             target.to_string_lossy().to_string()
         } else {
-            downloads
+            downloads.clone()
         };
-        let _ = std::process::Command::new("cmd")
-            .args(["/c", "start", "", &path_str])
+        let _ = std::process::Command::new("explorer")
+            .arg(&path_str)
             .spawn();
     }
     #[cfg(target_os = "macos")]

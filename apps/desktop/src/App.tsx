@@ -47,7 +47,7 @@ export const App: React.FC = () => {
       .catch((err) => console.error('Failed to get local info:', err));
 
     const dedupePeers = (list: PeerDevice[]) =>
-      list.filter((peer, idx, arr) => idx === arr.findIndex((p) => p.ip === peer.ip || p.id === peer.id));
+      list.filter((peer, idx, arr) => idx === arr.findIndex((p) => p.ip === peer.ip || p.id === peer.id || (p.name === peer.name && p.platform === peer.platform)));
 
     // 2. Fetch Initial Peers
     invoke<PeerDevice[]>('get_nearby_peers')
@@ -278,7 +278,7 @@ export const App: React.FC = () => {
                 ? `${activeTransfer.speedMbps.toFixed(1)} MB/s`
                 : null
             }
-            size={440}
+            size={500}
           />
 
           {/* Quick Action Bar under Globe */}

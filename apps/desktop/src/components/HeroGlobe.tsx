@@ -209,10 +209,10 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
 
     // 4. Dedicated 3D Connection Beam Pass for Selected Peer
     const angleStep = (2 * Math.PI) / Math.max(1, peers.length);
-    const selectedPeer = peers.find((p) => p.id === selectedPeerId);
-    if (selectedPeer) {
-      const sIdx = peers.indexOf(selectedPeer);
-      const sHash = selectedPeer.id.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0);
+    const targetPeer = peers.find((p) => p.id === selectedPeerId) || (peers.length > 0 ? peers[0] : null);
+    if (targetPeer) {
+      const sIdx = peers.indexOf(targetPeer);
+      const sHash = targetPeer.id.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0);
       const sLat = ((sHash % 50) / 100.0) - 0.2;
       const sLon = sIdx * angleStep + 0.6;
       const sPeerVec = latLonToVec3(sLat, sLon);

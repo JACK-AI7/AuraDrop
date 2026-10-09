@@ -67,6 +67,15 @@ data class PeerInfo(
     )
 }
 
+data class HttpUploadSession(
+    val transferId: String,
+    val fileName: String,
+    val fileSize: Long,
+    val sha256: String,
+    val senderName: String,
+    val senderUserId: String
+)
+
 object PeerRegistry {
     private val peers = ConcurrentHashMap<String, PeerInfo>()
 
@@ -156,6 +165,7 @@ class MainActivity : FlutterActivity() {
     private val activeClientSockets = ConcurrentHashMap<String, Socket>()
     private val activeTransfersState = ConcurrentHashMap<String, TransferSession>()
     private val activePeerChatSockets = ConcurrentHashMap<String, Socket>()
+    private val httpUploadSessions = ConcurrentHashMap<String, HttpUploadSession>()
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -245,29 +255,50 @@ class MainActivity : FlutterActivity() {
         val action = intent.action
         val type = intent.type
 
-        if (Intent.ACTION_SEND == action && type != null) {
-            val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
-            } else {
-                @Suppress("DEPRECATION")
-                intent.getParcelableExtra(Intent.EXTRA_STREAM)
-            }
-            if (uri != null) {
-                getFileMeta(uri)?.let {
-                    sharedFilesList.add(it)
-                    sendEvent("systemShareReceived", mapOf("files" to listOf(it)))
+        if ((Intent.ACTION_SEND == action || Intent.ACTION_SEND_MULTIPLE == action) && type != null) {
+            val collectedUris = mutableListOf<Uri>()
+
+            // 1. Extract from clipData (standard for modern Android shares from Gallery/Files/Photos)
+            intent.clipData?.let { cd ->
+                for (i in 0 until cd.itemCount) {
+                    val u = cd.getItemAt(i).uri
+                    if (u != null && !collectedUris.contains(u)) {
+                        collectedUris.add(u)
+                    }
                 }
             }
-        } else if (Intent.ACTION_SEND_MULTIPLE == action && type != null) {
-            val uris = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
-            } else {
-                @Suppress("DEPRECATION")
-                intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM)
+
+            // 2. Extract from EXTRA_STREAM
+            if (Intent.ACTION_SEND_MULTIPLE == action) {
+                val streamUris = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM)
+                }
+                streamUris?.forEach { u ->
+                    if (u != null && !collectedUris.contains(u)) collectedUris.add(u)
+                }
+            } else if (Intent.ACTION_SEND == action) {
+                val singleUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM)
+                }
+                if (singleUri != null && !collectedUris.contains(singleUri)) {
+                    collectedUris.add(singleUri)
+                }
             }
-            if (uris != null) {
+
+            // 3. Fallback to data URI
+            intent.data?.let { du ->
+                if (!collectedUris.contains(du)) collectedUris.add(du)
+            }
+
+            if (collectedUris.isNotEmpty()) {
                 val files = mutableListOf<Map<String, Any>>()
-                for (u in uris) {
+                for (u in collectedUris) {
                     getFileMeta(u)?.let { files.add(it) }
                 }
                 if (files.isNotEmpty()) {
@@ -554,8 +585,12 @@ class MainActivity : FlutterActivity() {
                     result.success(true)
                 }
                 "showNameDropProximityAlert" -> {
+                    val peerId = call.argument<String>("peerId") ?: ""
                     val peerName = call.argument<String>("peerName") ?: "Nearby Peer"
-                    showSystemNameDropProximityNotification(peerName)
+                    val deviceName = call.argument<String>("deviceName") ?: peerName
+                    val platform = call.argument<String>("platform") ?: "device"
+                    val ip = call.argument<String>("ip") ?: ""
+                    showSystemNameDropProximityNotification(peerId, peerName, deviceName, platform, ip)
                     result.success(true)
                 }
                 else -> result.notImplemented()
@@ -668,21 +703,55 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun getFileMeta(uri: Uri): Map<String, Any>? {
-        return contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-            val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-            val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
-            cursor.moveToFirst()
-            val rawName = if (nameIndex != -1) cursor.getString(nameIndex) else "unknown_file"
-            val sanitizedName = sanitizeFilename(rawName)
-            val size = if (sizeIndex != -1) cursor.getLong(sizeIndex) else 0L
-            val mimeType = contentResolver.getType(uri) ?: "application/octet-stream"
+        return try {
+            var rawName: String? = null
+            var size = 0L
+            var mimeType: String? = null
+
+            try {
+                contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                        val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                        if (nameIndex != -1) rawName = cursor.getString(nameIndex)
+                        if (sizeIndex != -1) size = cursor.getLong(sizeIndex)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "ContentResolver query failed for $uri: ${e.message}")
+            }
+
+            if (rawName.isNullOrBlank()) {
+                val seg = uri.lastPathSegment
+                rawName = if (!seg.isNullOrBlank() && seg.contains("/")) seg.substringAfterLast("/") else seg
+            }
+            val sanitizedName = sanitizeFilename(if (!rawName.isNullOrBlank()) rawName else "shared_file_${System.currentTimeMillis()}")
+
+            try {
+                mimeType = contentResolver.getType(uri)
+            } catch (e: Exception) {}
+            if (mimeType.isNullOrBlank()) {
+                mimeType = "application/octet-stream"
+            }
+
+            if (size <= 0L) {
+                try {
+                    contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
+                        size = afd.length
+                    }
+                } catch (e: Exception) {}
+            }
+
             mapOf(
                 "id" to UUID.randomUUID().toString(),
                 "name" to sanitizedName,
-                "size" to size,
-                "mimeType" to mimeType,
+                "size" to if (size > 0L) size else 0L,
+                "mimeType" to (mimeType ?: "application/octet-stream"),
                 "uri" to uri.toString()
             )
+        } catch (e: Exception) {
+            Log.e(TAG, "getFileMeta fatal error for $uri: ${e.message}")
+            null
         }
     }
 
@@ -859,9 +928,15 @@ class MainActivity : FlutterActivity() {
                         )
                         val isNew = PeerRegistry.updateOrAdd(peer)
                         sendEvent("peerDiscovered", mapOf("peer" to peer.toMap()))
-                        if (isNew && !isAppInForeground) {
+                        if (isNew) {
                             mainHandler.post {
-                                AuraOverlayManager.getInstance(this@MainActivity).showNameDropOverlay(resolvedName)
+                                showSystemNameDropProximityNotification(
+                                    peerId = peer.deviceId,
+                                    peerName = resolvedName,
+                                    deviceName = peer.deviceName,
+                                    platform = peer.platform,
+                                    ip = peer.ip
+                                )
                             }
                         }
                     }
@@ -883,9 +958,17 @@ class MainActivity : FlutterActivity() {
         if (transferServer != null) return
         serverJob = scope.launch(Dispatchers.IO) {
             try {
-                transferServer = ServerSocket(LEGACY_TRANSFER_PORT, 50).apply {
-                    receiveBufferSize = SOCKET_BUFFER_SIZE
-                    reuseAddress = true
+                transferServer = try {
+                    ServerSocket(DEFAULT_PORT, 50).apply {
+                        receiveBufferSize = SOCKET_BUFFER_SIZE
+                        reuseAddress = true
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Port $DEFAULT_PORT bind failed, using $LEGACY_TRANSFER_PORT: ${e.message}")
+                    ServerSocket(LEGACY_TRANSFER_PORT, 50).apply {
+                        receiveBufferSize = SOCKET_BUFFER_SIZE
+                        reuseAddress = true
+                    }
                 }
                 while (isActive) {
                     val clientSocket = transferServer?.accept() ?: break
@@ -917,6 +1000,12 @@ class MainActivity : FlutterActivity() {
                 val read = input.read(header, 0, 20)
                 if (read == -1) break
                 if (read < 20) input.readFullyRemaining(header, read, 20 - read)
+
+                // Multiplex check: Check if connection is HTTP or binary framing (P2PF)
+                if (header[0] != 0x50.toByte() || header[1] != 0x32.toByte() || header[2] != 0x50.toByte() || header[3] != 0x46.toByte()) {
+                    handleHttpInboundClient(socket, input, output, header, 20)
+                    break
+                }
 
                 val frameType = header[5].toInt()
                 val payloadLen = header.readUInt32BE(8)
@@ -1160,6 +1249,334 @@ class MainActivity : FlutterActivity() {
             socket.close()
             activeClientSockets.remove(transferId)
             activeTransfersState.remove(transferId)
+        }
+    }
+
+    private suspend fun handleHttpInboundClient(
+        socket: Socket,
+        input: BufferedInputStream,
+        output: BufferedOutputStream,
+        initialBytes: ByteArray,
+        initialLen: Int
+    ) = withContext(Dispatchers.IO) {
+        try {
+            val headerBuffer = ByteArrayOutputStream()
+            headerBuffer.write(initialBytes, 0, initialLen)
+
+            var lastFour = 0
+            while (true) {
+                val b = input.read()
+                if (b == -1) break
+                headerBuffer.write(b)
+                lastFour = (lastFour shl 8) or (b and 0xFF)
+                if (lastFour == 0x0D0A0D0A) break
+            }
+
+            val headerStr = headerBuffer.toString("UTF-8")
+            val lines = headerStr.split("\r\n")
+            if (lines.isEmpty()) return@withContext
+
+            val requestLine = lines[0]
+            val parts = requestLine.split(" ")
+            if (parts.size < 2) return@withContext
+
+            val method = parts[0].uppercase()
+            val uri = parts[1]
+            val path = if (uri.contains("?")) uri.substring(0, uri.indexOf("?")) else uri
+
+            val headers = mutableMapOf<String, String>()
+            for (i in 1 until lines.size) {
+                val l = lines[i]
+                val colon = l.indexOf(':')
+                if (colon != -1) {
+                    val k = l.substring(0, colon).trim().lowercase()
+                    val v = l.substring(colon + 1).trim()
+                    headers[k] = v
+                }
+            }
+
+            val queryParams = mutableMapOf<String, String>()
+            if (uri.contains("?")) {
+                val qs = uri.substring(uri.indexOf("?") + 1)
+                for (param in qs.split("&")) {
+                    val eq = param.indexOf('=')
+                    if (eq != -1) {
+                        try {
+                            val pk = URLDecoder.decode(param.substring(0, eq), "UTF-8")
+                            val pv = URLDecoder.decode(param.substring(eq + 1), "UTF-8")
+                            queryParams[pk] = pv
+                        } catch (_: Exception) {}
+                    }
+                }
+            }
+
+            val contentLength = headers["content-length"]?.toLongOrNull() ?: 0L
+
+            fun sendJsonResponse(statusCode: Int, statusText: String, json: JSONObject) {
+                val body = json.toString().toByteArray(Charsets.UTF_8)
+                val resp = "HTTP/1.1 $statusCode $statusText\r\n" +
+                        "Content-Type: application/json; charset=utf-8\r\n" +
+                        "Content-Length: ${body.size}\r\n" +
+                        "Access-Control-Allow-Origin: *\r\n" +
+                        "Connection: close\r\n\r\n"
+                output.write(resp.toByteArray(Charsets.UTF_8))
+                output.write(body)
+                output.flush()
+            }
+
+            if (method == "OPTIONS") {
+                val cors = "HTTP/1.1 204 No Content\r\n" +
+                        "Access-Control-Allow-Origin: *\r\n" +
+                        "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n" +
+                        "Access-Control-Allow-Headers: *\r\n" +
+                        "Connection: close\r\n\r\n"
+                output.write(cors.toByteArray(Charsets.UTF_8))
+                output.flush()
+                return@withContext
+            }
+
+            when (path) {
+                "/api/auradrop/v1/ping" -> {
+                    val prof = dbHelper.getProfile()
+                    val savedName = prof["display_name"]
+                    val nameToShow = if (!savedName.isNullOrBlank() && savedName != "AuraDrop User") savedName else deviceName
+                    val json = JSONObject().apply {
+                        put("status", "ok")
+                        put("pong", true)
+                        put("deviceId", deviceId)
+                        put("deviceName", nameToShow)
+                        put("name", nameToShow)
+                        put("platform", "android")
+                        put("port", DEFAULT_PORT)
+                        put("transferPort", DEFAULT_PORT)
+                        put("protocol", "AURADROP/1")
+                    }
+                    sendJsonResponse(200, "OK", json)
+                }
+
+                "/api/auradrop/v1/info" -> {
+                    val prof = dbHelper.getProfile()
+                    val savedName = prof["display_name"]
+                    val nameToShow = if (!savedName.isNullOrBlank() && savedName != "AuraDrop User") savedName else deviceName
+                    val json = JSONObject().apply {
+                        put("deviceId", deviceId)
+                        put("deviceName", nameToShow)
+                        put("platform", "android")
+                    }
+                    sendJsonResponse(200, "OK", json)
+                }
+
+                "/api/auradrop/v1/chat" -> {
+                    val bodyBytes = ByteArray(contentLength.toInt().coerceAtLeast(0))
+                    var readSoFar = 0
+                    while (readSoFar < bodyBytes.size) {
+                        val r = input.read(bodyBytes, readSoFar, bodyBytes.size - readSoFar)
+                        if (r == -1) break
+                        readSoFar += r
+                    }
+                    val bodyStr = String(bodyBytes, 0, readSoFar, Charsets.UTF_8)
+                    val chatJson = JSONObject(bodyStr)
+
+                    val msgId = chatJson.optString("id", "msg_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8))
+                    val senderId = chatJson.optString("senderId", "peer")
+                    val senderName = chatJson.optString("senderName", "Nearby Peer")
+                    val text = chatJson.optString("text", "")
+                    val timestamp = chatJson.optLong("timestamp", System.currentTimeMillis())
+
+                    val msgMap = mapOf(
+                        "id" to msgId,
+                        "peerId" to senderId,
+                        "peerName" to senderName,
+                        "senderId" to senderId,
+                        "text" to text,
+                        "timestamp" to timestamp,
+                        "status" to "delivered"
+                    )
+                    dbHelper.insertChatMessage(msgMap)
+                    sendEvent("chatMessageReceived", msgMap)
+
+                    if (!isAppInForeground) {
+                        showSystemChatMessageNotification(senderName, text)
+                    }
+
+                    sendJsonResponse(200, "OK", JSONObject().apply { put("status", "ok") })
+                }
+
+                "/api/auradrop/v1/prepare-upload" -> {
+                    val bodyBytes = ByteArray(contentLength.toInt().coerceAtLeast(0))
+                    var readSoFar = 0
+                    while (readSoFar < bodyBytes.size) {
+                        val r = input.read(bodyBytes, readSoFar, bodyBytes.size - readSoFar)
+                        if (r == -1) break
+                        readSoFar += r
+                    }
+                    val bodyStr = String(bodyBytes, 0, readSoFar, Charsets.UTF_8)
+                    val prepJson = JSONObject(bodyStr)
+
+                    val xferId = prepJson.optString("transferId", "xfer_" + UUID.randomUUID().toString().replace("-", "").substring(0, 10))
+                    val fileName = prepJson.optString("fileName", "file")
+                    val fileSize = prepJson.optLong("fileSize", 0L)
+                    val sha256 = prepJson.optString("sha256", "")
+                    val senderName = prepJson.optString("senderName", prepJson.optString("senderUserId", "Nearby Device"))
+                    val senderUserId = prepJson.optString("senderUserId", "peer")
+
+                    val sessionMeta = HttpUploadSession(
+                        transferId = xferId,
+                        fileName = fileName,
+                        fileSize = fileSize,
+                        sha256 = sha256,
+                        senderName = senderName,
+                        senderUserId = senderUserId
+                    )
+                    httpUploadSessions[xferId] = sessionMeta
+
+                    dbHelper.insertIncomingRequest(mapOf(
+                        "requestId" to xferId,
+                        "transferSessionId" to xferId,
+                        "senderDeviceId" to senderUserId,
+                        "senderDisplayName" to senderName,
+                        "senderDeviceName" to senderName,
+                        "fileCount" to 1,
+                        "totalBytes" to fileSize,
+                        "firstFileName" to fileName,
+                        "createdAt" to System.currentTimeMillis(),
+                        "expiresAt" to System.currentTimeMillis() + 60000L
+                    ))
+
+                    showSystemIncomingShareNotification(
+                        transferId = xferId,
+                        senderName = senderName,
+                        senderDeviceName = senderName,
+                        totalFiles = 1,
+                        totalBytes = fileSize,
+                        firstFileName = fileName,
+                        sasCode = ""
+                    )
+
+                    sendJsonResponse(200, "OK", JSONObject().apply {
+                        put("accepted", true)
+                        put("transferId", xferId)
+                        put("fileId", xferId)
+                        put("oneTimeToken", "tok_$xferId")
+                        put("expiresAt", System.currentTimeMillis() + 60000L)
+                        put("protocol", "auradrop/1")
+                    })
+                }
+
+                "/api/auradrop/v1/upload" -> {
+                    val xferId = queryParams["transferId"] ?: headers["x-transfer-id"] ?: ""
+                    val sessionMeta = httpUploadSessions[xferId]
+
+                    val fileName = sessionMeta?.fileName ?: headers["x-file-name"] ?: queryParams["fileName"] ?: "received_file"
+                    val fileSize = sessionMeta?.fileSize ?: headers["x-file-size"]?.toLongOrNull() ?: contentLength
+                    val expectedSha256 = sessionMeta?.sha256 ?: headers["x-sha256"] ?: ""
+                    val senderName = sessionMeta?.senderName ?: "Nearby Device"
+
+                    val downloadsDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "AuraDrop")
+                    if (!downloadsDir.exists()) downloadsDir.mkdirs()
+
+                    val targetFile = resolveUniqueFile(downloadsDir, fileName)
+                    val digest = MessageDigest.getInstance("SHA-256")
+
+                    var totalWritten = 0L
+                    val buf = ByteArray(1024 * 1024)
+                    val startTime = System.currentTimeMillis()
+                    var lastProgressTime = 0L
+
+                    startForegroundTransferService("Receiving $fileName...", 0)
+
+                    val fos = FileOutputStream(targetFile)
+                    try {
+                        val bos = BufferedOutputStream(fos, 1024 * 1024)
+                        while (totalWritten < fileSize) {
+                            val toRead = Math.min(buf.size.toLong(), fileSize - totalWritten).toInt()
+                            val r = input.read(buf, 0, toRead)
+                            if (r == -1) break
+                            bos.write(buf, 0, r)
+                            digest.update(buf, 0, r)
+                            totalWritten += r
+
+                            val now = System.currentTimeMillis()
+                            if (now - lastProgressTime >= PROGRESS_EVENT_INTERVAL_MS || totalWritten == fileSize) {
+                                lastProgressTime = now
+                                val elapsedSec = Math.max(0.001, (now - startTime) / 1000.0)
+                                val speed = (totalWritten / elapsedSec).toLong()
+                                val pct = if (fileSize > 0) ((totalWritten.toDouble() / fileSize.toDouble()) * 100.0).toInt().coerceAtMost(99) else 100
+                                val eta = if (speed > 0) ((fileSize - totalWritten) / speed).toInt() else 0
+
+                                sendEvent("transferProgress", mapOf(
+                                    "transferId" to xferId,
+                                    "state" to "TRANSFERRING",
+                                    "fileName" to fileName,
+                                    "totalBytes" to fileSize,
+                                    "transferredBytes" to totalWritten,
+                                    "speedBytesPerSec" to speed,
+                                    "etaSeconds" to eta,
+                                    "percentage" to pct
+                                ))
+                            }
+                        }
+                        bos.flush()
+                    } finally {
+                        try { fos.close() } catch (_: Exception) {}
+                    }
+
+                    stopForegroundTransferService()
+                    val calculatedSha256 = digest.digest().toHex()
+                    val verified = expectedSha256.isEmpty() || calculatedSha256.equals(expectedSha256, ignoreCase = true)
+
+                    MediaScannerConnection.scanFile(
+                        applicationContext,
+                        arrayOf(targetFile.absolutePath),
+                        null
+                    ) { _, _ -> }
+
+                    val elapsedTotalSec = Math.max(0.001, (System.currentTimeMillis() - startTime) / 1000.0)
+                    val avgSpeed = (totalWritten / elapsedTotalSec).toLong()
+
+                    dbHelper.insertTransfer(mapOf(
+                        "id" to xferId,
+                        "direction" to "received",
+                        "senderName" to senderName,
+                        "receiverName" to deviceName,
+                        "fileName" to fileName,
+                        "fileSize" to totalWritten,
+                        "status" to if (verified) "completed" else "failed",
+                        "sha256" to calculatedSha256,
+                        "localPath" to targetFile.absolutePath,
+                        "transportType" to "LAN_HTTP_STREAM",
+                        "avgSpeed" to avgSpeed,
+                        "createdAt" to System.currentTimeMillis()
+                    ))
+
+                    sendEvent("transferComplete", mapOf(
+                        "transferId" to xferId,
+                        "fileName" to fileName,
+                        "fileSize" to totalWritten,
+                        "localPath" to targetFile.absolutePath,
+                        "sha256" to calculatedSha256,
+                        "verified" to verified
+                    ))
+
+                    cancelSystemIncomingShareNotification(xferId)
+
+                    sendJsonResponse(200, "OK", JSONObject().apply {
+                        put("success", true)
+                        put("transferId", xferId)
+                        put("verified", verified)
+                        put("sha256", calculatedSha256)
+                        put("savedPath", targetFile.absolutePath)
+                    })
+                }
+
+                else -> {
+                    sendJsonResponse(404, "Not Found", JSONObject().apply {
+                        put("error", "Not Found")
+                    })
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "HTTP Inbound processing error: ${e.message}")
         }
     }
 
@@ -1464,10 +1881,179 @@ class MainActivity : FlutterActivity() {
     // ----------------------------------------------------
     // TCP Streaming Client (High-Throughput Sender)
     // ----------------------------------------------------
+    private fun trySendFilesViaHttp(
+        targetIp: String,
+        targetPort: Int,
+        filesList: List<Map<String, Any>>,
+        transferId: String
+    ): Boolean {
+        val effectivePort = if (targetPort > 0) targetPort else DEFAULT_PORT
+        val prof = dbHelper.getProfile()
+        val savedName = prof["display_name"]
+        val senderDisplayName = if (!savedName.isNullOrBlank() && savedName != "AuraDrop User") savedName else deviceName
+
+        for (fileMap in filesList) {
+            val uriStr = fileMap["uri"] as? String ?: continue
+            val fileName = fileMap["name"] as? String ?: "file"
+            val fileSize = (fileMap["size"] as? Number)?.toLong() ?: 0L
+
+            sendEvent("dataChannelState", mapOf(
+                "transferId" to transferId,
+                "state" to "DATA_CHANNEL_CONNECTING"
+            ))
+
+            val prepUrl = URL("http://$targetIp:$effectivePort/api/auradrop/v1/prepare-upload")
+            val prepConn = (prepUrl.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 3000
+                readTimeout = 4000
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json")
+            }
+
+            val prepPayload = JSONObject().apply {
+                put("transferId", transferId)
+                put("fileId", transferId)
+                put("fileName", fileName)
+                put("fileSize", fileSize)
+                put("sha256", "")
+                put("senderUserId", deviceId)
+                put("senderName", senderDisplayName)
+            }
+
+            prepConn.outputStream.use { os ->
+                os.write(prepPayload.toString().toByteArray(Charsets.UTF_8))
+                os.flush()
+            }
+
+            if (prepConn.responseCode !in 200..299) {
+                prepConn.disconnect()
+                return false
+            }
+
+            val prepRespStr = prepConn.inputStream.bufferedReader().readText()
+            prepConn.disconnect()
+            val prepResp = JSONObject(prepRespStr)
+            val token = prepResp.optString("oneTimeToken", "")
+
+            sendEvent("dataChannelState", mapOf(
+                "transferId" to transferId,
+                "state" to "READY_TO_TRANSFER"
+            ))
+
+            val uploadUrl = URL("http://$targetIp:$effectivePort/api/auradrop/v1/upload?transferId=$transferId&token=$token")
+            val uploadConn = (uploadUrl.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 10000
+                readTimeout = 3600000
+                doOutput = true
+                if (fileSize > 0) {
+                    setFixedLengthStreamingMode(fileSize)
+                } else {
+                    setChunkedStreamingMode(1024 * 1024)
+                }
+                setRequestProperty("x-transfer-id", transferId)
+                setRequestProperty("x-file-name", fileName)
+                setRequestProperty("x-file-size", fileSize.toString())
+                setRequestProperty("x-token", token)
+                setRequestProperty("Content-Type", "application/octet-stream")
+            }
+
+            startForegroundTransferService("Sending $fileName...", 0)
+            val startTime = System.currentTimeMillis()
+            var lastProgressTime = 0L
+            var sentBytes = 0L
+            val buf = ByteArray(1024 * 1024)
+
+            val inputStream = contentResolver.openInputStream(Uri.parse(uriStr))
+                ?: throw FileNotFoundException("Could not open URI: $uriStr")
+
+            inputStream.use { fis ->
+                uploadConn.outputStream.use { uos ->
+                    val bos = BufferedOutputStream(uos, 1024 * 1024)
+                    while (sentBytes < fileSize) {
+                        val toRead = Math.min(buf.size.toLong(), fileSize - sentBytes).toInt()
+                        val r = fis.read(buf, 0, toRead)
+                        if (r == -1) break
+                        bos.write(buf, 0, r)
+                        sentBytes += r
+
+                        val now = System.currentTimeMillis()
+                        if (now - lastProgressTime >= PROGRESS_EVENT_INTERVAL_MS || sentBytes == fileSize) {
+                            lastProgressTime = now
+                            val elapsedSec = Math.max(0.001, (now - startTime) / 1000.0)
+                            val speed = (sentBytes / elapsedSec).toLong()
+                            val pct = if (fileSize > 0) ((sentBytes.toDouble() / fileSize.toDouble()) * 100.0).toInt().coerceAtMost(99) else 100
+                            val eta = if (speed > 0) ((fileSize - sentBytes) / speed).toInt() else 0
+
+                            sendEvent("transferProgress", mapOf(
+                                "transferId" to transferId,
+                                "state" to "TRANSFERRING",
+                                "fileName" to fileName,
+                                "totalBytes" to fileSize,
+                                "transferredBytes" to sentBytes,
+                                "speedBytesPerSec" to speed,
+                                "etaSeconds" to eta,
+                                "percentage" to pct
+                            ))
+                        }
+                    }
+                    bos.flush()
+                }
+            }
+
+            stopForegroundTransferService()
+            val uploadStatus = uploadConn.responseCode
+            val uploadRespStr = if (uploadStatus in 200..299) uploadConn.inputStream.bufferedReader().readText() else ""
+            uploadConn.disconnect()
+
+            if (uploadStatus in 200..299) {
+                val elapsedTotalSec = Math.max(0.001, (System.currentTimeMillis() - startTime) / 1000.0)
+                val avgSpeed = (sentBytes / elapsedTotalSec).toLong()
+
+                dbHelper.insertTransfer(mapOf(
+                    "id" to transferId,
+                    "direction" to "sent",
+                    "senderName" to senderDisplayName,
+                    "receiverName" to targetIp,
+                    "fileName" to fileName,
+                    "fileSize" to sentBytes,
+                    "status" to "completed",
+                    "sha256" to "",
+                    "localPath" to uriStr,
+                    "transportType" to "LAN_HTTP_STREAM",
+                    "avgSpeed" to avgSpeed,
+                    "createdAt" to System.currentTimeMillis()
+                ))
+
+                sendEvent("transferComplete", mapOf(
+                    "transferId" to transferId,
+                    "fileName" to fileName,
+                    "fileSize" to sentBytes,
+                    "verified" to true
+                ))
+            } else {
+                return false
+            }
+        }
+        return true
+    }
+
     private fun startSendFilesTask(targetIp: String, targetPort: Int, filesList: List<Map<String, Any>>) {
         val transferId = "send_" + UUID.randomUUID().toString().replace("-", "").substring(0, 10)
 
         scope.launch(Dispatchers.IO) {
+            // High-speed HTTP direct upload trial (100MB/s compatible with Desktop axum engine)
+            var httpSuccess = false
+            try {
+                httpSuccess = trySendFilesViaHttp(targetIp, targetPort, filesList, transferId)
+            } catch (e: Exception) {
+                Log.d(TAG, "HTTP upload trial failed, falling back: ${e.message}")
+            }
+            if (httpSuccess) {
+                return@launch
+            }
+
             var socket: Socket? = null
             try {
                 sendEvent("dataChannelState", mapOf(
@@ -2272,9 +2858,24 @@ class MainActivity : FlutterActivity() {
         } catch (e: Exception) {}
     }
 
-    private fun showSystemNameDropProximityNotification(peerName: String) {
-        // Display floating window directly on mobile screen over other apps & home screen
-        AuraOverlayManager.getInstance(this).showNameDropOverlay(peerName)
+    private fun showSystemNameDropProximityNotification(
+        peerId: String = "",
+        peerName: String,
+        deviceName: String = "",
+        platform: String = "device",
+        ip: String = ""
+    ) {
+        // Display sleek floating window directly on mobile screen over other apps & home screen
+        AuraOverlayManager.getInstance(this).showNameDropOverlay(
+            peerId = peerId,
+            peerName = peerName,
+            deviceName = deviceName,
+            platform = platform,
+            ip = ip,
+            onShare = {
+                sendEvent("peerSelected", mapOf("peerId" to peerId))
+            }
+        )
     }
 
     override fun onDestroy() {

@@ -19,7 +19,6 @@ import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.WindowManager
-import android.view.animation.DecelerateInterpolator
 import android.view.animation.OvershootInterpolator
 import android.widget.ImageView
 import android.widget.TextView
@@ -67,7 +66,14 @@ class AuraOverlayManager private constructor(private val context: Context) {
         }
     }
 
-    fun showNameDropOverlay(peerName: String) {
+    fun showNameDropOverlay(
+        peerId: String = "",
+        peerName: String,
+        deviceName: String = "",
+        platform: String = "device",
+        ip: String = "",
+        onShare: (() -> Unit)? = null
+    ) {
         mainHandler.post {
             dismissCurrentOverlay()
             if (!canDrawOverlays()) {
@@ -81,33 +87,41 @@ class AuraOverlayManager private constructor(private val context: Context) {
 
                 val tvTitle = view.findViewById<TextView>(R.id.tv_title)
                 val tvSubtitle = view.findViewById<TextView>(R.id.tv_sender_subtitle)
+                val tvStatusBadge = view.findViewById<TextView>(R.id.tv_status_badge)
+                val tvDeviceIcon = view.findViewById<TextView>(R.id.tv_device_icon)
                 val btnDecline = view.findViewById<View>(R.id.btn_decline_container)
                 val btnAccept = view.findViewById<View>(R.id.btn_accept_container)
                 val tvBtnDecline = view.findViewById<TextView>(R.id.tv_btn_decline)
                 val tvBtnAccept = view.findViewById<TextView>(R.id.tv_btn_accept)
                 val pillCard = view.findViewById<View>(R.id.pill_card_container)
-                val rippleWave = view.findViewById<View>(R.id.view_fluid_ripple)
 
-                tvTitle.text = "AirDrop"
-                tvSubtitle.text = "$peerName is nearby • NameDrop connected"
+                val isWindows = platform.contains("win", ignoreCase = true)
+                val platformDisplay = if (isWindows) "Windows PC" else if (platform.contains("android", ignoreCase = true)) "Android Device" else platform.replaceFirstChar { it.uppercase() }
+
+                tvTitle.text = "AuraDrop Nearby"
+                tvSubtitle.text = "$peerName • $platformDisplay"
+                tvStatusBadge.text = if (ip.isNotBlank()) "$ip • LAN 24/7 Proximity" else "Direct Wi-Fi • Ready"
+                tvDeviceIcon.text = if (isWindows) "💻" else "📱"
                 tvBtnDecline.text = "Dismiss"
-                tvBtnAccept.text = "Share"
+                tvBtnAccept.text = "Share Files"
 
                 btnDecline.setOnClickListener {
                     dismissCurrentOverlay()
                 }
 
                 btnAccept.setOnClickListener {
+                    onShare?.invoke()
                     launchApp()
                     dismissCurrentOverlay()
                 }
 
                 pillCard.setOnClickListener {
+                    onShare?.invoke()
                     launchApp()
                     dismissCurrentOverlay()
                 }
 
-                addAndAnimateView(view, pillCard, rippleWave, autoDismissDelay = 8000L)
+                addAndAnimateView(view, pillCard, autoDismissDelay = 8000L)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to show NameDrop overlay: ${e.message}")
             }
@@ -136,20 +150,21 @@ class AuraOverlayManager private constructor(private val context: Context) {
 
                 val tvTitle = view.findViewById<TextView>(R.id.tv_title)
                 val tvSubtitle = view.findViewById<TextView>(R.id.tv_sender_subtitle)
+                val tvStatusBadge = view.findViewById<TextView>(R.id.tv_status_badge)
                 val btnDecline = view.findViewById<View>(R.id.btn_decline_container)
                 val btnAccept = view.findViewById<View>(R.id.btn_accept_container)
                 val tvBtnDecline = view.findViewById<TextView>(R.id.tv_btn_decline)
                 val tvBtnAccept = view.findViewById<TextView>(R.id.tv_btn_accept)
                 val ivPreview = view.findViewById<ImageView>(R.id.iv_preview_thumbnail)
+                val previewContainer = view.findViewById<View>(R.id.preview_thumbnail_container)
                 val pillCard = view.findViewById<View>(R.id.pill_card_container)
-                val rippleWave = view.findViewById<View>(R.id.view_fluid_ripple)
 
-                tvTitle.text = "AirDrop"
-                tvSubtitle.text = "$senderName would like to share $fileName"
+                tvTitle.text = "AuraDrop Request"
+                tvSubtitle.text = "$senderName wants to send $fileName"
+                tvStatusBadge.text = "${formatBytes(totalBytes)} • Direct LAN"
                 tvBtnDecline.text = "Decline"
                 tvBtnAccept.text = "Accept"
 
-                // Display thumbnail image if available
                 if (!previewImagePath.isNullOrBlank()) {
                     try {
                         val file = File(previewImagePath)
@@ -157,6 +172,7 @@ class AuraOverlayManager private constructor(private val context: Context) {
                             val bmp = BitmapFactory.decodeFile(file.absolutePath)
                             if (bmp != null) {
                                 ivPreview.setImageBitmap(bmp)
+                                previewContainer.visibility = View.VISIBLE
                             }
                         }
                     } catch (e: Exception) {
@@ -179,7 +195,7 @@ class AuraOverlayManager private constructor(private val context: Context) {
                     launchApp()
                 }
 
-                addAndAnimateView(view, pillCard, rippleWave, autoDismissDelay = 50000L)
+                addAndAnimateView(view, pillCard, autoDismissDelay = 50000L)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to show transfer request overlay: ${e.message}")
             }
@@ -189,7 +205,6 @@ class AuraOverlayManager private constructor(private val context: Context) {
     private fun addAndAnimateView(
         rootView: View,
         pillCard: View,
-        rippleWave: View,
         autoDismissDelay: Long
     ) {
         val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -220,47 +235,30 @@ class AuraOverlayManager private constructor(private val context: Context) {
             return
         }
 
-        // Apple fluid light-ripple animation shooting out from top of screen:
-        rippleWave.scaleX = 0.3f
-        rippleWave.scaleY = 0.3f
-        rippleWave.alpha = 0f
-
-        val rippleScaleX = ObjectAnimator.ofFloat(rippleWave, "scaleX", 0.3f, 1.4f).apply {
-            duration = 1000
-            interpolator = DecelerateInterpolator()
-        }
-        val rippleScaleY = ObjectAnimator.ofFloat(rippleWave, "scaleY", 0.3f, 1.4f).apply {
-            duration = 1000
-            interpolator = DecelerateInterpolator()
-        }
-        val rippleAlpha = ObjectAnimator.ofFloat(rippleWave, "alpha", 0f, 0.95f, 0f).apply {
-            duration = 1000
-        }
-
-        // Dynamic Island pill entrance dropping down smoothly from notch with spring overshoot:
+        // Clean drop-down spring entrance: zero background circles or ripples
         pillCard.translationY = -280f
-        pillCard.scaleX = 0.85f
-        pillCard.scaleY = 0.85f
+        pillCard.scaleX = 0.90f
+        pillCard.scaleY = 0.90f
         pillCard.alpha = 0f
 
         val pillTransY = ObjectAnimator.ofFloat(pillCard, "translationY", -280f, 0f).apply {
-            duration = 650
-            interpolator = OvershootInterpolator(1.25f)
+            duration = 550
+            interpolator = OvershootInterpolator(1.15f)
         }
-        val pillScaleX = ObjectAnimator.ofFloat(pillCard, "scaleX", 0.85f, 1f).apply {
-            duration = 650
-            interpolator = OvershootInterpolator(1.1f)
+        val pillScaleX = ObjectAnimator.ofFloat(pillCard, "scaleX", 0.90f, 1f).apply {
+            duration = 550
+            interpolator = OvershootInterpolator(1.05f)
         }
-        val pillScaleY = ObjectAnimator.ofFloat(pillCard, "scaleY", 0.85f, 1f).apply {
-            duration = 650
-            interpolator = OvershootInterpolator(1.1f)
+        val pillScaleY = ObjectAnimator.ofFloat(pillCard, "scaleY", 0.90f, 1f).apply {
+            duration = 550
+            interpolator = OvershootInterpolator(1.05f)
         }
         val pillAlpha = ObjectAnimator.ofFloat(pillCard, "alpha", 0f, 1f).apply {
-            duration = 400
+            duration = 350
         }
 
         AnimatorSet().apply {
-            playTogether(rippleScaleX, rippleScaleY, rippleAlpha, pillTransY, pillScaleX, pillScaleY, pillAlpha)
+            playTogether(pillTransY, pillScaleX, pillScaleY, pillAlpha)
             start()
         }
 
@@ -280,8 +278,8 @@ class AuraOverlayManager private constructor(private val context: Context) {
 
         val pillCard = v.findViewById<View>(R.id.pill_card_container)
         if (pillCard != null) {
-            val transY = ObjectAnimator.ofFloat(pillCard, "translationY", 0f, -280f).setDuration(300)
-            val alpha = ObjectAnimator.ofFloat(pillCard, "alpha", 1f, 0f).setDuration(250)
+            val transY = ObjectAnimator.ofFloat(pillCard, "translationY", 0f, -280f).setDuration(280)
+            val alpha = ObjectAnimator.ofFloat(pillCard, "alpha", 1f, 0f).setDuration(220)
             AnimatorSet().apply {
                 playTogether(transY, alpha)
                 addListener(object : AnimatorListenerAdapter() {
@@ -297,6 +295,19 @@ class AuraOverlayManager private constructor(private val context: Context) {
             try {
                 windowManager.removeView(v)
             } catch (e: Exception) {}
+        }
+    }
+
+    private fun formatBytes(bytes: Long): String {
+        if (bytes <= 0) return "0 B"
+        val kb = bytes / 1024.0
+        val mb = kb / 1024.0
+        val gb = mb / 1024.0
+        return when {
+            gb >= 1.0 -> String.format("%.2f GB", gb)
+            mb >= 1.0 -> String.format("%.1f MB", mb)
+            kb >= 1.0 -> String.format("%.0f KB", kb)
+            else -> "$bytes B"
         }
     }
 

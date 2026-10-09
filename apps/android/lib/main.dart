@@ -178,6 +178,9 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _initApp();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkSystemShare();
+    });
   }
 
   @override
@@ -423,6 +426,9 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
           NativeBridgeService.showNameDropProximityAlert(
             peerId: peer.id,
             peerName: peer.name,
+            deviceName: peer.deviceName,
+            platform: peer.platform,
+            ip: peer.ip,
           );
           InAppNotificationController().showNameDrop(
             peerName: peer.name,
@@ -533,8 +539,19 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
             for (final f in files) {
               if (f is Map) _selectedFiles.add(PickedFileMeta.fromMap(f));
             }
+            _currentTabIndex = 0;
           });
-          _showSnackBar('${_selectedFiles.length} file(s) ready to share', isSuccess: true);
+          _showSnackBar('${_selectedFiles.length} file(s) staged to share', isSuccess: true);
+        }
+        break;
+
+      case 'peerSelected':
+        final pId = event['peerId']?.toString();
+        if (pId != null && _peers.containsKey(pId)) {
+          setState(() {
+            _selectedPeer = _peers[pId];
+            _currentTabIndex = 0;
+          });
         }
         break;
 
@@ -555,6 +572,9 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
             NativeBridgeService.showNameDropProximityAlert(
               peerId: peer.id,
               peerName: peer.name,
+              deviceName: peer.deviceName,
+              platform: peer.platform,
+              ip: peer.ip,
             );
             InAppNotificationController().showNameDrop(
               peerName: peer.name,
